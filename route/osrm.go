@@ -10,9 +10,6 @@ import (
 	"github.com/yardbirdsax/twisty/geo"
 )
 
-// CurvatureStats holds curvature scoring data for a route (populated in Task 006).
-type CurvatureStats struct{}
-
 // Route represents a driving route with decoded geometry and metadata.
 type Route struct {
 	Points   []geo.Coord

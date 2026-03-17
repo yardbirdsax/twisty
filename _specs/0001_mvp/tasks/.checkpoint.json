@@ -1,5 +1,5 @@
 {
-  "current_task": "005_osrm_client.md",
+  "current_task": "006_curvature_scoring.md",
   "step": "review",
   "review_round": 1,
   "retry_count": 0,
@@ -7,6 +7,7 @@
     "001_project_setup.md",
     "002_geo_math.md",
     "003_polyline_decoder.md",
-    "004_geocoding.md"
+    "004_geocoding.md",
+    "005_osrm_client.md"
   ]
 }

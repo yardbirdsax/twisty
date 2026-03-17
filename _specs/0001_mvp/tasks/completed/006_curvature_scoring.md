@@ -97,3 +97,66 @@ Create `route/score_test.go`:
 - Guard against `totalDist == 0` (identical points) to avoid division by zero.
 - Guard against fewer than 3 points when computing angular density (the loop simply won't execute, producing `angularDensity = 0`, which is correct).
 - `AdjustedScore` is initialized here and will be overwritten in Task 007.
+
+---
+# Task 006 Review: Curvature Scoring
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-16
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements `CurvatureStats`, `ScoreRoute`, and `ScoreAll` in `route/score.go`, plus unit tests in `route/score_test.go`. Computes indirectness ratio, angular density, and a combined curvature score for each route polyline.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/route/score.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/route/score_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/route/osrm.go` | Reviewed (Route type) |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `go test ./route/ -run TestScore` passes | PASS |
+| Straight 3-point route has `AngularDensity` < 0.01 | PASS |
+| 90-degree turn route has total heading change of 90 degrees | PASS |
+| `Score` is always non-negative | PASS |
+| `AdjustedScore` equals `Score` after `ScoreRoute` | PASS |
+| Route with fewer than 2 points does not panic | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test ./route/ -run TestScore -v -count=1  # all 5 tests PASS
+go vet ./...                                  # no issues
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria pass, implementation is correct, linter is clean, and all previously noted test gaps have been addressed.
+
+---
