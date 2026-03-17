@@ -106,12 +106,12 @@ Fallback when ways is nil: Print warning about Overpass API unavailable
 
 ## Acceptance Criteria
 
-- [ ] go build ./... succeeds
-- [ ] IsDisqualifying returns true for access=private, highway=track, motor_vehicle=no
-- [ ] PenaltyFactor returns correct values for each surface category
-- [ ] When Overpass is unavailable, the program prints the fallback warning and continues
-- [ ] AdjustedScore is less than Score when a route has disqualifying segments
-- [ ] Warning line is printed when disqualifiedFraction greater than 0.10
+- [x] go build ./... succeeds
+- [x] IsDisqualifying returns true for access=private, highway=track, motor_vehicle=no
+- [x] PenaltyFactor returns correct values for each surface category
+- [x] When Overpass is unavailable, the program prints the fallback warning and continues
+- [x] AdjustedScore is less than Score when a route has disqualifying segments
+- [x] Warning line is printed when disqualifiedFraction greater than 0.10
 
 ## Notes
 
@@ -119,3 +119,80 @@ Fallback when ways is nil: Print warning about Overpass API unavailable
 - The 30m proximity threshold is a heuristic; exact precision is not required.
 - Overpass can be slow on large bounding boxes; the 10-second timeout is a hard limit.
 - **Go 1.26:** This project requires Go 1.26. Use `io.ReadAll(resp.Body)` to read the Overpass HTTP response body — `io.ReadAll` received a ~2× speedup and ~50% allocation reduction in this release compared to earlier versions.
+
+---
+# Task 007 Review: Road Quality Filtering via Overpass API
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-16
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements the `quality` package with `BoundingBox`, `FetchWays`, `IsDisqualifying`, `PenaltyFactor`, `NearestWay`, and `ApplyQuality`. All core logic matches the spec. The `quality` package correctly imports `route` without creating an import cycle.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/overpass.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/overpass_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| go build ./... succeeds | PASS |
+| IsDisqualifying returns true for access=private, highway=track, motor_vehicle=no | PASS |
+| PenaltyFactor returns correct values for each surface category | PASS |
+| When Overpass is unavailable, the program prints the fallback warning and continues | PASS |
+| AdjustedScore is less than Score when a route has disqualifying segments | PASS |
+| Warning line is printed when disqualifiedFraction greater than 0.10 | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Good Practices Observed
+
+1. **Testable internal helper:** `fetchWaysFromURL` accepts an endpoint parameter, enabling httptest-based tests without monkey-patching globals.
+2. **Pointer stability in NearestWay:** `for i := range ways` with `&ways[i]` avoids returning a pointer to a loop-copy variable.
+3. **Nil-ways fallback:** `ApplyQuality` exits cleanly and prints the required warning when `ways` is nil, ensuring Overpass failure never blocks output.
+
+---
+
+## Verification Commands Run
+
+```bash
+go build ./...              # success, no errors
+go vet ./...                # no issues
+go test ./quality/... -v    # all 25 tests PASS
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met, all 25 quality-package tests pass, `go build` and `go vet` are clean. No issues requiring revision.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **APPROVED WITH CHANGES**: All acceptance criteria met, minor issues found. Can merge after addressing SHOULD FIX items, or merge as-is with follow-up.
+- **NEEDS REVISION**: Acceptance criteria not met or critical issues found. Must address MUST FIX items before re-review.
