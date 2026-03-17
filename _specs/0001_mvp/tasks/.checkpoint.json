@@ -1,9 +1,10 @@
 {
-  "current_task": "002_geo_math.md",
+  "current_task": "003_polyline_decoder.md",
   "step": "review",
-  "review_round": 0,
+  "review_round": 1,
   "retry_count": 0,
   "completed_tasks": [
-    "001_project_setup.md"
+    "001_project_setup.md",
+    "002_geo_math.md"
   ]
 }

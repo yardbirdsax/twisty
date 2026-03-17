@@ -5,6 +5,69 @@ import (
 	"testing"
 )
 
+func TestDecodePolyline_Empty(t *testing.T) {
+	got := DecodePolyline("")
+	if got == nil {
+		t.Error("DecodePolyline(\"\") returned nil, want empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("DecodePolyline(\"\") = %v, want empty slice", got)
+	}
+}
+
+func TestDecodePolyline_CanonicalGoogleExample(t *testing.T) {
+	encoded := "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+	want := []Coord{
+		{Lat: 38.5, Lon: -120.2},
+		{Lat: 40.7, Lon: -120.95},
+		{Lat: 43.252, Lon: -126.453},
+	}
+	got := DecodePolyline(encoded)
+	if len(got) != len(want) {
+		t.Fatalf("DecodePolyline canonical: got %d coords, want %d", len(got), len(want))
+	}
+	const epsilon = 1e-5
+	for idx, w := range want {
+		if math.Abs(got[idx].Lat-w.Lat) > epsilon || math.Abs(got[idx].Lon-w.Lon) > epsilon {
+			t.Errorf("DecodePolyline canonical[%d] = %v, want %v", idx, got[idx], w)
+		}
+	}
+}
+
+func TestDecodePolyline_SinglePoint(t *testing.T) {
+	// Encode (0.0, 0.0): both lat and lon encode to just "??" (0x3F 0x3F) but
+	// the standard encoding for 0 is a single '?' byte per component.
+	// Encoded form of (0,0) in Google polyline is "??"
+	got := DecodePolyline("??")
+	if len(got) != 1 {
+		t.Fatalf("DecodePolyline single point: got %d coords, want 1", len(got))
+	}
+	if got[0].Lat != 0 || got[0].Lon != 0 {
+		t.Errorf("DecodePolyline single point = %v, want {0 0}", got[0])
+	}
+}
+
+func TestDecodePolyline_MalformedNoPanic(t *testing.T) {
+	// Should not panic on truncated/malformed input.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("DecodePolyline panicked on malformed input: %v", r)
+		}
+	}()
+	DecodePolyline("_p~iF~ps|")
+}
+
+func TestDecodePolyline_TruncatedAfterLat(t *testing.T) {
+	// "_p~iF" encodes the lat portion of the first coord in the canonical
+	// Google example (38.5). Truncating there means no lon bytes follow, so
+	// no coord should be appended — the function must not emit a spurious
+	// coord using a stale lon accumulator.
+	got := DecodePolyline("_p~iF")
+	if len(got) != 0 {
+		t.Errorf("DecodePolyline truncated after lat: got %d coords, want 0", len(got))
+	}
+}
+
 func TestHaversine_SFtoLA(t *testing.T) {
 	// San Francisco to Los Angeles: ~559 km great-circle distance
 	sf := Coord{Lat: 37.7749, Lon: -122.4194}
