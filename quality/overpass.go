@@ -194,7 +194,6 @@ func NearestWay(p geo.Coord, ways []Way, maxDist float64) *Way {
 // If ways is nil (Overpass failed), it prints the fallback warning and returns immediately.
 func ApplyQuality(routes []route.Route, ways []Way) {
 	if ways == nil {
-		fmt.Println("WARNING: Overpass API unavailable; road quality filtering skipped")
 		return
 	}
 

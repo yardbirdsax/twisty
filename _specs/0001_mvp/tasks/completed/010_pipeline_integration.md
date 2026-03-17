@@ -104,3 +104,70 @@ Should print error and exit 1
   // Use:
   if exitErr, ok := errors.AsType[*exec.ExitError](err); ok { ... }
   ```
+
+---
+
+# Task 010 Review: Pipeline Integration and Summary Output
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-16
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task wires all pipeline stages into main.go, implements `printSummary` with a route comparison table, and connects geocoding, OSRM routing, quality filtering, route selection, and GPX output into a working binary.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/geocode/nominatim.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/overpass.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/Makefile` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| All 5 manual test cases produce the expected behavior | PARTIAL - Tests 4 and 5 verified; Tests 1-3 require live network (not verified) |
+| go build ./... succeeds with no errors or warnings | PASS |
+| The GPX file from Test 1 imports into mapping software and renders correctly | NOT VERIFIED (requires live network) |
+| twist 0.0 and twist 1.0 select different routes when OSRM returns multiple alternatives | NOT VERIFIED (requires live network) |
+| The show-all table is printed before the Selected route line | PASS |
+| No hardcoded coordinates or strings in main.go | PASS |
+| Overpass failure prints a warning but still produces GPX output | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make lint                      # PASS - go vet ./... clean
+go build ./...                 # PASS - no errors
+make test                      # PASS - all unit tests pass with -short flag
+./twisty -origin "San Francisco"  # PASS - prints usage + error, exits 1
+./twisty -origin "37.7749,-122.4194" -dest "37.3382,-121.8863" -twist 1.5  # PASS - exits 1 with error
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All blocking issues from the prior review have been addressed: `printSummary` now accepts the `twist float64` parameter per spec, the duplicate Overpass warning has been removed from `ApplyQuality`, `make test` passes cleanly with `-short`, and the User-Agent header uses the correct `twisty/1.0` value. Build, lint, and unit tests all pass.

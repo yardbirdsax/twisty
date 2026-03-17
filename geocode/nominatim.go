@@ -113,7 +113,7 @@ func Geocode(address, label string) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("creating request: %w", err)
 	}
-	req.Header.Set("User-Agent", "twistrouter/1.0")
+	req.Header.Set("User-Agent", "twisty/1.0")
 
 	resp, err := client.Do(req)
 	if err != nil {
