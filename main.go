@@ -3,12 +3,14 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"time"
 
+	"github.com/yardbirdsax/twisty/geo"
 	"github.com/yardbirdsax/twisty/geocode"
 	"github.com/yardbirdsax/twisty/gpx"
-	"github.com/yardbirdsax/twisty/geo"
 	"github.com/yardbirdsax/twisty/quality"
 	"github.com/yardbirdsax/twisty/route"
 )
@@ -19,8 +21,21 @@ func main() {
 	twist := flag.Float64("twist", 0.5, "0.0 = fastest, 1.0 = twistiest")
 	out := flag.String("out", "route.gpx", "Output file path")
 	showAll := flag.Bool("show-all", false, "Print candidate comparison table")
+	verbose := flag.Bool("v", false, "Enable verbose timing logs to stderr")
 
 	flag.Parse()
+
+	var logger *slog.Logger
+	if *verbose {
+		handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})
+		logger = slog.New(handler)
+	} else {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	pipelineStart := time.Now()
 
 	if *origin == "" || *dest == "" {
 		flag.Usage()
@@ -34,11 +49,13 @@ func main() {
 	}
 
 	// Stage 1: Resolve origin
+	done := stageTimer(logger, "geocode-origin")
 	originResult, err := geocode.Resolve(*origin, "Origin")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error resolving origin: %v\n", err)
 		os.Exit(1)
 	}
+	done("result", originResult.DisplayName)
 
 	// Sleep between geocoding requests only when both inputs need geocoding
 	if geocode.NeedsGeocode(*origin) && geocode.NeedsGeocode(*dest) {
@@ -46,46 +63,84 @@ func main() {
 	}
 
 	// Stage 2: Resolve destination
+	done = stageTimer(logger, "geocode-dest")
 	destResult, err := geocode.Resolve(*dest, "Destination")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error resolving destination: %v\n", err)
 		os.Exit(1)
 	}
+	done("result", destResult.DisplayName)
 
 	// Stage 3: Fetch routes from OSRM
 	fmt.Println("Fetching routes...")
+	done = stageTimer(logger, "fetch-routes")
 	routes, err := route.FetchRoutes(originResult.ToCoord(), destResult.ToCoord())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error fetching routes: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("Found %d route(s)\n", len(routes))
+	totalPts := 0
+	for _, r := range routes {
+		totalPts += len(r.Points)
+	}
+	done("routes", len(routes), "total_points", totalPts)
 
 	// Stage 4: Score all routes
+	done = stageTimer(logger, "score-routes")
 	route.ScoreAll(routes)
+	done("routes", len(routes))
 
 	// Stage 5: Check road quality (soft failure)
 	allPoints := collectAllPoints(routes)
 	south, west, north, east := quality.BoundingBox(allPoints, 0.01)
+	done = stageTimer(logger, "fetch-ways")
 	ways, err := quality.FetchWays(south, west, north, east)
+	wayCount := len(ways)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: Overpass API unavailable; road quality filtering skipped: %v\n", err)
 		ways = nil
+		wayCount = 0
 	}
+	done("ways", wayCount)
+
+	totalPts = 0
+	for _, r := range routes {
+		totalPts += len(r.Points)
+	}
+	done = stageTimer(logger, "apply-quality", "routes", len(routes), "ways", wayCount, "total_points", totalPts)
 	quality.ApplyQuality(routes, ways)
+	done()
 
 	// Stage 6: Select route by twist factor
+	done = stageTimer(logger, "select-route")
 	selectedIdx := route.SelectRoute(routes, *twist)
+	done("selected_idx", selectedIdx)
 
 	// Stage 7: Write GPX output
+	done = stageTimer(logger, "write-gpx")
 	selected := routes[selectedIdx]
 	if err := gpx.WriteGPX(*out, selected.Points, "twisty route"); err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing GPX: %v\n", err)
 		os.Exit(1)
 	}
+	done("path", *out)
 
 	// Stage 8: Print summary
 	printSummary(routes, selectedIdx, *twist, *out, *showAll)
+
+	logger.Debug("pipeline done", "total_elapsed_ms", time.Since(pipelineStart).Milliseconds())
+}
+
+// stageTimer logs the start of a pipeline stage and returns a closure that logs
+// the elapsed duration when called with optional extra key-value fields.
+func stageTimer(logger *slog.Logger, stage string, fields ...any) func(...any) {
+	start := time.Now()
+	logger.Debug("stage start", append([]any{"stage", stage}, fields...)...)
+	return func(extra ...any) {
+		args := append([]any{"stage", stage, "elapsed_ms", time.Since(start).Milliseconds()}, extra...)
+		logger.Debug("stage done", args...)
+	}
 }
 
 // collectAllPoints returns all route point slices for use with quality.BoundingBox.
