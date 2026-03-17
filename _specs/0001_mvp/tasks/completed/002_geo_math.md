@@ -97,3 +97,77 @@ Create `geo/geo_test.go`. Include tests for:
 
 - Use `import "math"` only; no external packages.
 - All angles in the public API are in degrees; convert to radians internally.
+
+---
+# Task 002 Review: Geo Math Package
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-16
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implemented the `geo` package with the `Coord` struct and three pure math functions: `Haversine`, `Bearing`, and `AngleDiff`, along with a unit test file covering all required cases.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/geo/geo.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/geo/geo_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `go test ./geo/` passes with all tests green | PASS |
+| `Haversine` returns a value within 1% of the known SF→LA great-circle distance (~559 km) | PASS |
+| `Bearing` returns correct cardinal directions at the equator | PASS |
+| `AngleDiff(350, 10)` returns 20.0 | PASS |
+| `AngleDiff(10, 350)` returns 20.0 | PASS |
+| All functions use `float64` throughout | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Good Practices Observed
+
+1. **Formula fidelity:** Implementation matches the specified formulas exactly, including the correct `math.Mod(bearing+360, 360)` normalization.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test ./geo/   # ok  github.com/yardbirdsax/twisty/geo  0.206s
+go vet ./geo/    # no output (clean)
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met, tests pass, and `go vet` reports no issues.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **APPROVED WITH CHANGES**: All acceptance criteria met, minor issues found. Can merge after addressing SHOULD FIX items, or merge as-is with follow-up.
+- **NEEDS REVISION**: Acceptance criteria not met or critical issues found. Must address MUST FIX items before re-review.
