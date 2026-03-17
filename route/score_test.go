@@ -111,6 +111,73 @@ func TestScoreZeroLengthRoute(t *testing.T) {
 	}
 }
 
+func TestSelectRoute(t *testing.T) {
+	// Route A: faster, less twisty.
+	routeA := Route{Duration: 300, Stats: CurvatureStats{AdjustedScore: 100}}
+	// Route B: slower, more twisty.
+	routeB := Route{Duration: 600, Stats: CurvatureStats{AdjustedScore: 500}}
+
+	t.Run("twist=0.0 selects faster route", func(t *testing.T) {
+		idx := SelectRoute([]Route{routeA, routeB}, 0.0)
+		if idx != 0 {
+			t.Errorf("expected index 0 (faster), got %d", idx)
+		}
+	})
+
+	t.Run("twist=1.0 selects twistier route", func(t *testing.T) {
+		idx := SelectRoute([]Route{routeA, routeB}, 1.0)
+		if idx != 1 {
+			t.Errorf("expected index 1 (twistier), got %d", idx)
+		}
+	})
+
+	t.Run("twist=0.5 selects by combined formula", func(t *testing.T) {
+		routes := []Route{routeA, routeB}
+		idx := SelectRoute(routes, 0.5)
+		// With equal weights:
+		// normDur: A=0, B=1  -> speedScore: A=1, B=0
+		// normScore: A=0, B=1
+		// selA = 0.5*0 + 0.5*1 = 0.5
+		// selB = 0.5*1 + 0.5*0 = 0.5
+		// Tie goes to first in iteration (index 0) since we use strict >.
+		if idx != 0 {
+			t.Errorf("expected index 0 on tie at twist=0.5, got %d", idx)
+		}
+	})
+
+	t.Run("single route always returns 0", func(t *testing.T) {
+		for _, twist := range []float64{0.0, 0.5, 1.0} {
+			idx := SelectRoute([]Route{routeA}, twist)
+			if idx != 0 {
+				t.Errorf("twist=%v: expected 0 for single route, got %d", twist, idx)
+			}
+		}
+	})
+
+	t.Run("identical durations do not panic", func(t *testing.T) {
+		r1 := Route{Duration: 300, Stats: CurvatureStats{AdjustedScore: 100}}
+		r2 := Route{Duration: 300, Stats: CurvatureStats{AdjustedScore: 500}}
+		idx := SelectRoute([]Route{r1, r2}, 0.5)
+		// normDur both 1.0 -> speedScore both 0.0
+		// normScore: r1=0, r2=1 -> selR1=0, selR2=0.5
+		if idx != 1 {
+			t.Errorf("expected index 1 (higher adjusted score), got %d", idx)
+		}
+	})
+
+	t.Run("identical scores do not panic", func(t *testing.T) {
+		r1 := Route{Duration: 300, Stats: CurvatureStats{AdjustedScore: 200}}
+		r2 := Route{Duration: 600, Stats: CurvatureStats{AdjustedScore: 200}}
+		idx := SelectRoute([]Route{r1, r2}, 0.5)
+		// normScore both 1.0 -> twistScore both 0.5
+		// normDur: r1=0, r2=1 -> speedScore: r1=1, r2=0
+		// selR1 = 0.5*1 + 0.5*1 = 1.0, selR2 = 0.5*1 + 0.5*0 = 0.5
+		if idx != 0 {
+			t.Errorf("expected index 0 (faster route), got %d", idx)
+		}
+	})
+}
+
 func TestScoreAllAdjustedEqualsScore(t *testing.T) {
 	routes := []Route{
 		{Points: []geo.Coord{

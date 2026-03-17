@@ -64,3 +64,62 @@ func ScoreAll(routes []Route) {
 		ScoreRoute(&routes[i])
 	}
 }
+
+// SelectRoute returns the index of the best route given the twist factor [0, 1].
+// twist=0.0 favors the fastest route; twist=1.0 favors the twistiest.
+// If there is only one route, returns 0.
+func SelectRoute(routes []Route, twist float64) int {
+	if len(routes) == 1 {
+		return 0
+	}
+
+	// Find min/max duration.
+	minDur := routes[0].Duration
+	maxDur := routes[0].Duration
+	for _, r := range routes[1:] {
+		if r.Duration < minDur {
+			minDur = r.Duration
+		}
+		if r.Duration > maxDur {
+			maxDur = r.Duration
+		}
+	}
+
+	// Find min/max adjusted score.
+	minScore := routes[0].Stats.AdjustedScore
+	maxScore := routes[0].Stats.AdjustedScore
+	for _, r := range routes[1:] {
+		if r.Stats.AdjustedScore < minScore {
+			minScore = r.Stats.AdjustedScore
+		}
+		if r.Stats.AdjustedScore > maxScore {
+			maxScore = r.Stats.AdjustedScore
+		}
+	}
+
+	bestIdx := 0
+	bestSel := -1.0
+	for i, r := range routes {
+		var normDur float64
+		if maxDur == minDur {
+			normDur = 1.0
+		} else {
+			normDur = (r.Duration - minDur) / (maxDur - minDur)
+		}
+
+		var normScore float64
+		if maxScore == minScore {
+			normScore = 1.0
+		} else {
+			normScore = (r.Stats.AdjustedScore - minScore) / (maxScore - minScore)
+		}
+
+		sel := twist*normScore + (1.0-twist)*(1.0-normDur)
+		if sel > bestSel {
+			bestSel = sel
+			bestIdx = i
+		}
+	}
+
+	return bestIdx
+}

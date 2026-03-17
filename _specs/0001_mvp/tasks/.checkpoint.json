@@ -1,7 +1,7 @@
 {
-  "current_task": "007_road_quality_filtering.md",
+  "current_task": "008_route_selection.md",
   "step": "review",
-  "review_round": 4,
+  "review_round": 0,
   "retry_count": 0,
   "completed_tasks": [
     "001_project_setup.md",
@@ -9,6 +9,7 @@
     "003_polyline_decoder.md",
     "004_geocoding.md",
     "005_osrm_client.md",
-    "006_curvature_scoring.md"
+    "006_curvature_scoring.md",
+    "007_road_quality_filtering.md"
   ]
 }
