@@ -1,5 +1,5 @@
 {
-  "current_task": "008_route_selection.md",
+  "current_task": "009_gpx_output.md",
   "step": "review",
   "review_round": 0,
   "retry_count": 0,
@@ -10,6 +10,7 @@
     "004_geocoding.md",
     "005_osrm_client.md",
     "006_curvature_scoring.md",
-    "007_road_quality_filtering.md"
+    "007_road_quality_filtering.md",
+    "008_route_selection.md"
   ]
 }
