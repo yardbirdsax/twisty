@@ -1,11 +1,12 @@
 {
-  "current_task": "004_geocoding.md",
+  "current_task": "005_osrm_client.md",
   "step": "review",
-  "review_round": 2,
+  "review_round": 1,
   "retry_count": 0,
   "completed_tasks": [
     "001_project_setup.md",
     "002_geo_math.md",
-    "003_polyline_decoder.md"
+    "003_polyline_decoder.md",
+    "004_geocoding.md"
   ]
 }
