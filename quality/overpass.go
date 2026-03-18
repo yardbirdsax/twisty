@@ -198,6 +198,8 @@ func ApplyQuality(routes []route.Route, ways []Way) {
 	}
 
 	const maxDist = 30.0
+	const gridCellDeg = 0.01
+	grid := BuildSpatialGrid(ways, gridCellDeg)
 
 	for i := range routes {
 		pts := routes[i].Points
@@ -217,7 +219,7 @@ func ApplyQuality(routes []route.Route, ways []Way) {
 			}
 			totalDist += segLen
 
-			w := NearestWay(midpoint, ways, maxDist)
+			w := grid.NearestWayGrid(midpoint, maxDist)
 			if w == nil {
 				continue
 			}
