@@ -1,11 +1,7 @@
 {
-  "current_task": "014_filter_overpass_query_by_highway_type.md",
+  "current_task": "015_replace_osrm_with_valhalla.md",
   "step": "review",
-  "review_round": 7,
+  "review_round": 1,
   "retry_count": 0,
-  "completed_tasks": [
-    "011_add_pipeline_observability.md",
-    "012_analyze_performance_and_plan_optimizations.md",
-    "013_spatial_grid_index_for_nearest_way.md"
-  ]
+  "completed_tasks": null
 }

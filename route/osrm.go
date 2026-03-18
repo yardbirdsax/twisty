@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
 	"github.com/yardbirdsax/twisty/geo"
 )
@@ -43,8 +42,6 @@ type osrmStep struct {
 	Name     string `json:"name"`
 }
 
-var osrmHTTPClient = &http.Client{Timeout: 15 * time.Second}
-
 // parseOSRMResponse reads and parses an HTTP response from the OSRM API into Route structs.
 func parseOSRMResponse(resp *http.Response) ([]Route, error) {
 	body, err := io.ReadAll(resp.Body)
@@ -67,7 +64,7 @@ func parseOSRMResponse(resp *http.Response) ([]Route, error) {
 
 	routes := make([]Route, 0, len(osrmResp.Routes))
 	for _, r := range osrmResp.Routes {
-		points := geo.DecodePolyline(r.Geometry)
+		points := geo.DecodePolyline(r.Geometry, 1e5)
 		routes = append(routes, Route{
 			Points:   points,
 			Duration: r.Duration,
@@ -78,33 +75,3 @@ func parseOSRMResponse(resp *http.Response) ([]Route, error) {
 	return routes, nil
 }
 
-const osrmBaseURL = "https://router.project-osrm.org"
-
-// fetchRoutes is the internal implementation of FetchRoutes, accepting a base URL
-// so tests can substitute a local server.
-func fetchRoutes(baseURL string, origin, dest geo.Coord) ([]Route, error) {
-	url := fmt.Sprintf(
-		"%s/route/v1/driving/%.6f,%.6f;%.6f,%.6f?alternatives=true&overview=full&geometries=polyline&steps=true",
-		baseURL,
-		origin.Lon, origin.Lat,
-		dest.Lon, dest.Lat,
-	)
-
-	resp, err := osrmHTTPClient.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("fetching routes: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected HTTP status: %d", resp.StatusCode)
-	}
-
-	return parseOSRMResponse(resp)
-}
-
-// FetchRoutes requests route alternatives from the public OSRM demo server
-// and returns decoded Route structs.
-func FetchRoutes(origin, dest geo.Coord) ([]Route, error) {
-	return fetchRoutes(osrmBaseURL, origin, dest)
-}

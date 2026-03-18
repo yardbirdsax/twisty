@@ -22,15 +22,6 @@ func makeOSRMServer(t *testing.T, payload osrmResponse) *httptest.Server {
 	return srv
 }
 
-// makeOSRMServerWithStatus returns a test HTTP server that responds with the given HTTP status code.
-func makeOSRMServerWithStatus(t *testing.T, statusCode int) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(statusCode)
-	}))
-	return srv
-}
-
 // fetchRoutesViaServer calls the test server and parses the OSRM response.
 func fetchRoutesViaServer(t *testing.T, payload osrmResponse) ([]Route, error) {
 	t.Helper()
@@ -154,46 +145,3 @@ func TestFetchRoutes_Unit_MultipleRoutes(t *testing.T) {
 	}
 }
 
-func TestFetchRoutes_Unit_Non200Status(t *testing.T) {
-	srv := makeOSRMServerWithStatus(t, http.StatusInternalServerError)
-	defer srv.Close()
-
-	origin := geo.Coord{Lat: 38.5, Lon: -120.2}
-	dest := geo.Coord{Lat: 40.7, Lon: -120.95}
-
-	_, err := fetchRoutes(srv.URL, origin, dest)
-	if err == nil {
-		t.Fatal("expected error for non-200 HTTP status, got nil")
-	}
-	wantMsg := "unexpected HTTP status: 500"
-	if err.Error() != wantMsg {
-		t.Errorf("error = %q, want %q", err.Error(), wantMsg)
-	}
-}
-
-func TestFetchRoutes_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-	// SF to SJ
-	origin := geo.Coord{Lat: 37.7749, Lon: -122.4194}
-	dest := geo.Coord{Lat: 37.3382, Lon: -121.8863}
-	routes, err := FetchRoutes(origin, dest)
-	if err != nil {
-		t.Fatalf("FetchRoutes returned error: %v", err)
-	}
-	if len(routes) == 0 {
-		t.Fatal("expected at least one route, got none")
-	}
-	for i, r := range routes {
-		if len(r.Points) == 0 {
-			t.Errorf("routes[%d]: Points is empty", i)
-		}
-		if r.Duration <= 0 {
-			t.Errorf("routes[%d]: Duration = %v, want > 0", i, r.Duration)
-		}
-		if r.Distance <= 0 {
-			t.Errorf("routes[%d]: Distance = %v, want > 0", i, r.Distance)
-		}
-	}
-}

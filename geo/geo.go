@@ -29,9 +29,10 @@ func Bearing(a, b Coord) float64 {
 	return math.Mod(bearing+360, 360)
 }
 
-// DecodePolyline decodes a Google Encoded Polyline (precision 5) string
-// into a slice of Coord.
-func DecodePolyline(encoded string) []Coord {
+// DecodePolyline decodes a Google Encoded Polyline string into a slice of Coord.
+// precision is the divisor used to recover floating-point values; use 1e5 for
+// standard Google/OSRM encoding and 1e6 for Valhalla encoding.
+func DecodePolyline(encoded string, precision float64) []Coord {
 	coords := make([]Coord, 0)
 	i := 0
 	latAcc := 0
@@ -62,7 +63,7 @@ func DecodePolyline(encoded string) []Coord {
 			}
 		}
 		if lonDecoded {
-			coords = append(coords, Coord{Lat: float64(latAcc) / 1e5, Lon: float64(lonAcc) / 1e5})
+			coords = append(coords, Coord{Lat: float64(latAcc) / precision, Lon: float64(lonAcc) / precision})
 		}
 	}
 	return coords

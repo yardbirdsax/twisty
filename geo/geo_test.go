@@ -6,7 +6,7 @@ import (
 )
 
 func TestDecodePolyline_Empty(t *testing.T) {
-	got := DecodePolyline("")
+	got := DecodePolyline("", 1e5)
 	if got == nil {
 		t.Error("DecodePolyline(\"\") returned nil, want empty slice")
 	}
@@ -22,7 +22,7 @@ func TestDecodePolyline_CanonicalGoogleExample(t *testing.T) {
 		{Lat: 40.7, Lon: -120.95},
 		{Lat: 43.252, Lon: -126.453},
 	}
-	got := DecodePolyline(encoded)
+	got := DecodePolyline(encoded, 1e5)
 	if len(got) != len(want) {
 		t.Fatalf("DecodePolyline canonical: got %d coords, want %d", len(got), len(want))
 	}
@@ -38,7 +38,7 @@ func TestDecodePolyline_SinglePoint(t *testing.T) {
 	// Encode (0.0, 0.0): both lat and lon encode to just "??" (0x3F 0x3F) but
 	// the standard encoding for 0 is a single '?' byte per component.
 	// Encoded form of (0,0) in Google polyline is "??"
-	got := DecodePolyline("??")
+	got := DecodePolyline("??", 1e5)
 	if len(got) != 1 {
 		t.Fatalf("DecodePolyline single point: got %d coords, want 1", len(got))
 	}
@@ -54,7 +54,7 @@ func TestDecodePolyline_MalformedNoPanic(t *testing.T) {
 			t.Errorf("DecodePolyline panicked on malformed input: %v", r)
 		}
 	}()
-	DecodePolyline("_p~iF~ps|")
+	DecodePolyline("_p~iF~ps|", 1e5)
 }
 
 func TestDecodePolyline_TruncatedAfterLat(t *testing.T) {
@@ -62,7 +62,7 @@ func TestDecodePolyline_TruncatedAfterLat(t *testing.T) {
 	// Google example (38.5). Truncating there means no lon bytes follow, so
 	// no coord should be appended — the function must not emit a spurious
 	// coord using a stale lon accumulator.
-	got := DecodePolyline("_p~iF")
+	got := DecodePolyline("_p~iF", 1e5)
 	if len(got) != 0 {
 		t.Errorf("DecodePolyline truncated after lat: got %d coords, want 0", len(got))
 	}
