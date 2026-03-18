@@ -138,6 +138,34 @@ func FetchWays(south, west, north, east float64) ([]Way, error) {
 	return fetchWaysFromURL(overpassBaseURL, south, west, north, east)
 }
 
+// HighwayTypePenalty returns a penalty factor in [0, 1] based on road classification.
+// Penalizes high-speed or limited-access road types that are undesirable for scenic driving.
+// 0 = no penalty, 1 = full soft penalty.
+func HighwayTypePenalty(tags map[string]string) float64 {
+	switch tags["highway"] {
+	case "motorway", "motorway_link":
+		return 1.0
+	case "trunk", "trunk_link":
+		return 0.8
+	case "primary", "primary_link":
+		return 0.4
+	}
+	return 0.0
+}
+
+// LocalBonus returns a bonus factor in [0, 1] for preferred local road types.
+// Higher values indicate roads more likely to be scenic and interesting to drive.
+// 0 = no bonus, 1 = full bonus.
+func LocalBonus(tags map[string]string) float64 {
+	switch tags["highway"] {
+	case "residential", "living_street":
+		return 1.0
+	case "tertiary", "tertiary_link":
+		return 0.5
+	}
+	return 0.0
+}
+
 // IsDisqualifying returns true if the way's tags indicate the route segment
 // should be heavily penalized (private, restricted, or non-motor-vehicle road).
 func IsDisqualifying(tags map[string]string) bool {
@@ -220,6 +248,8 @@ func ApplyQuality(routes []route.Route, ways []Way) {
 		totalDist := 0.0
 		disqualifiedDist := 0.0
 		penaltyWeightedDist := 0.0
+		highwayPenaltyWeightedDist := 0.0
+		localBonusWeightedDist := 0.0
 
 		for j := 0; j < len(pts)-1; j++ {
 			segLen := geo.Haversine(pts[j], pts[j+1])
@@ -237,6 +267,8 @@ func ApplyQuality(routes []route.Route, ways []Way) {
 				disqualifiedDist += segLen
 			}
 			penaltyWeightedDist += PenaltyFactor(w.Tags) * segLen
+			highwayPenaltyWeightedDist += HighwayTypePenalty(w.Tags) * segLen
+			localBonusWeightedDist += LocalBonus(w.Tags) * segLen
 		}
 
 		if totalDist == 0 {
@@ -245,10 +277,14 @@ func ApplyQuality(routes []route.Route, ways []Way) {
 
 		disqualifiedFraction := disqualifiedDist / totalDist
 		penaltyFraction := penaltyWeightedDist / totalDist
+		highwayPenaltyFraction := highwayPenaltyWeightedDist / totalDist
+		localFraction := localBonusWeightedDist / totalDist
 
 		adjusted := routes[i].Stats.AdjustedScore
 		adjusted *= (1 - disqualifiedFraction*0.9)
 		adjusted *= (1 - penaltyFraction*0.3)
+		adjusted *= (1 - highwayPenaltyFraction*0.6)
+		adjusted *= (1 + localFraction*0.4)
 		routes[i].Stats.AdjustedScore = adjusted
 
 		if disqualifiedFraction > 0.10 {

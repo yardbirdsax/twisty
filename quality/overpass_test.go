@@ -114,6 +114,73 @@ func TestIsDisqualifyingNormal(t *testing.T) {
 	}
 }
 
+// --- HighwayTypePenalty ---
+
+func TestHighwayTypePenaltyMotorway(t *testing.T) {
+	for _, hw := range []string{"motorway", "motorway_link"} {
+		f := HighwayTypePenalty(map[string]string{"highway": hw})
+		if f != 1.0 {
+			t.Errorf("highway=%s: expected 1.0, got %f", hw, f)
+		}
+	}
+}
+
+func TestHighwayTypePenaltyTrunk(t *testing.T) {
+	for _, hw := range []string{"trunk", "trunk_link"} {
+		f := HighwayTypePenalty(map[string]string{"highway": hw})
+		if f != 0.8 {
+			t.Errorf("highway=%s: expected 0.8, got %f", hw, f)
+		}
+	}
+}
+
+func TestHighwayTypePenaltyPrimary(t *testing.T) {
+	for _, hw := range []string{"primary", "primary_link"} {
+		f := HighwayTypePenalty(map[string]string{"highway": hw})
+		if f != 0.4 {
+			t.Errorf("highway=%s: expected 0.4, got %f", hw, f)
+		}
+	}
+}
+
+func TestHighwayTypePenaltyNopenalty(t *testing.T) {
+	for _, hw := range []string{"secondary", "tertiary", "residential", "unclassified"} {
+		f := HighwayTypePenalty(map[string]string{"highway": hw})
+		if f != 0.0 {
+			t.Errorf("highway=%s: expected 0.0, got %f", hw, f)
+		}
+	}
+}
+
+// --- LocalBonus ---
+
+func TestLocalBonusResidential(t *testing.T) {
+	for _, hw := range []string{"residential", "living_street"} {
+		f := LocalBonus(map[string]string{"highway": hw})
+		if f != 1.0 {
+			t.Errorf("highway=%s: expected 1.0, got %f", hw, f)
+		}
+	}
+}
+
+func TestLocalBonusTertiary(t *testing.T) {
+	for _, hw := range []string{"tertiary", "tertiary_link"} {
+		f := LocalBonus(map[string]string{"highway": hw})
+		if f != 0.5 {
+			t.Errorf("highway=%s: expected 0.5, got %f", hw, f)
+		}
+	}
+}
+
+func TestLocalBonusNoBonus(t *testing.T) {
+	for _, hw := range []string{"motorway", "trunk", "primary", "secondary", "unclassified"} {
+		f := LocalBonus(map[string]string{"highway": hw})
+		if f != 0.0 {
+			t.Errorf("highway=%s: expected 0.0, got %f", hw, f)
+		}
+	}
+}
+
 // --- PenaltyFactor ---
 
 func TestPenaltyFactorUnpaved(t *testing.T) {
@@ -295,6 +362,52 @@ func TestApplyQualityDisqualifyingReducesScore(t *testing.T) {
 
 	if routes[0].Stats.AdjustedScore >= 100.0 {
 		t.Errorf("expected AdjustedScore < 100.0 for disqualifying way, got AdjustedScore=%f", routes[0].Stats.AdjustedScore)
+	}
+}
+
+func TestApplyQualityHighwayPenaltyReducesScore(t *testing.T) {
+	p0 := geo.Coord{Lat: 40.0, Lon: -74.0}
+	p1 := geo.Coord{Lat: 40.001, Lon: -74.0}
+	midLat := (p0.Lat + p1.Lat) / 2
+	midLon := (p0.Lon + p1.Lon) / 2
+	ways := []Way{
+		{
+			Tags:     map[string]string{"highway": "motorway"},
+			Geometry: []geo.Coord{{Lat: midLat, Lon: midLon}},
+		},
+	}
+	routes := []route.Route{
+		{
+			Points: []geo.Coord{p0, p1},
+			Stats:  route.CurvatureStats{Score: 100.0, AdjustedScore: 100.0},
+		},
+	}
+	ApplyQuality(routes, ways)
+	if routes[0].Stats.AdjustedScore >= 100.0 {
+		t.Errorf("expected AdjustedScore < 100.0 for motorway, got %f", routes[0].Stats.AdjustedScore)
+	}
+}
+
+func TestApplyQualityLocalBonusIncreasesScore(t *testing.T) {
+	p0 := geo.Coord{Lat: 40.0, Lon: -74.0}
+	p1 := geo.Coord{Lat: 40.001, Lon: -74.0}
+	midLat := (p0.Lat + p1.Lat) / 2
+	midLon := (p0.Lon + p1.Lon) / 2
+	ways := []Way{
+		{
+			Tags:     map[string]string{"highway": "residential"},
+			Geometry: []geo.Coord{{Lat: midLat, Lon: midLon}},
+		},
+	}
+	routes := []route.Route{
+		{
+			Points: []geo.Coord{p0, p1},
+			Stats:  route.CurvatureStats{Score: 100.0, AdjustedScore: 100.0},
+		},
+	}
+	ApplyQuality(routes, ways)
+	if routes[0].Stats.AdjustedScore <= 100.0 {
+		t.Errorf("expected AdjustedScore > 100.0 for residential road, got %f", routes[0].Stats.AdjustedScore)
 	}
 }
 
