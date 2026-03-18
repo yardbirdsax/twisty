@@ -2,8 +2,10 @@ package quality
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -206,7 +208,10 @@ func TestFetchWaysSuccess(t *testing.T) {
 	}
 	body, _ := json.Marshal(response)
 
+	var capturedBody string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawBody, _ := io.ReadAll(r.Body)
+		capturedBody = string(rawBody)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write(body)
@@ -227,6 +232,11 @@ func TestFetchWaysSuccess(t *testing.T) {
 	}
 	if len(ways[0].Geometry) != 2 {
 		t.Errorf("expected 2 geometry points, got %d", len(ways[0].Geometry))
+	}
+	// Assert that the POST body contains the full highway filter string to guard against
+	// accidental removal or truncation of any term in HighwayFilter.
+	if !strings.Contains(capturedBody, url.QueryEscape(HighwayFilter)) {
+		t.Errorf("POST body does not contain expected highway filter; want %q in: %s", url.QueryEscape(HighwayFilter), capturedBody)
 	}
 }
 

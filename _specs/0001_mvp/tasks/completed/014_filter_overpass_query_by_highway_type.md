@@ -114,6 +114,11 @@ unfiltered baseline.
 - [ ] `fetch-ways` `ways` count for the Asheville→Knoxville route is at least 15% lower
   than the unfiltered baseline of **80,849 ways** (measured live on 2026-03-16 with the
   current unfiltered query). Target: ≤ 68,721 ways after filtering.
+  **CANNOT BE VERIFIED WITHOUT LIVE NETWORK ACCESS.** This criterion requires direct calls
+  to the Overpass API and OSRM. All automated and sandboxed environments block this.
+  **REMAINS UNCHECKED AND PENDING** until a human manually runs the binary with full
+  network access and records the actual `ways=N` value in the Notes section. See
+  ACTION REQUIRED block in Notes.
 - [ ] `go test ./...` passes.
 
 ## Trade-offs and Accuracy Implications
@@ -130,6 +135,8 @@ unfiltered baseline.
   to the HTTP overhead.
 
 ## Notes
+
+**SHOULD FIX addressed (2026-03-17):** `highwayFilter` was exported as `HighwayFilter` and `TestFetchWaysSuccess` now asserts the full filter string via `url.QueryEscape(HighwayFilter)`, replacing the prior two-term spot-check.
 
 This task is complementary to Task 013 (spatial grid). When both are applied:
 
@@ -167,3 +174,38 @@ grep "fetch-ways" timing_after.log
 The unfiltered baseline is 80,849 ways at 8,251 ms fetch time. If the actual reduction
 is less than 15%, update the acceptance criterion threshold with a note explaining the
 corridor's highway-type distribution.
+
+**Live verification status (2026-03-17):** Binary run attempted during both implementation
+and code review, but blocked by sandbox/network restrictions in both environments. The
+binary is present and all automated tests pass. The `fetch-ways` ways count after
+filtering has NOT been recorded. This task's ways-count acceptance criterion remains
+UNCHECKED AND PENDING manual verification.
+
+---
+
+**ACTION REQUIRED — MUST BE DONE MANUALLY WITH FULL NETWORK ACCESS:**
+
+The ways-count acceptance criterion cannot be completed in any automated or sandboxed
+environment. A human must perform these steps outside of CI/automated tooling:
+
+1. Run: `./twisty -origin "Asheville, NC" -dest "Knoxville, TN" -twist 0.8 -v 2>timing_filtered.log`
+2. Extract: `grep "fetch-ways" timing_filtered.log`
+3. Record the actual `ways=N` value below (replace the placeholder):
+
+   **Actual post-filter ways count: NOT YET RECORDED — blocked by network/sandbox restrictions in all automated environments; requires manual run with full network access**
+
+   *Attempted 2026-03-17 during code review; blocked by sandbox in automated environment.*
+
+4. If N ≤ 68,721: check the acceptance criterion checkbox in this file.
+5. If N > 68,721: update the threshold in the acceptance criterion and add a note here
+   explaining the corridor's highway-type distribution.
+
+Until step 3 is completed, the performance criterion for this task is unverified.
+
+---
+# Task 014 Review: Filter Overpass Query by Highway Type
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-17
+
+All automatable acceptance criteria pass (`make test`, `make lint` clean). The live ways-count criterion remains unverifiable without network access, as explicitly acknowledged in the spec. No issues found.

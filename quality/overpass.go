@@ -69,15 +69,25 @@ type overpassGeomPoint struct {
 	Lon float64 `json:"lon"`
 }
 
-var overpassHTTPClient = &http.Client{Timeout: 10 * time.Second}
+var overpassHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 const overpassBaseURL = "https://overpass-api.de/api/interpreter"
+
+// HighwayFilter is an Overpass regex filter that restricts results to motor-vehicle-relevant
+// highway types. This excludes pedestrian and cycle infrastructure (footway, cycleway, path,
+// steps, bridleway, track) that can never match a driving route.
+//
+// NOTE: If new non-disqualifying highway types are added to OSM in the future, they must be
+// added to both this filter and the IsDisqualifying allow-list to keep the two in sync.
+const HighwayFilter = `["highway"~"^(motorway|motorway_link|trunk|trunk_link|` +
+	`primary|primary_link|secondary|secondary_link|` +
+	`tertiary|tertiary_link|unclassified|residential|service|living_street)$"]`
 
 // fetchWaysFromURL is the internal implementation, accepting a base URL so tests
 // can substitute a local server.
 func fetchWaysFromURL(endpoint string, south, west, north, east float64) ([]Way, error) {
 	query := fmt.Sprintf(
-		`[out:json][timeout:10];way["highway"](%.6f,%.6f,%.6f,%.6f);out geom;`,
+		`[out:json][timeout:25];way`+HighwayFilter+`(%.6f,%.6f,%.6f,%.6f);out geom;`,
 		south, west, north, east,
 	)
 
@@ -136,7 +146,7 @@ func IsDisqualifying(tags map[string]string) bool {
 		return true
 	}
 	switch tags["highway"] {
-	case "track", "path", "footway", "cycleway":
+	case "track", "path", "footway", "cycleway", "bridleway", "steps":
 		return true
 	}
 	switch tags["motor_vehicle"] {
