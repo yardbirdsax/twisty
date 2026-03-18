@@ -100,7 +100,7 @@ func fetchRoutesFromURL(baseURL string, origin, dest geo.Coord) ([]Route, error)
 		},
 		Costing: "auto",
 		CostingOptions: valhallaCostingOptions{
-			Auto: valhallaAutoOptions{UseHighways: 0.0},
+			Auto: valhallaAutoOptions{UseHighways: 0.3},
 		},
 		Alternates: 2,
 		Units:      "kilometers",
