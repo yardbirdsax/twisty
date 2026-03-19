@@ -55,3 +55,70 @@ None — this is the foundational task.
 
 - The ID field defaults to 0 for any response that doesn't include it, which is safe for the existing route-quality pipeline (it doesn't use the ID).
 - This is intentionally a minimal change to reduce risk to the existing pipeline.
+
+---
+# Task 001 Review: Add ID Field to Way and overpassElement Structs
+
+**Reviewer:** Claude (Sonnet 4.6)
+**Date:** 2026-03-19
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Added `ID int64` to both `Way` and `overpassElement` structs, propagated the value in `fetchWaysFromURL`, and added `TestFetchWaysPreservesID` to verify the field round-trips through JSON parsing.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/overpass.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/overpass_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `Way` struct has an `ID int64` field | PASS |
+| `overpassElement` struct has an `ID int64 \`json:"id"\`` field | PASS |
+| `fetchWaysFromURL` copies the ID from element to Way | PASS |
+| All existing tests in `quality/` pass without modification | PASS |
+| New test verifies ID is correctly parsed from Overpass JSON response | PASS |
+| `go vet ./...` and `go build ./...` pass cleanly | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Good Practices Observed
+
+None to report per review instructions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages pass
+make lint   # go vet clean, no output
+go build ./...  # clean build
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met with no issues found. Ready to merge.

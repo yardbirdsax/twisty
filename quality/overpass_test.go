@@ -307,6 +307,40 @@ func TestFetchWaysSuccess(t *testing.T) {
 	}
 }
 
+func TestFetchWaysPreservesID(t *testing.T) {
+	const wantID int64 = 123456789
+	response := overpassResponse{
+		Elements: []overpassElement{
+			{
+				ID:   wantID,
+				Tags: map[string]string{"highway": "secondary"},
+				Geometry: []overpassGeomPoint{
+					{Lat: 40.0, Lon: -74.0},
+				},
+			},
+		},
+	}
+	body, _ := json.Marshal(response)
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(body)
+	}))
+	defer ts.Close()
+
+	ways, err := fetchWaysFromURL(ts.URL+"/api/interpreter", 39.9, -74.1, 40.2, -73.9)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ways) != 1 {
+		t.Fatalf("expected 1 way, got %d", len(ways))
+	}
+	if ways[0].ID != wantID {
+		t.Errorf("expected ID=%d, got ID=%d", wantID, ways[0].ID)
+	}
+}
+
 func TestFetchWaysHTTPError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)

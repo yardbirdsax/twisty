@@ -16,6 +16,7 @@ import (
 
 // Way represents an OSM highway way with tags and geometry.
 type Way struct {
+	ID       int64
 	Tags     map[string]string
 	Geometry []geo.Coord
 }
@@ -59,6 +60,7 @@ type overpassResponse struct {
 
 // overpassElement represents a single way element from Overpass.
 type overpassElement struct {
+	ID       int64               `json:"id"`
 	Tags     map[string]string   `json:"tags"`
 	Geometry []overpassGeomPoint `json:"geometry"`
 }
@@ -125,6 +127,7 @@ func fetchWaysFromURL(endpoint string, south, west, north, east float64) ([]Way,
 			geom = append(geom, geo.Coord{Lat: pt.Lat, Lon: pt.Lon})
 		}
 		ways = append(ways, Way{
+			ID:       el.ID,
 			Tags:     el.Tags,
 			Geometry: geom,
 		})
