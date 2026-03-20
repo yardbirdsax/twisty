@@ -87,3 +87,66 @@ func Aggregate(ways []ScoredWay) []RoadCollection
 - The `Aggregate` function is the single entry point for stage 5. It should be straightforward to call from the pipeline orchestration.
 - Collections with `TotalScore == 0` are retained — filtering happens at KML output time via `-min-score`.
 - The split threshold of 2,414 meters (1.5 miles) matches the Curvature project.
+
+---
+# Task 004 Review: Aggregation — Split at Straight Gaps and Compute Scores
+
+**Reviewer:** Claude Opus 4.6
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implements `SplitAtStraightGaps`, `Aggregate`, and `buildRoadCollection` to complete the stage 5 aggregation pipeline. All blocking issues from the prior review cycle have been resolved: `WayID` was added to `ScoredSegment`, `buildRoadCollection` now derives `WayIDs`/`HighwayTypes` per split group, `StraightGapSplitM` is included in `ScoringParamsHash`, and `TestAggregate_TwoDisconnectedClusters` was added.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scoring_params.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/curvature.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `SplitAtStraightGaps` correctly splits at long straight runs and preserves segments | PASS |
+| `Aggregate` produces correctly grouped, connected, ordered, split, and scored collections | PASS |
+| `TotalScore`, `TotalLength`, and `ScorePerKm` are computed accurately | PASS |
+| Sub-indexing works correctly for split roads | PASS |
+| `HighwayTypes` and `WayIDs` are populated from constituent ways | PASS |
+| All unit tests pass | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages pass
+make lint   # go vet clean, no issues reported
+go test ./quality/... -v -run "TestSplitAtStraightGaps|TestAggregate|TestAggregateScore|TestAggregateSubIndexing"  # all 11 targeted tests pass
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met. The two blocking issues from the prior review (incorrect `WayIDs`/`HighwayTypes` scoping and missing `StraightGapSplitM` in the params hash) are resolved. The connectivity-driven split test is present and passing.

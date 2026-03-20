@@ -8,6 +8,7 @@ import (
 
 // ScoredSegment holds the curvature score for a single segment between two nodes.
 type ScoredSegment struct {
+	WayID  int64     `json:"way_id"` // OSM way ID this segment belongs to
 	Start  geo.Coord `json:"start"`
 	End    geo.Coord `json:"end"`
 	Radius float64   `json:"radius"` // circumradius in meters; +Inf for straight segments
@@ -40,6 +41,7 @@ func ScoreWay(w Way) ScoredWay {
 			Tags:  w.Tags,
 			Segments: []ScoredSegment{
 				{
+					WayID:  w.ID,
 					Start:  w.Geometry[0],
 					End:    w.Geometry[1],
 					Radius: math.Inf(1),
@@ -79,6 +81,7 @@ func ScoreWay(w Way) ScoredWay {
 		tier, weight := AssignTier(radius)
 		length := geo.Haversine(w.Geometry[i], w.Geometry[i+1])
 		segments[i] = ScoredSegment{
+			WayID:  w.ID,
 			Start:  w.Geometry[i],
 			End:    w.Geometry[i+1],
 			Radius: radius,

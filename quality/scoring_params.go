@@ -59,6 +59,12 @@ const (
 // geographic road segment).
 const ConnectedEndpointProximityM = 100.0
 
+// StraightGapSplitM is the minimum accumulated length (in meters) of
+// contiguous tier-0 (straight) segments that triggers a split of a road
+// collection into two separate collections. 2,414 m equals 1.5 miles,
+// matching the threshold used by the Curvature project.
+const StraightGapSplitM = 2414.0
+
 // Deflection filter constants are derived from the Curvature project
 // (github.com/awebre/curvature). A road section is only considered "twisty"
 // if it accumulates a meaningful heading change within a look-ahead window.
@@ -113,11 +119,11 @@ func ScoringParamsHash() string {
 		"TierRadius4=%v,TierRadius3=%v,TierRadius2=%v,TierRadius1=%v,"+
 			"TierWeight4=%v,TierWeight3=%v,TierWeight2=%v,TierWeight1=%v,TierWeight0=%v,"+
 			"DeflectionLookAheadM=%v,DeflectionMinHeadingChange=%v,"+
-			"ConnectedEndpointProximityM=%v",
+			"ConnectedEndpointProximityM=%v,StraightGapSplitM=%v",
 		TierRadius4, TierRadius3, TierRadius2, TierRadius1,
 		TierWeight4, TierWeight3, TierWeight2, TierWeight1, TierWeight0,
 		DeflectionLookAheadM, DeflectionMinHeadingChange,
-		ConnectedEndpointProximityM,
+		ConnectedEndpointProximityM, StraightGapSplitM,
 	)
 	sum := sha256.Sum256([]byte(input))
 	return "sha256:" + hex.EncodeToString(sum[:])

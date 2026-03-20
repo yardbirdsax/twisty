@@ -238,3 +238,263 @@ func TestOrderWays_ReverseNeeded(t *testing.T) {
 		t.Errorf("gap after ordering: %.1f m (want <= %.1f m)", d, ConnectedEndpointProximityM)
 	}
 }
+
+// makeScoredWay creates a ScoredWay with explicitly specified segments.
+func makeScoredWay(id int64, tags map[string]string, segs []ScoredSegment) ScoredWay {
+	return ScoredWay{WayID: id, Tags: tags, Segments: segs}
+}
+
+// makeSeg creates a ScoredSegment with the given tier and length.
+// The start/end coordinates are not meaningful for split/aggregate logic.
+func makeSeg(tier int, length float64) ScoredSegment {
+	weight := 0.0
+	switch tier {
+	case 1:
+		weight = TierWeight1
+	case 2:
+		weight = TierWeight2
+	case 3:
+		weight = TierWeight3
+	case 4:
+		weight = TierWeight4
+	}
+	return ScoredSegment{
+		Tier:   tier,
+		Weight: weight,
+		Length: length,
+		Score:  length * weight,
+	}
+}
+
+func TestSplitAtStraightGaps_LongStraightInMiddle(t *testing.T) {
+	// Curvy — straight (>StraightGapSplitM) — curvy
+	curvySeg := makeSeg(1, 500.0)
+	straightSeg := makeSeg(0, StraightGapSplitM+1)
+	curvySeg2 := makeSeg(2, 400.0)
+
+	ways := []ScoredWay{
+		makeScoredWay(1, nil, []ScoredSegment{curvySeg}),
+		makeScoredWay(2, nil, []ScoredSegment{straightSeg}),
+		makeScoredWay(3, nil, []ScoredSegment{curvySeg2}),
+	}
+
+	groups := SplitAtStraightGaps(ways, StraightGapSplitM)
+
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+	if len(groups[0]) != 1 {
+		t.Errorf("group 0: expected 1 segment, got %d", len(groups[0]))
+	}
+	if groups[0][0].Tier != 1 {
+		t.Errorf("group 0 segment should be tier 1")
+	}
+	if len(groups[1]) != 1 {
+		t.Errorf("group 1: expected 1 segment, got %d", len(groups[1]))
+	}
+	if groups[1][0].Tier != 2 {
+		t.Errorf("group 1 segment should be tier 2")
+	}
+}
+
+func TestSplitAtStraightGaps_ShortStraightKeptTogether(t *testing.T) {
+	// Short straight run (below threshold) should not cause a split.
+	curvySeg := makeSeg(1, 500.0)
+	shortStraight := makeSeg(0, StraightGapSplitM-1)
+	curvySeg2 := makeSeg(2, 400.0)
+
+	ways := []ScoredWay{
+		makeScoredWay(1, nil, []ScoredSegment{curvySeg, shortStraight, curvySeg2}),
+	}
+
+	groups := SplitAtStraightGaps(ways, StraightGapSplitM)
+
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	if len(groups[0]) != 3 {
+		t.Errorf("group 0: expected 3 segments, got %d", len(groups[0]))
+	}
+}
+
+func TestSplitAtStraightGaps_AllTierZero(t *testing.T) {
+	// All segments are tier 0 and total length > threshold: single collection with 0 segments.
+	ways := []ScoredWay{
+		makeScoredWay(1, nil, []ScoredSegment{makeSeg(0, StraightGapSplitM+500)}),
+	}
+
+	groups := SplitAtStraightGaps(ways, StraightGapSplitM)
+
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group (empty), got %d", len(groups))
+	}
+	if len(groups[0]) != 0 {
+		t.Errorf("expected empty segment slice, got %d segments", len(groups[0]))
+	}
+}
+
+func TestSplitAtStraightGaps_Empty(t *testing.T) {
+	groups := SplitAtStraightGaps(nil, StraightGapSplitM)
+	if len(groups) != 0 {
+		t.Errorf("expected 0 groups, got %d", len(groups))
+	}
+}
+
+func TestAggregate_Empty(t *testing.T) {
+	collections := Aggregate(nil)
+	if len(collections) != 0 {
+		t.Errorf("expected 0 collections, got %d", len(collections))
+	}
+}
+
+func TestAggregate_SingleWayRoad(t *testing.T) {
+	// A single named way with one curvy segment.
+	seg := makeSeg(2, 300.0)
+	ways := []ScoredWay{
+		makeScoredWay(1, map[string]string{"name": "Winding Way", "highway": "secondary"}, []ScoredSegment{seg}),
+	}
+
+	collections := Aggregate(ways)
+
+	if len(collections) != 1 {
+		t.Fatalf("expected 1 collection, got %d", len(collections))
+	}
+	rc := collections[0]
+	if rc.Name != "Winding Way" {
+		t.Errorf("Name = %q, want %q", rc.Name, "Winding Way")
+	}
+	if rc.SubIndex != 0 {
+		t.Errorf("SubIndex = %d, want 0", rc.SubIndex)
+	}
+	if len(rc.WayIDs) != 1 || rc.WayIDs[0] != 1 {
+		t.Errorf("WayIDs = %v, want [1]", rc.WayIDs)
+	}
+	if len(rc.HighwayTypes) != 1 || rc.HighwayTypes[0] != "secondary" {
+		t.Errorf("HighwayTypes = %v, want [secondary]", rc.HighwayTypes)
+	}
+}
+
+func TestAggregateScoreComputation(t *testing.T) {
+	seg1 := makeSeg(1, 1000.0) // score = 1000 * 1.0 = 1000
+	seg2 := makeSeg(2, 500.0)  // score = 500 * 1.3 = 650
+
+	ways := []ScoredWay{
+		makeScoredWay(10, map[string]string{"name": "Score Road"}, []ScoredSegment{seg1, seg2}),
+	}
+
+	collections := Aggregate(ways)
+
+	if len(collections) != 1 {
+		t.Fatalf("expected 1 collection, got %d", len(collections))
+	}
+	rc := collections[0]
+
+	wantScore := 1000.0 + 650.0
+	if rc.TotalScore != wantScore {
+		t.Errorf("TotalScore = %v, want %v", rc.TotalScore, wantScore)
+	}
+	wantLength := 1500.0
+	if rc.TotalLength != wantLength {
+		t.Errorf("TotalLength = %v, want %v", rc.TotalLength, wantLength)
+	}
+	wantPerKm := wantScore / (wantLength / 1000.0)
+	if rc.ScorePerKm != wantPerKm {
+		t.Errorf("ScorePerKm = %v, want %v", rc.ScorePerKm, wantPerKm)
+	}
+}
+
+func TestAggregateScoreComputation_ZeroLength(t *testing.T) {
+	// A way with a zero-length straight segment should not produce NaN ScorePerKm.
+	ways := []ScoredWay{
+		makeScoredWay(1, map[string]string{"name": "Zero Road"}, []ScoredSegment{makeSeg(0, 0.0)}),
+	}
+	collections := Aggregate(ways)
+	if len(collections) != 1 {
+		t.Fatalf("expected 1 collection, got %d", len(collections))
+	}
+	if collections[0].ScorePerKm != 0.0 {
+		t.Errorf("ScorePerKm should be 0 for zero-length road, got %v", collections[0].ScorePerKm)
+	}
+}
+
+func TestAggregateSubIndexing(t *testing.T) {
+	// Two segments of the same named road separated by a long straight gap.
+	// They share name and highway but are split into two collections.
+	curvy1 := makeSeg(1, 800.0)
+	longStraight := makeSeg(0, StraightGapSplitM+100)
+	curvy2 := makeSeg(2, 600.0)
+
+	ways := []ScoredWay{
+		makeScoredWay(1, map[string]string{"name": "Split Road"}, []ScoredSegment{curvy1, longStraight, curvy2}),
+	}
+
+	collections := Aggregate(ways)
+
+	if len(collections) != 2 {
+		t.Fatalf("expected 2 collections after split, got %d", len(collections))
+	}
+
+	subIndices := map[int]bool{}
+	for _, rc := range collections {
+		if rc.Name != "Split Road" {
+			t.Errorf("unexpected name %q", rc.Name)
+		}
+		subIndices[rc.SubIndex] = true
+	}
+
+	if !subIndices[0] || !subIndices[1] {
+		t.Errorf("expected sub-indices 0 and 1, got %v", subIndices)
+	}
+}
+
+// TestAggregate_TwoDisconnectedClusters verifies that two geographically
+// separated groups of ways sharing the same name each become their own
+// RoadCollection with distinct sub-indices (0 and 1).
+func TestAggregate_TwoDisconnectedClusters(t *testing.T) {
+	// Cluster A: two connected ways in Vermont (~44°N, -72°W), tier-1 curved.
+	segA1 := ScoredSegment{Tier: 1, Weight: TierWeight1, Length: 500.0, Score: 500.0 * TierWeight1,
+		Start: geo.Coord{Lat: 44.000, Lon: -72.0}, End: geo.Coord{Lat: 44.001, Lon: -72.0}}
+	segA2 := ScoredSegment{Tier: 1, Weight: TierWeight1, Length: 500.0, Score: 500.0 * TierWeight1,
+		Start: geo.Coord{Lat: 44.001, Lon: -72.0}, End: geo.Coord{Lat: 44.002, Lon: -72.0}}
+	wA1 := ScoredWay{WayID: 1, Tags: map[string]string{"name": "Mountain Road", "highway": "secondary"}, Segments: []ScoredSegment{segA1}}
+	wA2 := ScoredWay{WayID: 2, Tags: map[string]string{"name": "Mountain Road", "highway": "secondary"}, Segments: []ScoredSegment{segA2}}
+
+	// Cluster B: two connected ways in North Carolina (~36°N, -80°W), tier-2 curved.
+	segB1 := ScoredSegment{Tier: 2, Weight: TierWeight2, Length: 400.0, Score: 400.0 * TierWeight2,
+		Start: geo.Coord{Lat: 36.000, Lon: -80.0}, End: geo.Coord{Lat: 36.001, Lon: -80.0}}
+	segB2 := ScoredSegment{Tier: 2, Weight: TierWeight2, Length: 400.0, Score: 400.0 * TierWeight2,
+		Start: geo.Coord{Lat: 36.001, Lon: -80.0}, End: geo.Coord{Lat: 36.002, Lon: -80.0}}
+	wB1 := ScoredWay{WayID: 3, Tags: map[string]string{"name": "Mountain Road", "highway": "tertiary"}, Segments: []ScoredSegment{segB1}}
+	wB2 := ScoredWay{WayID: 4, Tags: map[string]string{"name": "Mountain Road", "highway": "tertiary"}, Segments: []ScoredSegment{segB2}}
+
+	collections := Aggregate([]ScoredWay{wA1, wA2, wB1, wB2})
+
+	if len(collections) != 2 {
+		t.Fatalf("expected 2 collections for two disconnected clusters, got %d", len(collections))
+	}
+
+	subIndices := map[int]bool{}
+	for _, rc := range collections {
+		if rc.Name != "Mountain Road" {
+			t.Errorf("unexpected collection name %q", rc.Name)
+		}
+		subIndices[rc.SubIndex] = true
+		if len(rc.WayIDs) != 2 {
+			t.Errorf("SubIndex %d: expected 2 WayIDs (one per way in cluster), got %v", rc.SubIndex, rc.WayIDs)
+		}
+	}
+	if !subIndices[0] || !subIndices[1] {
+		t.Errorf("expected sub-indices 0 and 1, got %v", subIndices)
+	}
+}
+
+func TestAggregate_UnnamedWaysExcluded(t *testing.T) {
+	// Ways without a name tag should produce no collections.
+	ways := []ScoredWay{
+		makeScoredWay(1, map[string]string{"highway": "tertiary"}, []ScoredSegment{makeSeg(1, 500.0)}),
+	}
+	collections := Aggregate(ways)
+	if len(collections) != 0 {
+		t.Errorf("expected 0 collections for unnamed ways, got %d", len(collections))
+	}
+}

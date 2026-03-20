@@ -207,6 +207,156 @@ func OrderWays(ways []ScoredWay) []ScoredWay {
 	return ordered
 }
 
+// SplitAtStraightGaps splits an ordered slice of ways at contiguous runs
+// of zero-score (tier 0) segments exceeding the threshold distance.
+// Returns one or more sub-slices of segments, each representing a
+// contiguous section of the road. Straight segments that form the gap are
+// excluded from both groups (dropped at the split point).
+func SplitAtStraightGaps(ways []ScoredWay, thresholdM float64) [][]ScoredSegment {
+	// Flatten all segments from all ways in order, ensuring each segment
+	// carries its parent way's ID (segments created outside ScoreWay, such as
+	// in tests, may have WayID == 0).
+	var all []ScoredSegment
+	for _, w := range ways {
+		for _, seg := range w.Segments {
+			if seg.WayID == 0 {
+				seg.WayID = w.WayID
+			}
+			all = append(all, seg)
+		}
+	}
+	if len(all) == 0 {
+		return nil
+	}
+
+	var groups [][]ScoredSegment
+	current := make([]ScoredSegment, 0)
+
+	i := 0
+	for i < len(all) {
+		seg := all[i]
+		if seg.Tier != 0 {
+			current = append(current, seg)
+			i++
+			continue
+		}
+		// Accumulate a run of tier-0 segments.
+		runLen := 0.0
+		j := i
+		for j < len(all) && all[j].Tier == 0 {
+			runLen += all[j].Length
+			j++
+		}
+		if runLen > thresholdM {
+			// Split: save current group (if non-empty) and start a new one.
+			if len(current) > 0 {
+				groups = append(groups, current)
+				current = make([]ScoredSegment, 0)
+			}
+			// Skip the straight run entirely.
+			i = j
+		} else {
+			// Short straight run — include all its segments in the current group.
+			for k := i; k < j; k++ {
+				current = append(current, all[k])
+			}
+			i = j
+		}
+	}
+	if len(current) > 0 {
+		groups = append(groups, current)
+	}
+
+	// If nothing was accumulated (e.g. all segments were straight), return a
+	// single empty-segment group so callers always get at least one entry.
+	if len(groups) == 0 {
+		groups = append(groups, []ScoredSegment{})
+	}
+
+	return groups
+}
+
+// Aggregate processes all scored ways into road collections.
+// This is the main entry point for stage 5.
+func Aggregate(ways []ScoredWay) []RoadCollection {
+	if len(ways) == 0 {
+		return nil
+	}
+
+	nameGroups := GroupWaysByName(ways)
+
+	var collections []RoadCollection
+
+	for name, namedWays := range nameGroups {
+		components := FindConnectedComponents(namedWays, ConnectedEndpointProximityM)
+
+		var nameCollections []RoadCollection
+
+		// Build a way-ID → ScoredWay lookup for tag resolution.
+		wayByID := make(map[int64]ScoredWay, len(namedWays))
+		for _, w := range namedWays {
+			wayByID[w.WayID] = w
+		}
+
+		for _, component := range components {
+			ordered := OrderWays(component)
+			segGroups := SplitAtStraightGaps(ordered, StraightGapSplitM)
+
+			for _, segs := range segGroups {
+				rc := buildRoadCollection(name, wayByID, segs)
+				nameCollections = append(nameCollections, rc)
+			}
+		}
+
+		// Assign sub-indices.
+		for i := range nameCollections {
+			nameCollections[i].SubIndex = i
+		}
+
+		collections = append(collections, nameCollections...)
+	}
+
+	return collections
+}
+
+// buildRoadCollection constructs a RoadCollection from a segment group.
+// wayByID is a map of way ID to ScoredWay used to look up tags for ways that
+// contributed segments to segs. Only ways that appear in segs are included.
+func buildRoadCollection(name string, wayByID map[int64]ScoredWay, segs []ScoredSegment) RoadCollection {
+	rc := RoadCollection{
+		Name:     name,
+		Segments: segs,
+	}
+
+	// Derive WayIDs and HighwayTypes only from the ways whose segments appear
+	// in this collection, preserving first-seen order.
+	seenWay := make(map[int64]bool)
+	seenHighway := make(map[string]bool)
+	for _, seg := range segs {
+		if !seenWay[seg.WayID] {
+			seenWay[seg.WayID] = true
+			rc.WayIDs = append(rc.WayIDs, seg.WayID)
+			if w, ok := wayByID[seg.WayID]; ok {
+				if hw := w.Tags["highway"]; hw != "" && !seenHighway[hw] {
+					seenHighway[hw] = true
+					rc.HighwayTypes = append(rc.HighwayTypes, hw)
+				}
+			}
+		}
+	}
+
+	// Compute aggregate scores from this collection's segments.
+	for _, seg := range segs {
+		rc.TotalScore += seg.Score
+		rc.TotalLength += seg.Length
+	}
+	if rc.TotalLength > 0 {
+		rc.ScorePerKm = rc.TotalScore / (rc.TotalLength / 1000.0)
+	}
+
+	return rc
+}
+
 // reverseWay returns a copy of the ScoredWay with its segments reversed
 // (and each segment's Start/End swapped).
 func reverseWay(w ScoredWay) ScoredWay {
