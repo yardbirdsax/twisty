@@ -89,3 +89,64 @@ Task 001 (for the Way struct with ID field, though this task doesn't directly us
 - Use `math.Floor` for snapping, not `math.Round` — we always want to snap outward to ensure full coverage.
 - Floating-point precision is important. The formatting function should use fixed decimal places (e.g., `%.3f`) to avoid inconsistencies.
 - The tile size default of 0.05° is ~5.5 km at mid-latitudes. At 25 km radius, this produces roughly 20×20 = 400 tiles (a reasonable number for sequential fetching).
+
+---
+# Task 002 Review: Tile Grid Computation
+
+**Reviewer:** Claude (senior-software-engineer)
+**Date:** 2026-03-19
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implements the spatial decomposition layer: a `Tile` struct, `snapToGrid` helper, `ComputeTiles` function (center + radius to global-aligned tile set), and `TileCacheKey` for deterministic cache file names. A previous review pass raised two SHOULD FIX items (custom `abs` helper and weak tile-count assertion); both have been resolved in the current implementation.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `Tile` struct defined with South, West, North, East fields | PASS |
+| `snapToGrid` correctly snaps coordinates to tile boundaries | PASS |
+| `ComputeTiles` returns a complete set of tiles covering the circle's bounding box | PASS |
+| Tile grid is globally aligned (not relative to query center) | PASS |
+| `TileCacheKey` produces deterministic, filesystem-safe file names | PASS |
+| All unit tests pass | PASS |
+| Overlapping queries share tiles (verified by test) | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages pass: quality ok 0.464s
+make lint   # go vet ./... — no issues
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria pass, all tests are green, and the linter is clean. Previous SHOULD FIX items (custom `abs` helper replaced with `math.Abs`, tile-count assertion tightened to exact value of 9) have been addressed. The implementation is ready for the next task.
