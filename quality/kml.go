@@ -223,7 +223,7 @@ func CurvatureColorLevel(score, minCurvature, maxCurvature float64) int {
 		pct = 1
 	}
 	// Logarithmic scale: y = 1 - 1/(10^(x*2))
-	colorPct := 1 - 1/math.Pow(10, pct*2)
+	colorPct := 1 - 1/math.Pow(10, pct*0.75)
 	return int(math.Round(510*colorPct)) + 1
 }
 

@@ -355,21 +355,21 @@ func TestCurvatureColorLevel(t *testing.T) {
 		t.Errorf("CurvatureColorLevel(-100) = %d, want 0", got)
 	}
 
-	// Score well above max → pct clamped to 1, produces same value as score=4000 (~506)
-	if got := CurvatureColorLevel(1e9, DefaultMinCurvature, DefaultMaxCurvature); got != 506 {
-		t.Errorf("CurvatureColorLevel(1e9) = %d, want 506 (pct clamped to 1, log formula)", got)
+	// Score well above max → pct clamped to 1, produces same value as score=maxCurvature (~420)
+	if got := CurvatureColorLevel(1e9, DefaultMinCurvature, DefaultMaxCurvature); got != 420 {
+		t.Errorf("CurvatureColorLevel(1e9) = %d, want 420 (pct clamped to 1, log formula)", got)
 	}
 
-	// Score at max (4000) → pct=1, colorPct=1-1/10^2≈0.99, level=round(510*0.99)+1=506
+	// Score at max (8000) → pct=1, colorPct=1-1/10^0.75≈0.822, level=round(510*0.822)+1=420
 	maxLevel := CurvatureColorLevel(DefaultMaxCurvature, DefaultMinCurvature, DefaultMaxCurvature)
-	if maxLevel != 506 {
-		t.Errorf("CurvatureColorLevel(4000) = %d, want 506", maxLevel)
+	if maxLevel != 420 {
+		t.Errorf("CurvatureColorLevel(%v) = %d, want 420", DefaultMaxCurvature, maxLevel)
 	}
 
-	// Midpoint at 2000 should be well above 256 due to log scale compression
+	// Midpoint at 2000 (pct=0.25) should be above 128 due to log scale compression
 	midLevel := CurvatureColorLevel(2000, DefaultMinCurvature, DefaultMaxCurvature)
-	if midLevel < 257 {
-		t.Errorf("CurvatureColorLevel(2000) = %d, want >= 257 (log scale should compress high values)", midLevel)
+	if midLevel < 128 {
+		t.Errorf("CurvatureColorLevel(2000) = %d, want >= 128 (log scale should compress high values)", midLevel)
 	}
 
 	// Verify monotonically increasing and always in [0, 511]

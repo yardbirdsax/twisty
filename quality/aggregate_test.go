@@ -574,6 +574,185 @@ func TestAggregate_TwoDisconnectedClusters(t *testing.T) {
 	}
 }
 
+// TestSplitOrderingGaps_NoGaps: chain of 5 ways with endpoints < 100m apart.
+func TestSplitOrderingGaps_NoGaps(t *testing.T) {
+	// 5 ways chained north, each ~22m apart (0.0002° lat steps).
+	baseLat := 44.0
+	step := 0.0002 // ~22m
+	ways := make([]ScoredWay, 5)
+	for i := range 5 {
+		lat0 := baseLat + float64(i)*step
+		lat1 := lat0 + step
+		ways[i] = makeWay(int64(i+1), geo.Coord{Lat: lat0, Lon: -72.0}, geo.Coord{Lat: lat1, Lon: -72.0})
+	}
+
+	got := SplitOrderingGaps(ways, ConnectedEndpointProximityM)
+
+	if len(got) != 5 {
+		t.Fatalf("expected 5 ways, got %d", len(got))
+	}
+}
+
+// TestSplitOrderingGaps_GapInMiddle: ways 0-3 connected, 2km gap, ways 4-5 connected.
+// Should return ways 0-3 (longer chunk).
+func TestSplitOrderingGaps_GapInMiddle(t *testing.T) {
+	baseLat := 44.0
+	step := 0.0002 // ~22m
+
+	var ways []ScoredWay
+	// Ways 0-3: connected chain
+	for i := range 4 {
+		lat0 := baseLat + float64(i)*step
+		lat1 := lat0 + step
+		ways = append(ways, makeWay(int64(i+1), geo.Coord{Lat: lat0, Lon: -72.0}, geo.Coord{Lat: lat1, Lon: -72.0}))
+	}
+	// Way 4 is 2km north of way 3's end — creating a gap > 100m
+	gapLat := baseLat + float64(4)*step + 2000.0/111000.0
+	ways = append(ways, makeWay(5, geo.Coord{Lat: gapLat, Lon: -72.0}, geo.Coord{Lat: gapLat + step, Lon: -72.0}))
+	// Way 5: connected to way 4
+	ways = append(ways, makeWay(6, geo.Coord{Lat: gapLat + step, Lon: -72.0}, geo.Coord{Lat: gapLat + 2*step, Lon: -72.0}))
+
+	got := SplitOrderingGaps(ways, ConnectedEndpointProximityM)
+
+	if len(got) != 4 {
+		t.Fatalf("expected 4 ways (longest chunk 0-3), got %d", len(got))
+	}
+	for i, w := range got {
+		if w.WayID != int64(i+1) {
+			t.Errorf("way[%d].WayID = %d, want %d", i, w.WayID, i+1)
+		}
+	}
+}
+
+// TestSplitOrderingGaps_GapAtStart: first way is far from the rest. Returns ways 1-5.
+func TestSplitOrderingGaps_GapAtStart(t *testing.T) {
+	step := 0.0002 // ~22m
+
+	// Way 0: isolated far away
+	var ways []ScoredWay
+	ways = append(ways, makeWay(1, geo.Coord{Lat: 40.0, Lon: -72.0}, geo.Coord{Lat: 40.0 + step, Lon: -72.0}))
+
+	// Ways 1-5: connected chain starting at 44°N
+	baseLat := 44.0
+	for i := range 5 {
+		lat0 := baseLat + float64(i)*step
+		lat1 := lat0 + step
+		ways = append(ways, makeWay(int64(i+2), geo.Coord{Lat: lat0, Lon: -72.0}, geo.Coord{Lat: lat1, Lon: -72.0}))
+	}
+
+	got := SplitOrderingGaps(ways, ConnectedEndpointProximityM)
+
+	if len(got) != 5 {
+		t.Fatalf("expected 5 ways (longer chunk 1-5), got %d", len(got))
+	}
+	// WayIDs should be 2-6
+	for i, w := range got {
+		if w.WayID != int64(i+2) {
+			t.Errorf("way[%d].WayID = %d, want %d", i, w.WayID, i+2)
+		}
+	}
+}
+
+// TestSplitOrderingGaps_MultipleGaps: three chunks separated by gaps. Returns the longest.
+func TestSplitOrderingGaps_MultipleGaps(t *testing.T) {
+	step := 0.0002 // ~22m
+
+	var ways []ScoredWay
+	// Chunk A: 2 ways at 40°N
+	for i := range 2 {
+		lat0 := 40.0 + float64(i)*step
+		ways = append(ways, makeWay(int64(len(ways)+1), geo.Coord{Lat: lat0, Lon: -72.0}, geo.Coord{Lat: lat0 + step, Lon: -72.0}))
+	}
+	// Chunk B: 4 ways at 44°N (the longest)
+	for i := range 4 {
+		lat0 := 44.0 + float64(i)*step
+		ways = append(ways, makeWay(int64(len(ways)+1), geo.Coord{Lat: lat0, Lon: -72.0}, geo.Coord{Lat: lat0 + step, Lon: -72.0}))
+	}
+	// Chunk C: 1 way at 48°N
+	ways = append(ways, makeWay(int64(len(ways)+1), geo.Coord{Lat: 48.0, Lon: -72.0}, geo.Coord{Lat: 48.0 + step, Lon: -72.0}))
+
+	got := SplitOrderingGaps(ways, ConnectedEndpointProximityM)
+
+	if len(got) != 4 {
+		t.Fatalf("expected 4 ways (longest chunk B), got %d", len(got))
+	}
+	// Chunk B starts at index 2 → WayIDs 3,4,5,6
+	for i, w := range got {
+		if w.WayID != int64(i+3) {
+			t.Errorf("way[%d].WayID = %d, want %d", i, w.WayID, i+3)
+		}
+	}
+}
+
+// TestSplitOrderingGaps_SingleWay: returns the single way unchanged.
+func TestSplitOrderingGaps_SingleWay(t *testing.T) {
+	w := makeWay(1, geo.Coord{Lat: 44.0, Lon: -72.0}, geo.Coord{Lat: 44.001, Lon: -72.0})
+	got := SplitOrderingGaps([]ScoredWay{w}, ConnectedEndpointProximityM)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 way, got %d", len(got))
+	}
+	if got[0].WayID != 1 {
+		t.Errorf("WayID = %d, want 1", got[0].WayID)
+	}
+}
+
+// TestSplitOrderingGaps_EmptyInput: returns nil/empty.
+func TestSplitOrderingGaps_EmptyInput(t *testing.T) {
+	got := SplitOrderingGaps(nil, ConnectedEndpointProximityM)
+	if len(got) != 0 {
+		t.Errorf("expected 0 ways, got %d", len(got))
+	}
+	got2 := SplitOrderingGaps([]ScoredWay{}, ConnectedEndpointProximityM)
+	if len(got2) != 0 {
+		t.Errorf("expected 0 ways for empty slice, got %d", len(got2))
+	}
+}
+
+// TestSplitOrderingGaps_ValleyCreekRegression verifies that a chain with an
+// overlapping retrace way is handled correctly. The scenario:
+//   - 5 ways forming a north-to-south chain
+//   - 1 way that overlaps the middle (its nearest endpoint is close to chain
+//     end after greedy ordering, but it creates a >100m jump back into the chain)
+//
+// After SplitOrderingGaps the output chain should have no large gaps.
+func TestSplitOrderingGaps_ValleyCreekRegression(t *testing.T) {
+	step := 0.0002 // ~22m per step at 44°N
+
+	// Build main chain: ways 1-5 progressing north.
+	var mainChain []ScoredWay
+	for i := range 5 {
+		lat0 := 44.0 + float64(i)*step
+		mainChain = append(mainChain, makeWay(int64(i+1),
+			geo.Coord{Lat: lat0, Lon: -72.0},
+			geo.Coord{Lat: lat0 + step, Lon: -72.0},
+		))
+	}
+
+	// Simulate greedy ordering appending a stray way whose start is 2km south
+	// of the main chain — a large gap that SplitOrderingGaps must detect.
+	strayWay := makeWay(6,
+		geo.Coord{Lat: 44.0 - 2000.0/111000.0, Lon: -72.0}, // 2km south of chain start
+		geo.Coord{Lat: 44.0 - 1800.0/111000.0, Lon: -72.0},
+	)
+	orderedWithStray := append(mainChain, strayWay)
+
+	result := SplitOrderingGaps(orderedWithStray, ConnectedEndpointProximityM)
+
+	if len(result) != 5 {
+		t.Fatalf("expected 5 ways (main chain only), got %d", len(result))
+	}
+
+	// Verify no large gaps in result.
+	for i := 0; i < len(result)-1; i++ {
+		_, end, _ := wayEndpoints(result[i])
+		start, _, _ := wayEndpoints(result[i+1])
+		d := geo.Haversine(end, start)
+		if d > ConnectedEndpointProximityM {
+			t.Errorf("gap between ways %d and %d: %.1f m (want <= %.1f m)", i, i+1, d, ConnectedEndpointProximityM)
+		}
+	}
+}
+
 func TestAggregate_UnnamedWaysExcluded(t *testing.T) {
 	// Ways without a name tag should produce no collections.
 	ways := []ScoredWay{

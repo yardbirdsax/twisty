@@ -207,6 +207,53 @@ func OrderWays(ways []ScoredWay) []ScoredWay {
 	return ordered
 }
 
+// SplitOrderingGaps detects large gaps in an ordered way chain and returns
+// only the longest contiguous sub-chain. A gap is defined as a distance
+// between consecutive ways' shared endpoints exceeding maxGapM meters.
+//
+// This handles cases where OrderWays' greedy nearest-neighbor algorithm
+// appends a way that jumps far from the chain end (e.g., overlapping OSM
+// ways that retrace already-covered ground).
+func SplitOrderingGaps(ordered []ScoredWay, maxGapM float64) []ScoredWay {
+	if len(ordered) <= 1 {
+		return ordered
+	}
+
+	// Find gap positions
+	type chunk struct {
+		start, end int // indices into ordered, inclusive
+	}
+	var chunks []chunk
+	chunkStart := 0
+
+	for i := 0; i < len(ordered)-1; i++ {
+		_, curEnd, curOK := wayEndpoints(ordered[i])
+		nextStart, _, nextOK := wayEndpoints(ordered[i+1])
+		if !curOK || !nextOK {
+			continue
+		}
+		dist := geo.Haversine(curEnd, nextStart)
+		if dist > maxGapM {
+			chunks = append(chunks, chunk{start: chunkStart, end: i})
+			chunkStart = i + 1
+		}
+	}
+	chunks = append(chunks, chunk{start: chunkStart, end: len(ordered) - 1})
+
+	// Return the longest chunk
+	best := chunks[0]
+	bestLen := best.end - best.start + 1
+	for _, c := range chunks[1:] {
+		l := c.end - c.start + 1
+		if l > bestLen {
+			best = c
+			bestLen = l
+		}
+	}
+
+	return ordered[best.start : best.end+1]
+}
+
 // SplitAtStraightGaps splits an ordered slice of ways at contiguous runs
 // of zero-score (tier 0) segments exceeding the threshold distance.
 // Returns one or more sub-slices of segments, each representing a
@@ -300,6 +347,7 @@ func Aggregate(ways []ScoredWay) []RoadCollection {
 
 		for _, component := range components {
 			ordered := OrderWays(component)
+			ordered = SplitOrderingGaps(ordered, ConnectedEndpointProximityM)
 
 			// Apply deflection filter on the full assembled chain before splitting.
 			// This gives the 2400m look-ahead window cross-way-boundary visibility.

@@ -92,7 +92,7 @@ const DefaultMinCurvature = 0.0
 // DefaultMaxCurvature is the total curvature score that maps to the maximum color
 // intensity in single-color rendering. Roads at or above this score render as magenta.
 // Matches the Curvature project default of 4000.
-const DefaultMaxCurvature = 4000.0
+const DefaultMaxCurvature = 8000.0
 
 // AssignTier maps a circumradius (in metres) to its curvature tier and the
 // associated score weight. Tiers are checked from tightest to widest; the
