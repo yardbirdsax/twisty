@@ -72,3 +72,72 @@ Task 001 (Way struct with ID field), Task 004 (tile cache for reading files).
 - Deduplication is by ID only. The PRD explicitly states: "Do not attempt to merge or reconcile differing tag sets."
 - The first-encountered instance of a duplicate way is kept. Since Overpass returns identical data for the same way in different tiles, the choice is arbitrary.
 - Performance note: For a 25 km radius with 0.05° tiles, expect ~400 tiles with potentially thousands of ways each. The dedup map should use `int64` keys (not string) for efficiency.
+
+---
+# Task 006 Review: Tile Merge and Way Deduplication
+
+**Reviewer:** Claude (Sonnet 4.6)
+**Date:** 2026-03-19
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implemented `parseTileData` and `mergeAndDeduplicate` in `quality/tilefetch.go`, extracted a shared `elementsToWays` helper into `quality/overpass.go`, wired the merge into `FetchTiledWays`, and added all seven required unit tests.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/overpass.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `parseTileData` correctly converts raw Overpass JSON to `[]Way` with ID, Tags, and Geometry | PASS |
+| `mergeAndDeduplicate` removes duplicate ways by OSM ID | PASS |
+| Ways with ID 0 are not deduplicated against each other | PASS |
+| Merge is wired into `FetchTiledWays` orchestrator | PASS |
+| Verbose logging reports total ways, tiles, and duplicates removed | PASS |
+| All unit tests pass | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages pass: quality 4.082s
+make lint   # no issues (go vet only, no output)
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met. The shared `elementsToWays` helper eliminates the duplication that was flagged in the prior review pass. The log message matches the spec's prescribed format. All seven required unit tests are present and pass. No issues remain.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **APPROVED WITH CHANGES**: All acceptance criteria met, minor issues found. Can merge after addressing SHOULD FIX items, or merge as-is with follow-up.
+- **NEEDS REVISION**: Acceptance criteria not met or critical issues found. Must address MUST FIX items before re-review.

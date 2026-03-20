@@ -3,6 +3,7 @@ package quality
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/yardbirdsax/twisty/geo"
 )
 
 func TestSnapToGrid(t *testing.T) {
@@ -507,6 +510,188 @@ func TestFetchTiledWaysPartialFailure(t *testing.T) {
 	// Should have results from the non-failed tiles.
 	if len(ways) == 0 {
 		t.Error("expected ways from partial success, got none")
+	}
+}
+
+// --- parseTileData tests ---
+
+func makeOverpassJSON(t *testing.T, elements []overpassElement) []byte {
+	t.Helper()
+	resp := overpassResponse{Elements: elements}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return b
+}
+
+func TestParseTileDataBasic(t *testing.T) {
+	elements := []overpassElement{
+		{
+			ID:   101,
+			Tags: map[string]string{"highway": "primary", "name": "Main St"},
+			Geometry: []overpassGeomPoint{
+				{Lat: 42.35, Lon: -72.60},
+				{Lat: 42.36, Lon: -72.59},
+			},
+		},
+		{
+			ID:   202,
+			Tags: map[string]string{"highway": "secondary"},
+			Geometry: []overpassGeomPoint{
+				{Lat: 42.37, Lon: -72.58},
+			},
+		},
+	}
+	data := makeOverpassJSON(t, elements)
+
+	ways, err := parseTileData(data)
+	if err != nil {
+		t.Fatalf("parseTileData: %v", err)
+	}
+	if len(ways) != 2 {
+		t.Fatalf("expected 2 ways, got %d", len(ways))
+	}
+
+	if ways[0].ID != 101 {
+		t.Errorf("ways[0].ID = %d, want 101", ways[0].ID)
+	}
+	if ways[0].Tags["highway"] != "primary" {
+		t.Errorf("ways[0].Tags[highway] = %q, want %q", ways[0].Tags["highway"], "primary")
+	}
+	if len(ways[0].Geometry) != 2 {
+		t.Errorf("ways[0].Geometry length = %d, want 2", len(ways[0].Geometry))
+	}
+	if ways[0].Geometry[0] != (geo.Coord{Lat: 42.35, Lon: -72.60}) {
+		t.Errorf("ways[0].Geometry[0] = %v, want {42.35, -72.60}", ways[0].Geometry[0])
+	}
+
+	if ways[1].ID != 202 {
+		t.Errorf("ways[1].ID = %d, want 202", ways[1].ID)
+	}
+}
+
+func TestParseTileDataEmpty(t *testing.T) {
+	data := makeOverpassJSON(t, []overpassElement{})
+
+	ways, err := parseTileData(data)
+	if err != nil {
+		t.Fatalf("parseTileData: %v", err)
+	}
+	if ways == nil {
+		t.Error("expected non-nil slice for empty elements")
+	}
+	if len(ways) != 0 {
+		t.Errorf("expected 0 ways, got %d", len(ways))
+	}
+}
+
+func TestParseTileDataMalformed(t *testing.T) {
+	_, err := parseTileData([]byte(`not valid json`))
+	if err == nil {
+		t.Error("expected error for malformed JSON, got nil")
+	}
+}
+
+// --- mergeAndDeduplicate tests ---
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError + 10}))
+}
+
+func TestMergeAndDeduplicateNoDuplicates(t *testing.T) {
+	tile1 := makeOverpassJSON(t, []overpassElement{
+		{ID: 1, Tags: map[string]string{"highway": "primary"}, Geometry: []overpassGeomPoint{{Lat: 1.0, Lon: 2.0}}},
+	})
+	tile2 := makeOverpassJSON(t, []overpassElement{
+		{ID: 2, Tags: map[string]string{"highway": "secondary"}, Geometry: []overpassGeomPoint{{Lat: 3.0, Lon: 4.0}}},
+	})
+
+	ways, err := mergeAndDeduplicate([][]byte{tile1, tile2}, discardLogger())
+	if err != nil {
+		t.Fatalf("mergeAndDeduplicate: %v", err)
+	}
+	if len(ways) != 2 {
+		t.Errorf("expected 2 ways, got %d", len(ways))
+	}
+}
+
+func TestMergeAndDeduplicateWithDuplicates(t *testing.T) {
+	sharedElement := overpassElement{
+		ID:       42,
+		Tags:     map[string]string{"highway": "primary"},
+		Geometry: []overpassGeomPoint{{Lat: 1.0, Lon: 2.0}, {Lat: 3.0, Lon: 4.0}},
+	}
+	tile1 := makeOverpassJSON(t, []overpassElement{
+		sharedElement,
+		{ID: 10, Tags: map[string]string{"highway": "residential"}, Geometry: []overpassGeomPoint{{Lat: 5.0, Lon: 6.0}}},
+	})
+	tile2 := makeOverpassJSON(t, []overpassElement{
+		sharedElement,
+		{ID: 20, Tags: map[string]string{"highway": "tertiary"}, Geometry: []overpassGeomPoint{{Lat: 7.0, Lon: 8.0}}},
+	})
+
+	ways, err := mergeAndDeduplicate([][]byte{tile1, tile2}, discardLogger())
+	if err != nil {
+		t.Fatalf("mergeAndDeduplicate: %v", err)
+	}
+	if len(ways) != 3 {
+		t.Errorf("expected 3 ways (duplicate removed), got %d", len(ways))
+	}
+
+	idCount := make(map[int64]int)
+	for _, w := range ways {
+		idCount[w.ID]++
+	}
+	if idCount[42] != 1 {
+		t.Errorf("way ID 42 appears %d times, want 1", idCount[42])
+	}
+}
+
+func TestMergeAndDeduplicateZeroID(t *testing.T) {
+	tile1 := makeOverpassJSON(t, []overpassElement{
+		{ID: 0, Tags: map[string]string{"highway": "path"}, Geometry: []overpassGeomPoint{{Lat: 1.0, Lon: 2.0}}},
+		{ID: 0, Tags: map[string]string{"highway": "footway"}, Geometry: []overpassGeomPoint{{Lat: 3.0, Lon: 4.0}}},
+	})
+
+	ways, err := mergeAndDeduplicate([][]byte{tile1}, discardLogger())
+	if err != nil {
+		t.Fatalf("mergeAndDeduplicate: %v", err)
+	}
+	if len(ways) != 2 {
+		t.Errorf("expected 2 ways with ID 0 (no dedup), got %d", len(ways))
+	}
+}
+
+func TestMergeAndDeduplicatePreservesGeometry(t *testing.T) {
+	geom := []overpassGeomPoint{
+		{Lat: 10.1, Lon: 20.2},
+		{Lat: 10.3, Lon: 20.4},
+		{Lat: 10.5, Lon: 20.6},
+	}
+	tile1 := makeOverpassJSON(t, []overpassElement{
+		{ID: 99, Tags: map[string]string{"highway": "primary"}, Geometry: geom},
+	})
+	// tile2 has the same way (duplicate)
+	tile2 := makeOverpassJSON(t, []overpassElement{
+		{ID: 99, Tags: map[string]string{"highway": "primary"}, Geometry: geom},
+	})
+
+	ways, err := mergeAndDeduplicate([][]byte{tile1, tile2}, discardLogger())
+	if err != nil {
+		t.Fatalf("mergeAndDeduplicate: %v", err)
+	}
+	if len(ways) != 1 {
+		t.Fatalf("expected 1 way, got %d", len(ways))
+	}
+	if len(ways[0].Geometry) != 3 {
+		t.Errorf("expected 3 geometry points, got %d", len(ways[0].Geometry))
+	}
+	expected := []geo.Coord{{Lat: 10.1, Lon: 20.2}, {Lat: 10.3, Lon: 20.4}, {Lat: 10.5, Lon: 20.6}}
+	for i, coord := range ways[0].Geometry {
+		if coord != expected[i] {
+			t.Errorf("geometry[%d] = %v, want %v", i, coord, expected[i])
+		}
 	}
 }
 

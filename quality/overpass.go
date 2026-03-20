@@ -120,8 +120,13 @@ func fetchWaysFromURL(endpoint string, south, west, north, east float64) ([]Way,
 		return nil, fmt.Errorf("parsing overpass response: %w", err)
 	}
 
-	ways := make([]Way, 0, len(oResp.Elements))
-	for _, el := range oResp.Elements {
+	return elementsToWays(oResp.Elements), nil
+}
+
+// elementsToWays converts a slice of overpassElements into a slice of Ways.
+func elementsToWays(elements []overpassElement) []Way {
+	ways := make([]Way, 0, len(elements))
+	for _, el := range elements {
 		geom := make([]geo.Coord, 0, len(el.Geometry))
 		for _, pt := range el.Geometry {
 			geom = append(geom, geo.Coord{Lat: pt.Lat, Lon: pt.Lon})
@@ -132,7 +137,7 @@ func fetchWaysFromURL(endpoint string, south, west, north, east float64) ([]Way,
 			Geometry: geom,
 		})
 	}
-	return ways, nil
+	return ways
 }
 
 // FetchWays queries Overpass for all highway ways within the bounding box.

@@ -13,8 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/yardbirdsax/twisty/geo"
 )
 
 // Tile represents a rectangular geographic tile identified by its (South, West) corner.
@@ -259,9 +257,7 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 	fetched := 0
 	failed := 0
 
-	// seen deduplicates Way IDs across tiles.
-	seen := make(map[int64]bool)
-	var allWays []Way
+	var allTileData [][]byte
 
 	for _, tile := range tiles {
 		var raw []byte
@@ -297,7 +293,12 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 				// Increment fetched only after the sleep succeeds so the summary
 				// log is accurate when context is cancelled during sleep.
 				if sleepErr := sleepWithContext(ctx, 1*time.Second); sleepErr != nil {
-					return allWays, sleepErr
+					// Merge whatever we have so far before returning the context error.
+					ways, mergeErr := mergeAndDeduplicate(allTileData, cfg.Logger)
+					if mergeErr != nil {
+						return nil, mergeErr
+					}
+					return ways, sleepErr
 				}
 				fetched++
 			}
@@ -307,17 +308,7 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 			continue
 		}
 
-		ways, err := parseOverpassRaw(raw)
-		if err != nil {
-			cfg.Logger.Warn("tile parse error", "south", tile.South, "west", tile.West, "error", err)
-			continue
-		}
-		for _, w := range ways {
-			if !seen[w.ID] {
-				seen[w.ID] = true
-				allWays = append(allWays, w)
-			}
-		}
+		allTileData = append(allTileData, raw)
 	}
 
 	cfg.Logger.Info("tiled fetch complete",
@@ -327,28 +318,57 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 		"failed", failed,
 	)
 
-	return allWays, nil
+	return mergeAndDeduplicate(allTileData, cfg.Logger)
 }
 
-// parseOverpassRaw parses raw Overpass JSON bytes into a slice of Ways.
-func parseOverpassRaw(raw []byte) ([]Way, error) {
+// parseTileData parses raw Overpass JSON bytes into a slice of Ways.
+func parseTileData(data []byte) ([]Way, error) {
 	var oResp overpassResponse
-	if err := json.Unmarshal(raw, &oResp); err != nil {
+	if err := json.Unmarshal(data, &oResp); err != nil {
 		return nil, fmt.Errorf("parsing overpass response: %w", err)
 	}
-	ways := make([]Way, 0, len(oResp.Elements))
-	for _, el := range oResp.Elements {
-		geom := make([]geo.Coord, 0, len(el.Geometry))
-		for _, pt := range el.Geometry {
-			geom = append(geom, geo.Coord{Lat: pt.Lat, Lon: pt.Lon})
+	return elementsToWays(oResp.Elements), nil
+}
+
+// mergeAndDeduplicate parses raw tile data from multiple tiles and returns a deduplicated
+// slice of Ways. Ways with the same OSM ID are deduplicated (first-encountered wins).
+// Ways with ID 0 are never deduplicated against each other.
+func mergeAndDeduplicate(tileData [][]byte, logger *slog.Logger) ([]Way, error) {
+	seen := make(map[int64]struct{})
+	var result []Way
+	totalWays := 0
+	zeroIDCount := 0
+
+	for _, raw := range tileData {
+		ways, err := parseTileData(raw)
+		if err != nil {
+			return nil, err
 		}
-		ways = append(ways, Way{
-			ID:       el.ID,
-			Tags:     el.Tags,
-			Geometry: geom,
-		})
+		for _, w := range ways {
+			totalWays++
+			if w.ID == 0 {
+				zeroIDCount++
+				result = append(result, w)
+				continue
+			}
+			if _, exists := seen[w.ID]; !exists {
+				seen[w.ID] = struct{}{}
+				result = append(result, w)
+			}
+		}
 	}
-	return ways, nil
+
+	duplicates := totalWays - len(result)
+	logger.Info(fmt.Sprintf("merged %d ways from %d tiles (%d duplicates removed)", len(result), len(tileData), duplicates))
+	if zeroIDCount > 0 {
+		logger.Warn("encountered ways with ID 0", "count", zeroIDCount)
+	}
+
+	if result == nil {
+		result = []Way{}
+	}
+
+	return result, nil
 }
 
 // sleepWithContext sleeps for duration d or until ctx is cancelled.
