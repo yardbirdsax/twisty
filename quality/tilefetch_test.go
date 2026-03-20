@@ -2,7 +2,10 @@ package quality
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSnapToGrid(t *testing.T) {
@@ -109,6 +112,145 @@ func TestComputeTilesShiftedCenter(t *testing.T) {
 
 	if shared == 0 {
 		t.Error("expected overlapping tile sets for nearby centers, but found no shared tiles")
+	}
+}
+
+var testTile = Tile{South: 42.350, West: -72.600, North: 42.400, East: -72.550}
+
+func newTestCache(t *testing.T) *TileCache {
+	t.Helper()
+	return &TileCache{Dir: t.TempDir(), Precision: 3}
+}
+
+func TestTileCacheWriteAndRead(t *testing.T) {
+	c := newTestCache(t)
+	data := []byte(`{"elements":[]}`)
+	if err := c.Write(testTile, data); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	got, err := c.Read(testTile)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if string(got) != string(data) {
+		t.Errorf("Read returned %q, want %q", got, data)
+	}
+}
+
+func TestTileCacheHas(t *testing.T) {
+	c := newTestCache(t)
+	if c.Has(testTile) {
+		t.Error("Has returned true before Write")
+	}
+	if err := c.Write(testTile, []byte(`{}`)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !c.Has(testTile) {
+		t.Error("Has returned false after Write")
+	}
+}
+
+func TestTileCacheReadUpdatesMtime(t *testing.T) {
+	c := newTestCache(t)
+	if err := c.Write(testTile, []byte(`{}`)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	past := time.Now().Add(-24 * time.Hour)
+	if err := os.Chtimes(c.Path(testTile), past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+	if _, err := c.Read(testTile); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	info, err := os.Stat(c.Path(testTile))
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if time.Since(info.ModTime()) > 5*time.Second {
+		t.Errorf("mtime not updated after Read: mtime=%v", info.ModTime())
+	}
+}
+
+func TestTileCacheAtomicWrite(t *testing.T) {
+	c := newTestCache(t)
+	want := []byte(`{"elements":[]}`)
+	if err := c.Write(testTile, want); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	entries, err := os.ReadDir(c.Dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) == ".tmp" {
+			t.Errorf("leftover temp file found: %s", e.Name())
+		}
+	}
+	if !c.Has(testTile) {
+		t.Error("Has returned false after Write")
+	}
+	got, err := c.Read(testTile)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("Read returned %q, want %q", got, want)
+	}
+}
+
+func TestTileCacheClearAll(t *testing.T) {
+	c := newTestCache(t)
+	if err := c.Write(testTile, []byte(`{}`)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := c.ClearAll(); err != nil {
+		t.Fatalf("ClearAll: %v", err)
+	}
+	entries, err := os.ReadDir(c.Dir)
+	if err != nil {
+		t.Fatalf("ReadDir after ClearAll: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected empty dir after ClearAll, got %d entries", len(entries))
+	}
+}
+
+func TestTileCachePurgeOlderThan(t *testing.T) {
+	c := newTestCache(t)
+	oldTile := Tile{South: 42.300, West: -72.600, North: 42.350, East: -72.550}
+	newTile := Tile{South: 42.350, West: -72.600, North: 42.400, East: -72.550}
+
+	for _, tile := range []Tile{oldTile, newTile} {
+		if err := c.Write(tile, []byte(`{}`)); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+	}
+
+	past := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(c.Path(oldTile), past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	n, err := c.PurgeOlderThan(1 * time.Hour)
+	if err != nil {
+		t.Fatalf("PurgeOlderThan: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected 1 file purged, got %d", n)
+	}
+	if c.Has(oldTile) {
+		t.Error("old tile still exists after purge")
+	}
+	if !c.Has(newTile) {
+		t.Error("new tile was incorrectly purged")
+	}
+}
+
+func TestTileCacheReadNonExistent(t *testing.T) {
+	c := newTestCache(t)
+	_, err := c.Read(testTile)
+	if err == nil {
+		t.Error("expected error reading non-existent tile, got nil")
 	}
 }
 

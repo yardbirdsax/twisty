@@ -3,6 +3,9 @@ package quality
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"time"
 )
 
 // Tile represents a rectangular geographic tile identified by its (South, West) corner.
@@ -60,6 +63,102 @@ func ComputeTiles(centerLat, centerLon, radiusKm, tileSizeDeg float64) []Tile {
 		}
 	}
 	return tiles
+}
+
+// TileCache is a file-based cache for raw Overpass JSON responses, keyed by tile coordinates.
+type TileCache struct {
+	Dir       string
+	Precision int // decimal places for coordinate formatting
+}
+
+// EnsureDir creates the cache directory if it does not already exist.
+func (c *TileCache) EnsureDir() error {
+	return os.MkdirAll(c.Dir, 0o755)
+}
+
+// Path returns the full file path for the cache entry of the given tile.
+func (c *TileCache) Path(t Tile) string {
+	return filepath.Join(c.Dir, TileCacheKey(t, c.Precision))
+}
+
+// Has returns true if a cache file exists for the given tile.
+func (c *TileCache) Has(t Tile) bool {
+	_, err := os.Stat(c.Path(t))
+	return err == nil
+}
+
+// Read reads the cached bytes for the given tile and updates the file's mtime.
+func (c *TileCache) Read(t Tile) ([]byte, error) {
+	data, err := os.ReadFile(c.Path(t))
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	_ = os.Chtimes(c.Path(t), now, now)
+	return data, nil
+}
+
+// Write atomically writes data to the cache file for the given tile.
+func (c *TileCache) Write(t Tile, data []byte) error {
+	target := c.Path(t)
+	tmp, err := os.CreateTemp(c.Dir, "tile-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	renamed := false
+	defer func() {
+		if !renamed {
+			os.Remove(tmpName)
+		}
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, target); err != nil {
+		return err
+	}
+	renamed = true
+	return nil
+}
+
+// ClearAll removes and recreates the cache directory.
+func (c *TileCache) ClearAll() error {
+	if err := os.RemoveAll(c.Dir); err != nil {
+		return err
+	}
+	return os.MkdirAll(c.Dir, 0o755)
+}
+
+// PurgeOlderThan removes cache files whose mtime is older than the given age.
+// It returns the number of files removed.
+func (c *TileCache) PurgeOlderThan(age time.Duration) (int, error) {
+	entries, err := os.ReadDir(c.Dir)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return count, err
+		}
+		if time.Since(info.ModTime()) > age {
+			if err := os.Remove(filepath.Join(c.Dir, entry.Name())); err != nil {
+				return count, err
+			}
+			count++
+		}
+	}
+	return count, nil
 }
 
 // TileCacheKey formats a tile's (South, West) corner into a deterministic string

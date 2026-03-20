@@ -126,3 +126,72 @@ Task 002 (for `Tile` struct and `TileCacheKey` function).
 - The atomic write pattern is important for crash safety — if the process dies mid-write, no corrupt file is left behind.
 - `t.TempDir()` automatically cleans up after the test, making tests hermetic.
 - The precision field should default to 3 for the standard 0.05° tile size.
+
+---
+# Task 004 Review: File-Based Tile Cache
+
+**Reviewer:** Claude (Sonnet 4.6)
+**Date:** 2026-03-19
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements `TileCache` in `quality/tilefetch.go` with atomic write via temp-file-and-rename, mtime-based read tracking, and cache management operations (`ClearAll`, `PurgeOlderThan`). All seven required unit tests are present. Both SHOULD FIX items from the prior review have been addressed: the `renamed` sentinel flag is in place for the deferred cleanup in `Write`, and `TestTileCacheAtomicWrite` now asserts the final file is present and contains the expected bytes.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `TileCache` struct with Dir and Precision fields | PASS |
+| Atomic write using temp-file-and-rename pattern | PASS |
+| Cache read updates file mtime for access tracking | PASS |
+| `ClearAll` removes and recreates cache directory | PASS |
+| `PurgeOlderThan` removes only files older than the threshold | PASS |
+| All unit tests pass using `t.TempDir()` for isolation | PASS |
+| No external dependencies (pure standard library) | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages PASS (quality: 0.969s)
+make lint   # go vet clean, no output
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met. Both items flagged in the prior review have been resolved. Ready to merge.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **APPROVED WITH CHANGES**: All acceptance criteria met, minor issues found. Can merge after addressing SHOULD FIX items, or merge as-is with follow-up.
+- **NEEDS REVISION**: Acceptance criteria not met or critical issues found. Must address MUST FIX items before re-review.
