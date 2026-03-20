@@ -92,18 +92,90 @@ Task 001 (ID field on Way/overpassElement), Task 002 (tile grid computation), Ta
 
 ## Acceptance Criteria
 
-- [ ] `fetchTileRaw` sends correct Overpass query for a tile's bounding box
-- [ ] HTTP errors are correctly classified as retryable vs. non-retryable
-- [ ] `FetchTiledWays` checks cache before fetching
-- [ ] Successful fetches are written to cache
-- [ ] Failed tiles (after retries) are skipped with a warning, not fatal
-- [ ] 1-second delay between consecutive fetches
-- [ ] `NoCache` flag bypasses cache reads but still writes
-- [ ] All unit tests pass
-- [ ] `context.Context` is threaded through all fetch functions
+- [x] `fetchTileRaw` sends correct Overpass query for a tile's bounding box
+- [x] HTTP errors are correctly classified as retryable vs. non-retryable
+- [x] `FetchTiledWays` checks cache before fetching
+- [x] Successful fetches are written to cache
+- [x] Failed tiles (after retries) are skipped with a warning, not fatal
+- [x] 1-second delay between consecutive fetches
+- [x] `NoCache` flag bypasses cache reads but still writes
+- [x] All unit tests pass
+- [x] `context.Context` is threaded through all fetch functions
 
 ## Notes
 
 - The `endpoint` parameter on `fetchTileRaw` allows injection of an httptest URL for testing, following the same pattern as `fetchWaysFromURL`.
 - The 1-second delay is applied by the orchestrator, not the fetch function, per the PRD's concurrency-readiness principle.
 - The `FetchTiledWays` function returns `[]Way` for downstream consumption. The raw-to-Way parsing and deduplication is covered in Task 006, but the orchestrator calls it.
+
+---
+# Task 005 Review: Per-Tile Overpass Fetching with Cache Integration
+
+**Reviewer:** Claude (claude-sonnet-4-6)
+**Date:** 2026-03-19
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implements `fetchTileRaw` (stateless per-tile HTTP fetch), `FetchTiledWays` (orchestration loop with cache integration, retry, rate limiting, and deduplication), `sleepWithContext` (context-aware delay), and the full test suite for all of these.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `fetchTileRaw` sends correct Overpass query for a tile's bounding box | PASS |
+| HTTP errors are correctly classified as retryable vs. non-retryable | PASS |
+| `FetchTiledWays` checks cache before fetching | PASS |
+| Successful fetches are written to cache | PASS |
+| Failed tiles (after retries) are skipped with a warning, not fatal | PASS |
+| 1-second delay between consecutive fetches | PASS |
+| `NoCache` flag bypasses cache reads but still writes | PASS |
+| All unit tests pass | PASS |
+| `context.Context` is threaded through all fetch functions | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test              # all tests pass (quality package: 3.640s)
+make lint              # go vet reports no issues
+go test -race ./quality/...  # passes cleanly under race detector (4.659s)
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All three previously-reported issues are confirmed fixed: `fetched++` is now after `sleepWithContext` (line 302), `TestFetchTiledWaysPartialFailure` uses HTTP 400 (non-retryable, instant failure), and `TestFetchTiledWaysRateLimit` protects `requestTimes` with `sync.Mutex`. All acceptance criteria pass. Tests pass under `go test -race`.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **APPROVED WITH CHANGES**: All acceptance criteria met, minor issues found. Can merge after addressing SHOULD FIX items, or merge as-is with follow-up.
+- **NEEDS REVISION**: Acceptance criteria not met or critical issues found. Must address MUST FIX items before re-review.

@@ -1,11 +1,20 @@
 package quality
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"log/slog"
 	"math"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/yardbirdsax/twisty/geo"
 )
 
 // Tile represents a rectangular geographic tile identified by its (South, West) corner.
@@ -168,4 +177,186 @@ func TileCacheKey(t Tile, precision int) string {
 	south := fmt.Sprintf(format, t.South)
 	west := fmt.Sprintf(format, t.West)
 	return fmt.Sprintf("tile_%s_%s.json", south, west)
+}
+
+// fetchTileRaw performs a stateless per-tile Overpass fetch and returns the raw response bytes.
+// Transient HTTP errors (429, 5xx) are returned as plain errors (retryable).
+// Non-transient client errors (4xx other than 429) are wrapped in NonRetryable.
+func fetchTileRaw(ctx context.Context, endpoint string, t Tile) ([]byte, error) {
+	query := fmt.Sprintf(
+		`[out:json][timeout:25];way`+HighwayFilter+`(%.6f,%.6f,%.6f,%.6f);out geom;`,
+		t.South, t.West, t.North, t.East,
+	)
+
+	body := url.Values{}
+	body.Set("data", query)
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		endpoint,
+		strings.NewReader(body.Encode()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := overpassHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("overpass request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("reading overpass response: %w", err)
+		}
+		return raw, nil
+	}
+
+	// 429 and 5xx are transient and retryable.
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return nil, fmt.Errorf("overpass transient HTTP status: %d", resp.StatusCode)
+	}
+
+	// Other 4xx errors are non-retryable.
+	return nil, NonRetryable(fmt.Errorf("overpass non-retryable HTTP status: %d", resp.StatusCode))
+}
+
+// TileFetchConfig holds configuration for the FetchTiledWays orchestrator.
+type TileFetchConfig struct {
+	Endpoint string       // Overpass API base URL (default: overpassBaseURL)
+	TileSize float64      // tile edge length in degrees (default: 0.05)
+	Cache    *TileCache
+	NoCache  bool         // skip cache reads, still write
+	Logger   *slog.Logger
+}
+
+// FetchTiledWays fetches OSM highway ways for the area defined by centerLat, centerLon, and
+// radiusKm. It divides the area into tiles, checks the cache for each, fetches missing tiles
+// with retry/backoff, and returns the merged, deduplicated set of Ways.
+func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64, cfg TileFetchConfig) ([]Way, error) {
+	if cfg.Endpoint == "" {
+		cfg.Endpoint = overpassBaseURL
+	}
+	if cfg.TileSize == 0 {
+		cfg.TileSize = 0.05
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+
+	tiles := ComputeTiles(centerLat, centerLon, radiusKm, cfg.TileSize)
+	cfg.Logger.Info("starting tiled fetch", "total_tiles", len(tiles))
+
+	if err := cfg.Cache.EnsureDir(); err != nil {
+		return nil, fmt.Errorf("ensuring cache dir: %w", err)
+	}
+
+	cacheHits := 0
+	fetched := 0
+	failed := 0
+
+	// seen deduplicates Way IDs across tiles.
+	seen := make(map[int64]bool)
+	var allWays []Way
+
+	for _, tile := range tiles {
+		var raw []byte
+
+		if !cfg.NoCache && cfg.Cache.Has(tile) {
+			cfg.Logger.Debug("cache hit", "south", tile.South, "west", tile.West)
+			var err error
+			raw, err = cfg.Cache.Read(tile)
+			if err != nil {
+				cfg.Logger.Warn("cache read error, will refetch", "south", tile.South, "west", tile.West, "error", err)
+				raw = nil
+			} else {
+				cacheHits++
+			}
+		}
+
+		if raw == nil {
+			err := retryWithBackoff(ctx, 3, 2*time.Second, func() error {
+				var e error
+				raw, e = fetchTileRaw(ctx, cfg.Endpoint, tile)
+				return e
+			})
+			if err != nil {
+				cfg.Logger.Warn("tile fetch failed", "south", tile.South, "west", tile.West, "error", err)
+				failed++
+				raw = nil
+			} else {
+				if writeErr := cfg.Cache.Write(tile, raw); writeErr != nil {
+					cfg.Logger.Warn("cache write error", "south", tile.South, "west", tile.West, "error", writeErr)
+				}
+
+				// Rate-limit: wait 1 second between consecutive fetches.
+				// Increment fetched only after the sleep succeeds so the summary
+				// log is accurate when context is cancelled during sleep.
+				if sleepErr := sleepWithContext(ctx, 1*time.Second); sleepErr != nil {
+					return allWays, sleepErr
+				}
+				fetched++
+			}
+		}
+
+		if raw == nil {
+			continue
+		}
+
+		ways, err := parseOverpassRaw(raw)
+		if err != nil {
+			cfg.Logger.Warn("tile parse error", "south", tile.South, "west", tile.West, "error", err)
+			continue
+		}
+		for _, w := range ways {
+			if !seen[w.ID] {
+				seen[w.ID] = true
+				allWays = append(allWays, w)
+			}
+		}
+	}
+
+	cfg.Logger.Info("tiled fetch complete",
+		"total_tiles", len(tiles),
+		"cache_hits", cacheHits,
+		"fetched", fetched,
+		"failed", failed,
+	)
+
+	return allWays, nil
+}
+
+// parseOverpassRaw parses raw Overpass JSON bytes into a slice of Ways.
+func parseOverpassRaw(raw []byte) ([]Way, error) {
+	var oResp overpassResponse
+	if err := json.Unmarshal(raw, &oResp); err != nil {
+		return nil, fmt.Errorf("parsing overpass response: %w", err)
+	}
+	ways := make([]Way, 0, len(oResp.Elements))
+	for _, el := range oResp.Elements {
+		geom := make([]geo.Coord, 0, len(el.Geometry))
+		for _, pt := range el.Geometry {
+			geom = append(geom, geo.Coord{Lat: pt.Lat, Lon: pt.Lon})
+		}
+		ways = append(ways, Way{
+			ID:       el.ID,
+			Tags:     el.Tags,
+			Geometry: geom,
+		})
+	}
+	return ways, nil
+}
+
+// sleepWithContext sleeps for duration d or until ctx is cancelled.
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	select {
+	case <-time.After(d):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
