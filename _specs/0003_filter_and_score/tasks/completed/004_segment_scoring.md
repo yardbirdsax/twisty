@@ -88,3 +88,84 @@ func ScoreWays(ways []Way) []ScoredWay
 - The "minimum circumradius" rule biases toward detecting curves. This is intentional per the PRD's "bias toward detecting curves" design principle.
 - Keep the implementation straightforward: a single pass to compute all circumradii, then a pass to assign min-radius to each segment. No need for complex data structures.
 - The `ScoredSegment` struct preserves `Start`/`End` coordinates because downstream stages (KML output, aggregation) need segment geometry.
+
+---
+# Task 004 Review: Per-Segment Curvature Scoring
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implements per-segment curvature scoring for OSM ways. It defines `ScoredSegment` and `ScoredWay` structs, a `ScoreWay` function that computes circumradii for consecutive node triples, assigns the minimum circumradius to each segment, tiers each segment via `AssignTier`, and computes `Score = Length * Weight`. A batch `ScoreWays` wrapper is also provided.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/curvature.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/curvature_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `quality/curvature.go` exists with `ScoredSegment`, `ScoredWay`, `ScoreWay`, and `ScoreWays` | PASS |
+| `quality/curvature_test.go` passes with `go test ./quality/...` | PASS |
+| Ways with < 3 nodes produce zero-score segments | PASS |
+| Interior segments use the minimum circumradius from overlapping triangles | PASS |
+| Segment scores equal `length * weight` | PASS |
+| Tier assignment uses the constants from `scoring_params.go` | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+### 1. `TestScoreWay_ThreeNodes_Straight` does not verify radius is `+Inf`
+
+**File:** `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/curvature_test.go`
+**Line:** 88-96
+
+**Observation:** The test comment says "collinear points → circumradius is +Inf" but only checks `seg.Tier == 0` and `seg.Score == 0`. An implementation that returns a very large finite radius (e.g. 1e15) would also pass tier-0 and score-0 checks.
+
+**Current:**
+```go
+if seg.Tier != 0 { ... }
+if seg.Score != 0 { ... }
+```
+
+**Recommended:**
+```go
+if !math.IsInf(seg.Radius, 1) { t.Errorf(...) }
+if seg.Tier != 0 { ... }
+if seg.Score != 0 { ... }
+```
+
+**Rationale:** Makes the test more precise and aligned with the spec statement "circumradius is +Inf".
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # PASS: all packages ok
+make lint   # PASS: no issues
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+Implementation is correct, tests pass, and linter is clean. One minor test precision gap noted above but it does not block acceptance.
+
