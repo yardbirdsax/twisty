@@ -106,3 +106,77 @@ All prior tasks (001–007).
 - Consider using `testing.Short()` to skip these in `-short` mode if needed.
 - The mock Overpass server should be simple — it doesn't need to implement real spatial queries. Just return pre-built responses with known way IDs based on which tile is being requested (parse the bbox from the POST body).
 - For retry tests, use a much shorter initial delay (e.g., 10ms) via the config to avoid slow tests.
+
+---
+# Task 008 Review: Integration Tests
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-19
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Integration tests for the full tiled fetch pipeline are implemented in `quality/tilefetch_integration_test.go`. All seven required test functions are present, using httptest mock servers and `t.TempDir()` for isolation. All previously identified issues have been resolved.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch_integration_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/Makefile` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| All integration tests pass | PASS |
+| Tests use httptest mock servers (no real API calls) | PASS |
+| Tests use `t.TempDir()` for cache isolation | PASS |
+| Cache hit/miss behavior verified across multiple runs | PASS |
+| Overlapping query cache sharing verified | PASS |
+| Partial failure returns partial results without error | PASS |
+| Retry behavior verified with transient errors | PASS |
+| Deduplication accuracy verified with shared ways | PASS |
+| Tests complete in under 30 seconds (using short delays) | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test                                                          # PASS (short mode, integration tests skipped)
+make lint                                                          # clean
+go test -v -run "TestTileFetchIntegration" ./quality/...          # all 7 tests PASS
+# Overlap test output: cache_hits=1 fetched=3 on second run — bOnly assertion exercised
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met. All seven integration tests pass, use httptest mock servers, use `t.TempDir()` for isolation, and complete in well under 30 seconds. The overlap test correctly exercises the B-only and overlapping tile cache assertions. The NoCache test verifies mtime updates. The retry test confirms the 3-request sequence. Ready to merge.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **APPROVED WITH CHANGES**: All acceptance criteria met, minor issues found. Can merge after addressing SHOULD FIX items, or merge as-is with follow-up.
+- **NEEDS REVISION**: Acceptance criteria not met or critical issues found. Must address MUST FIX items before re-review.

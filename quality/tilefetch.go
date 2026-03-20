@@ -225,11 +225,13 @@ func fetchTileRaw(ctx context.Context, endpoint string, t Tile) ([]byte, error) 
 
 // TileFetchConfig holds configuration for the FetchTiledWays orchestrator.
 type TileFetchConfig struct {
-	Endpoint string       // Overpass API base URL (default: overpassBaseURL)
-	TileSize float64      // tile edge length in degrees (default: 0.05)
-	Cache    *TileCache
-	NoCache  bool         // skip cache reads, still write
-	Logger   *slog.Logger
+	Endpoint       string        // Overpass API base URL (default: overpassBaseURL)
+	TileSize       float64       // tile edge length in degrees (default: 0.05)
+	Cache          *TileCache
+	NoCache        bool          // skip cache reads, still write
+	Logger         *slog.Logger
+	RateLimitDelay time.Duration // delay between consecutive HTTP fetches (default: 1s)
+	RetryDelay     time.Duration // initial backoff delay for retries (default: 2s)
 }
 
 // FetchTiledWays fetches OSM highway ways for the area defined by centerLat, centerLon, and
@@ -244,6 +246,12 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
+	}
+	if cfg.RateLimitDelay == 0 {
+		cfg.RateLimitDelay = 1 * time.Second
+	}
+	if cfg.RetryDelay == 0 {
+		cfg.RetryDelay = 2 * time.Second
 	}
 
 	tiles := ComputeTiles(centerLat, centerLon, radiusKm, cfg.TileSize)
@@ -275,7 +283,7 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 		}
 
 		if raw == nil {
-			err := retryWithBackoff(ctx, 3, 2*time.Second, func() error {
+			err := retryWithBackoff(ctx, 3, cfg.RetryDelay, func() error {
 				var e error
 				raw, e = fetchTileRaw(ctx, cfg.Endpoint, tile)
 				return e
@@ -292,7 +300,7 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 				// Rate-limit: wait 1 second between consecutive fetches.
 				// Increment fetched only after the sleep succeeds so the summary
 				// log is accurate when context is cancelled during sleep.
-				if sleepErr := sleepWithContext(ctx, 1*time.Second); sleepErr != nil {
+				if sleepErr := sleepWithContext(ctx, cfg.RateLimitDelay); sleepErr != nil {
 					// Merge whatever we have so far before returning the context error.
 					ways, mergeErr := mergeAndDeduplicate(allTileData, cfg.Logger)
 					if mergeErr != nil {
