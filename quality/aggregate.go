@@ -20,9 +20,9 @@ type RoadCollection struct {
 	ScorePerKm  float64
 
 	// Populated by penalty stage (stage 6)
-	PenaltyFactor  float64
-	PenalizedScore float64
-	PenalizedPerKm float64
+	HighwayPenaltyFactor float64
+	PenalizedScore       float64
+	PenalizedPerKm       float64
 }
 
 // DisplayName returns the name of the collection, with a 1-based suffix in

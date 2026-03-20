@@ -88,3 +88,70 @@ func penaltyForTypes(types []string) float64
 
 - Penalties are applied to collection-level totals only. Segment scores and tiers remain unchanged — this is critical for correct per-segment KML coloring.
 - The "minimum penalty wins" rule means a road that's partially motorway gets penalized for the whole collection. This is conservative and intentional per the PRD.
+- The `RoadCollection` struct field was renamed from `PenaltyFactor` to `HighwayPenaltyFactor` to avoid a name collision with the package-level `PenaltyFactor` function in `overpass.go`.
+- SHOULD FIX resolved: added missing tab alignment to `PenalizedPerKm` in `aggregate.go` to satisfy `gofmt`.
+
+---
+# Task 005 Review: Highway-Type Soft Penalties
+
+**Reviewer:** Claude (claude-sonnet-4-6)
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements stage 6 of the scoring pipeline: highway-type penalty multipliers applied to `RoadCollection` scores. Penalty constants are defined in `scoring_params.go`, applied via `ApplyPenalties` in `penalty.go`, and covered by unit tests in `penalty_test.go`.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scoring_params.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/penalty.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/penalty_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| Penalty constants defined in `scoring_params.go` matching the PRD table | PASS |
+| `ApplyPenalties` correctly applies minimum penalty across highway types | PASS |
+| `PenaltyFactor`, `PenalizedScore`, and `PenalizedPerKm` are correctly set | PASS |
+| Segment-level scores and tiers are NOT modified | PASS |
+| Unknown highway types default to 1.0 penalty | PASS |
+| All unit tests pass | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test ./quality/...           # PASS — all quality package tests pass
+go vet ./quality/...            # PASS — go vet clean
+gofmt -l quality/               # quality/aggregate.go, penalty.go, penalty_test.go NOT listed (clean)
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met. Tests pass, `go vet` is clean, and `gofmt` reports no issues with any of the files introduced or modified by this task. The previous SHOULD FIX regarding `PenalizedPerKm` tab alignment in `aggregate.go` has been resolved (confirmed in the Notes section and verified by `gofmt`).
+
+---

@@ -104,11 +104,37 @@ func AssignTier(radius float64) (tier int, weight float64) {
 	}
 }
 
+// HighwayPenalty maps highway types to score penalty multipliers.
+// A multiplier of 1.0 means no penalty.
+var HighwayPenalty = map[string]float64{
+	"motorway":       0.3,
+	"motorway_link":  0.3,
+	"trunk":          0.5,
+	"trunk_link":     0.5,
+	"primary":        0.8,
+	"primary_link":   0.8,
+	"secondary":      0.9,
+	"secondary_link": 0.9,
+	"tertiary":       1.0,
+	"tertiary_link":  1.0,
+	"unclassified":   1.0,
+	"residential":    1.0,
+	"service":        1.0,
+}
+
+// DefaultHighwayPenalty is used for highway types not in the HighwayPenalty map.
+const DefaultHighwayPenalty = 1.0
+
 // ScoringParamsHash returns a SHA-256 hash of all scoring constants, encoded
 // as a hex string prefixed with "sha256:". The hash is deterministic across
 // calls and across process restarts. It is used by the score cache (Task 007)
 // to detect when parameters have changed and cached scores must be
 // invalidated.
+//
+// NOTE: HighwayPenalty multipliers are intentionally excluded from this hash.
+// Penalties are applied post-cache at the aggregation level (stage 6), not
+// during per-way scoring (stage 3). Including them would cause unnecessary
+// cache invalidation when only penalty values change.
 //
 // NOTE: The cache format changed in Task 001 (added Tags field to ScoredWay).
 // Existing cache entries without tags will silently omit tags on read.
