@@ -337,6 +337,7 @@ func processNameGroup(name string, namedWays []quality.ScoredWay) ([]quality.Roa
 		// goroutines process groups whose input ways share backing arrays.
 		componentCopy := quality.DeepCopyWays(component)
 		ordered := quality.OrderWays(componentCopy)
+		ordered = quality.SplitOrderingGaps(ordered, quality.ConnectedEndpointProximityM)
 
 		// Apply deflection filter on the full assembled chain before splitting.
 		// This gives the 2400m look-ahead window cross-way-boundary visibility.
