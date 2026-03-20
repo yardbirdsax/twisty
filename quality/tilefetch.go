@@ -292,9 +292,16 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 		}
 
 		if raw == nil {
+			attempt := 0
 			err := retryWithBackoff(ctx, 3, cfg.RetryDelay, func() error {
+				if attempt > 0 {
+					cfg.Progress.Retry()
+				}
+				attempt++
+				start := time.Now()
 				var e error
 				raw, e = fetchTileRaw(ctx, cfg.Endpoint, tile)
+				cfg.Progress.FetchDuration(time.Since(start))
 				return e
 			})
 			if err != nil {

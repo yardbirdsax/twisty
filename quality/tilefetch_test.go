@@ -851,6 +851,131 @@ func TestMergeAndDeduplicatePreservesGeometry(t *testing.T) {
 	}
 }
 
+// retrySpyProgress records Retry and FetchDuration calls in addition to the
+// standard spy behaviours already covered by spyProgressReporter.
+type retrySpyProgress struct {
+	NoopProgressReporter
+	mu        sync.Mutex
+	retries   int
+	durations []time.Duration
+}
+
+func (s *retrySpyProgress) Retry() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retries++
+}
+
+func (s *retrySpyProgress) FetchDuration(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.durations = append(s.durations, d)
+}
+
+// TestProgressRetryAndDurationSingleSuccess verifies that a single successful
+// fetch (no retries) calls FetchDuration once and Retry zero times.
+func TestProgressRetryAndDurationSingleSuccess(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(validOverpassJSON(t))
+	}))
+	defer ts.Close()
+
+	cache := newTestCache(t)
+	spy := &retrySpyProgress{}
+	cfg := singleTileCfg(ts.URL, cache)
+	cfg.Progress = spy
+	cfg.RateLimitDelay = 0
+
+	if _, err := FetchTiledWays(context.Background(), 42.36, -72.58, 0.01, cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if spy.retries != 0 {
+		t.Errorf("Retry() called %d times, want 0", spy.retries)
+	}
+	if len(spy.durations) != 1 {
+		t.Errorf("FetchDuration() called %d times, want 1", len(spy.durations))
+	}
+}
+
+// TestProgressRetryAndDurationOneRetry verifies that when the first attempt
+// fails and the second succeeds, Retry() is called once and FetchDuration()
+// is called twice.
+func TestProgressRetryAndDurationOneRetry(t *testing.T) {
+	var requestCount int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt64(&requestCount, 1)
+		if n == 1 {
+			// First attempt: transient error (retryable).
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(validOverpassJSON(t))
+	}))
+	defer ts.Close()
+
+	cache := newTestCache(t)
+	spy := &retrySpyProgress{}
+	cfg := singleTileCfg(ts.URL, cache)
+	cfg.Progress = spy
+	cfg.RateLimitDelay = 0
+	cfg.RetryDelay = 0
+
+	if _, err := FetchTiledWays(context.Background(), 42.36, -72.58, 0.01, cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if spy.retries != 1 {
+		t.Errorf("Retry() called %d times, want 1", spy.retries)
+	}
+	if len(spy.durations) != 2 {
+		t.Errorf("FetchDuration() called %d times, want 2", len(spy.durations))
+	}
+}
+
+// TestProgressRetryAndDurationCacheHit verifies that a cache hit does not
+// trigger Retry() or FetchDuration().
+func TestProgressRetryAndDurationCacheHit(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("unexpected HTTP request; tile should come from cache")
+	}))
+	defer ts.Close()
+
+	cache := newTestCache(t)
+	tiles := ComputeTiles(42.36, -72.58, 0.01, 0.05)
+	if len(tiles) != 1 {
+		t.Fatalf("expected 1 tile, got %d", len(tiles))
+	}
+	if err := cache.Write(tiles[0], validOverpassJSON(t)); err != nil {
+		t.Fatalf("pre-populate cache: %v", err)
+	}
+
+	spy := &retrySpyProgress{}
+	cfg := singleTileCfg(ts.URL, cache)
+	cfg.Progress = spy
+
+	if _, err := FetchTiledWays(context.Background(), 42.36, -72.58, 0.01, cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if spy.retries != 0 {
+		t.Errorf("Retry() called %d times for cache hit, want 0", spy.retries)
+	}
+	if len(spy.durations) != 0 {
+		t.Errorf("FetchDuration() called %d times for cache hit, want 0", len(spy.durations))
+	}
+}
+
 func TestFetchTiledWaysRateLimit(t *testing.T) {
 	// Use a 2-tile scenario so we can measure the delay between fetches.
 	// A 3km radius at 42.36,-72.58 with 0.05 degree tiles produces multiple tiles.
