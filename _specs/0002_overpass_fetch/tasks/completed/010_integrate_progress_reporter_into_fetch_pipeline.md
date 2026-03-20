@@ -105,3 +105,81 @@ cfg.Progress.Done()
 - The context-cancelled early-return path in the loop (after `sleepWithContext` returns an error) currently returns early via `mergeAndDeduplicate`. Ensure `Done()` is called on this path too — consider a `defer cfg.Progress.Done()` at the top of the function to guarantee it.
 
 ---
+
+---
+# Task 010 Review: Integrate ProgressReporter into FetchTiledWays
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-19
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task added a `Progress ProgressReporter` field to `TileFetchConfig` and wired `SetTotal`, `Tick`, and `Done` into `FetchTiledWays`. The `defer cfg.Progress.Done()` pattern handles all return paths including context-cancelled early exits. Three spy-based integration tests verify correct call counts and arguments.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/progress.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `TileFetchConfig` has a `Progress ProgressReporter` field | PASS |
+| A nil `Progress` value is replaced with `NoopProgressReporter{}` before the loop | PASS |
+| `SetTotal` is called once with the correct tile count before the loop begins | PASS |
+| `Tick(true)` is called for each tile served from cache | PASS |
+| `Tick(false)` is called for each tile fetched from the API | PASS |
+| `Tick` is NOT called for failed tiles | PASS |
+| `Done` is called exactly once after the loop completes (including context-cancelled path) | PASS |
+| All existing unit and integration tests continue to pass | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Good Practices Observed
+
+1. **defer for Done:** Using `defer cfg.Progress.Done()` guarantees `Done` fires on all return paths without duplication, including the `EnsureDir` early-return path.
+2. **Spy-based behavioral tests:** `spyProgressReporter` records all calls, enabling precise assertion on argument values and call counts rather than relying on code inspection alone.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # PASS — all packages pass (quality: 5.058s)
+make lint   # PASS — go vet reports no issues
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met, all tests pass, linter is clean, and the implementation correctly covers all code paths including context cancellation.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **APPROVED WITH CHANGES**: All acceptance criteria met, minor issues found. Can merge after addressing SHOULD FIX items, or merge as-is with follow-up.
+- **NEEDS REVISION**: Acceptance criteria not met or critical issues found. Must address MUST FIX items before re-review.

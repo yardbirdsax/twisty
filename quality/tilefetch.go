@@ -225,13 +225,14 @@ func fetchTileRaw(ctx context.Context, endpoint string, t Tile) ([]byte, error) 
 
 // TileFetchConfig holds configuration for the FetchTiledWays orchestrator.
 type TileFetchConfig struct {
-	Endpoint       string        // Overpass API base URL (default: overpassBaseURL)
-	TileSize       float64       // tile edge length in degrees (default: 0.05)
+	Endpoint       string           // Overpass API base URL (default: overpassBaseURL)
+	TileSize       float64          // tile edge length in degrees (default: 0.05)
 	Cache          *TileCache
-	NoCache        bool          // skip cache reads, still write
+	NoCache        bool             // skip cache reads, still write
 	Logger         *slog.Logger
-	RateLimitDelay time.Duration // delay between consecutive HTTP fetches (default: 1s)
-	RetryDelay     time.Duration // initial backoff delay for retries (default: 2s)
+	RateLimitDelay time.Duration    // delay between consecutive HTTP fetches (default: 1s)
+	RetryDelay     time.Duration    // initial backoff delay for retries (default: 2s)
+	Progress       ProgressReporter // nil → NoopProgressReporter
 }
 
 // FetchTiledWays fetches OSM highway ways for the area defined by centerLat, centerLon, and
@@ -253,9 +254,15 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 	if cfg.RetryDelay == 0 {
 		cfg.RetryDelay = 2 * time.Second
 	}
+	if cfg.Progress == nil {
+		cfg.Progress = NoopProgressReporter{}
+	}
+
+	defer cfg.Progress.Done()
 
 	tiles := ComputeTiles(centerLat, centerLon, radiusKm, cfg.TileSize)
 	cfg.Logger.Info("starting tiled fetch", "total_tiles", len(tiles))
+	cfg.Progress.SetTotal(len(tiles))
 
 	if err := cfg.Cache.EnsureDir(); err != nil {
 		return nil, fmt.Errorf("ensuring cache dir: %w", err)
@@ -269,6 +276,7 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 
 	for _, tile := range tiles {
 		var raw []byte
+		cached := false
 
 		if !cfg.NoCache && cfg.Cache.Has(tile) {
 			cfg.Logger.Debug("cache hit", "south", tile.South, "west", tile.West)
@@ -279,6 +287,7 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 				raw = nil
 			} else {
 				cacheHits++
+				cached = true
 			}
 		}
 
@@ -301,6 +310,10 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 				// Increment fetched only after the sleep succeeds so the summary
 				// log is accurate when context is cancelled during sleep.
 				if sleepErr := sleepWithContext(ctx, cfg.RateLimitDelay); sleepErr != nil {
+					// The tile was successfully fetched and written; count it before
+					// returning so progress accounting includes this tile.
+					cfg.Progress.Tick(cached)
+					allTileData = append(allTileData, raw)
 					// Merge whatever we have so far before returning the context error.
 					ways, mergeErr := mergeAndDeduplicate(allTileData, cfg.Logger)
 					if mergeErr != nil {
@@ -316,6 +329,7 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 			continue
 		}
 
+		cfg.Progress.Tick(cached)
 		allTileData = append(allTileData, raw)
 	}
 

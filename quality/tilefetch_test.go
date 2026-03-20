@@ -513,6 +513,158 @@ func TestFetchTiledWaysPartialFailure(t *testing.T) {
 	}
 }
 
+// --- ProgressReporter spy and integration tests ---
+
+// spyProgressReporter records all calls made to it so tests can assert on
+// the exact sequence of SetTotal, Tick, and Done invocations.
+type spyProgressReporter struct {
+	mu       sync.Mutex
+	total    int
+	ticks    []bool // one entry per Tick call; value = cached argument
+	doneCalls int
+}
+
+func (s *spyProgressReporter) SetTotal(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.total = n
+}
+
+func (s *spyProgressReporter) Tick(cached bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ticks = append(s.ticks, cached)
+}
+
+func (s *spyProgressReporter) Done() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.doneCalls++
+}
+
+// TestFetchTiledWaysProgressReporterCacheHit verifies that a fully-cached run
+// calls SetTotal with the tile count, Tick once per tile with cached=true, and
+// Done exactly once.
+func TestFetchTiledWaysProgressReporterCacheHit(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("unexpected HTTP request; all tiles should come from cache")
+	}))
+	defer ts.Close()
+
+	cache := newTestCache(t)
+	tiles := ComputeTiles(42.36, -72.58, 0.01, 0.05)
+	if len(tiles) != 1 {
+		t.Fatalf("expected 1 tile, got %d", len(tiles))
+	}
+	if err := cache.Write(tiles[0], validOverpassJSON(t)); err != nil {
+		t.Fatalf("pre-populate cache: %v", err)
+	}
+
+	spy := &spyProgressReporter{}
+	cfg := singleTileCfg(ts.URL, cache)
+	cfg.Progress = spy
+
+	if _, err := FetchTiledWays(context.Background(), 42.36, -72.58, 0.01, cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if spy.total != 1 {
+		t.Errorf("SetTotal: got %d, want 1", spy.total)
+	}
+	if len(spy.ticks) != 1 {
+		t.Errorf("Tick call count: got %d, want 1", len(spy.ticks))
+	} else if !spy.ticks[0] {
+		t.Error("Tick: cached argument should be true for cache hit, got false")
+	}
+	if spy.doneCalls != 1 {
+		t.Errorf("Done call count: got %d, want 1", spy.doneCalls)
+	}
+}
+
+// TestFetchTiledWaysProgressReporterLiveFetch verifies that a live fetch (no
+// cache) calls SetTotal with the tile count, Tick once per tile with
+// cached=false, and Done exactly once.
+func TestFetchTiledWaysProgressReporterLiveFetch(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(validOverpassJSON(t))
+	}))
+	defer ts.Close()
+
+	cache := newTestCache(t)
+	tiles := ComputeTiles(42.36, -72.58, 0.01, 0.05)
+	if len(tiles) != 1 {
+		t.Fatalf("expected 1 tile, got %d", len(tiles))
+	}
+
+	spy := &spyProgressReporter{}
+	cfg := singleTileCfg(ts.URL, cache)
+	cfg.Progress = spy
+	cfg.RateLimitDelay = 0 // no sleep in unit test
+
+	if _, err := FetchTiledWays(context.Background(), 42.36, -72.58, 0.01, cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if spy.total != 1 {
+		t.Errorf("SetTotal: got %d, want 1", spy.total)
+	}
+	if len(spy.ticks) != 1 {
+		t.Errorf("Tick call count: got %d, want 1", len(spy.ticks))
+	} else if spy.ticks[0] {
+		t.Error("Tick: cached argument should be false for live fetch, got true")
+	}
+	if spy.doneCalls != 1 {
+		t.Errorf("Done call count: got %d, want 1", spy.doneCalls)
+	}
+}
+
+// TestFetchTiledWaysProgressReporterSetTotalMatchesTileCount verifies that the
+// value passed to SetTotal equals the number of Tick calls when all tiles
+// succeed, across a multi-tile scenario.
+func TestFetchTiledWaysProgressReporterSetTotalMatchesTileCount(t *testing.T) {
+	tiles := ComputeTiles(42.36, -72.58, 5.0, 0.05)
+	if len(tiles) < 2 {
+		t.Skipf("need at least 2 tiles, got %d", len(tiles))
+	}
+
+	cache := newTestCache(t)
+	// Pre-populate all tiles so there are no live fetches (avoids rate-limit delay).
+	for _, tile := range tiles {
+		if err := cache.Write(tile, validOverpassJSON(t)); err != nil {
+			t.Fatalf("pre-populate cache: %v", err)
+		}
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("unexpected HTTP request; all tiles should be cached")
+	}))
+	defer ts.Close()
+
+	spy := &spyProgressReporter{}
+	cfg := TileFetchConfig{
+		Endpoint: ts.URL,
+		TileSize: 0.05,
+		Cache:    cache,
+		Progress: spy,
+	}
+
+	if _, err := FetchTiledWays(context.Background(), 42.36, -72.58, 5.0, cfg); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if spy.total != len(tiles) {
+		t.Errorf("SetTotal: got %d, want %d", spy.total, len(tiles))
+	}
+	if len(spy.ticks) != len(tiles) {
+		t.Errorf("Tick count: got %d, want %d", len(spy.ticks), len(tiles))
+	}
+	if spy.doneCalls != 1 {
+		t.Errorf("Done call count: got %d, want 1", spy.doneCalls)
+	}
+}
+
 // --- parseTileData tests ---
 
 func makeOverpassJSON(t *testing.T, elements []overpassElement) []byte {
