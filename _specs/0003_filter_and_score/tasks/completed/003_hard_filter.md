@@ -81,3 +81,70 @@ func isHardFiltered(tags map[string]string) bool
 
 - Keep the disqualifying values as local variables or small sets within the function — they don't need to be exported constants since they are not tunable scoring parameters.
 - The filter is stateless: each way is evaluated independently.
+
+---
+# Task 003 Review: Hard Filter
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements `HardFilter` and `isHardFiltered` in `quality/hardfilter.go` to remove ways with unpaved surfaces, private/restricted access, or non-motor-vehicle highway types before curvature scoring. Accompanying table-driven tests cover all specified cases.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/hardfilter.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/hardfilter_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `quality/hardfilter.go` exists with `HardFilter` and `isHardFiltered` | PASS |
+| `quality/hardfilter_test.go` passes with `go test ./quality/...` | PASS |
+| All five unpaved surface values are caught | PASS |
+| Access and motor_vehicle private/no are caught | PASS |
+| All six non-motor-vehicle highway types are caught | PASS |
+| Ways with no surface tag pass the filter | PASS |
+| The existing `IsDisqualifying()` function is unchanged | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Good Practices Observed
+
+1. **Input immutability:** `HardFilter` allocates a new slice and never writes to the input, which the test explicitly verifies.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages pass, including quality
+make lint   # go vet clean, no issues
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met, tests pass, linter is clean, and `IsDisqualifying()` is untouched.
