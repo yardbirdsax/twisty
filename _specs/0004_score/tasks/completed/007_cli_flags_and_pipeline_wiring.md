@@ -93,3 +93,70 @@ Output: roads.kml
 - The `-out` flag should accept relative or absolute paths. Use `os.Create` which handles both.
 - Summary output goes to the `stderr` writer parameter, not `os.Stderr` directly, so it's testable.
 - This task wires everything sequentially. The concurrent pipeline optimization is a separate task.
+
+---
+# Task 007 Review: CLI Flags and Pipeline Wiring
+
+**Reviewer:** Senior Software Engineer Agent
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task extends the `score` subcommand in `main.go` with `-out` and `-min-score` flags, wires stages 5-7 (aggregate, penalties, KML output) after the tile processing loop, and prints a summary to stderr. Tests are added to `main_test.go` to verify the new flags, validation behavior, and full end-to-end flow with synthetic cached tile data.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/kml.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `-out` flag is required; error message if missing | PASS |
+| `-min-score` flag defaults to 0 | PASS |
+| Stages 5-7 execute in order after tile processing | PASS |
+| KML file is written to the specified output path | PASS |
+| Summary printed to stderr with collection count, top roads, and output path | PASS |
+| Empty KML produced when no roads pass filter (with warning) | PASS |
+| Existing flags retain their behavior | PASS |
+| All tests pass | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages pass: ok github.com/yardbirdsax/twisty 0.349s
+make lint   # no issues: go vet ./...
+go test -run TestRunScoreE2EWithSyntheticCache -v -timeout 60s .  # PASS (0.03s)
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are satisfied. The three SHOULD FIX items from the prior review cycle have been resolved: the end-to-end integration test `TestRunScoreE2EWithSyntheticCache` is present and passes, the `tilesWithData == 0` path now writes an empty KML with a warning rather than returning a hard error, and the "Score cache cleared." message uses the injected `stderr` writer. No remaining issues.
+
+---

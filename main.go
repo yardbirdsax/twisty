@@ -8,6 +8,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"sort"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -282,6 +283,8 @@ func runScore(args []string, stderr io.Writer) error {
 	noCache := fs.Bool("no-cache", false, "Skip score cache reads (still writes)")
 	clearScoreCache := fs.Bool("clear-score-cache", false, "Delete all score cache entries before running")
 	verbose := fs.Bool("v", false, "Enable verbose logging to stderr")
+	outPath := fs.String("out", "", "output KML file path (required)")
+	minScore := fs.Float64("min-score", 0, "minimum penalized score to include in output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -299,6 +302,11 @@ func runScore(args []string, stderr io.Writer) error {
 	if *address == "" {
 		fs.Usage()
 		return fmt.Errorf("Error: -address is required")
+	}
+
+	if *outPath == "" {
+		fs.Usage()
+		return fmt.Errorf("Error: -out is required")
 	}
 
 	if *radius <= 0 || *radius > 50 {
@@ -337,7 +345,7 @@ func runScore(args []string, stderr io.Writer) error {
 		if err := scoreCache.ClearAll(); err != nil {
 			return fmt.Errorf("Error clearing score cache: %w", err)
 		}
-		fmt.Fprintln(os.Stdout, "Score cache cleared.")
+		fmt.Fprintln(stderr, "Score cache cleared.")
 	}
 
 	// Geocode the address.
@@ -358,6 +366,8 @@ func runScore(args []string, stderr io.Writer) error {
 	totalSegments := 0
 	totalZeroed := 0
 	tilesWithData := 0
+
+	var allScoredWays []quality.ScoredWay
 
 	for _, tile := range tiles {
 		if !tileCache.Has(tile) {
@@ -382,6 +392,7 @@ func runScore(args []string, stderr io.Writer) error {
 				}
 				totalWaysScored += len(cachedWays)
 				totalZeroed += zeroed
+				allScoredWays = append(allScoredWays, cachedWays...)
 				continue
 			}
 		}
@@ -402,18 +413,75 @@ func runScore(args []string, stderr io.Writer) error {
 		totalWaysScored += len(result.ScoredWays)
 		totalSegments += result.TotalSegments
 		totalZeroed += result.ZeroedByDeflection
+		allScoredWays = append(allScoredWays, result.ScoredWays...)
 	}
 
 	if tilesWithData == 0 {
-		return fmt.Errorf("No cached tile data found. Run 'twisty fetch -address \"...\"' first.")
+		fmt.Fprintln(stderr, "WARNING: No cached tile data found. Run 'twisty fetch -address \"...\"' first. Writing empty KML.")
+		f, err := os.Create(*outPath)
+		if err != nil {
+			return fmt.Errorf("creating output file: %w", err)
+		}
+		defer f.Close()
+		return quality.WriteKML(f, nil, *minScore)
 	}
 
-	fmt.Println("Score complete.")
-	fmt.Printf("  Tiles processed: %d\n", totalTiles)
-	fmt.Printf("  Cache hits:       %d\n", cacheHits)
-	fmt.Printf("  Ways scored:      %d\n", totalWaysScored)
-	fmt.Printf("  Segments scored:  %d\n", totalSegments)
-	fmt.Printf("  Zeroed by deflection: %d\n", totalZeroed)
+	fmt.Fprintln(stderr, "Score complete.")
+	fmt.Fprintf(stderr, "  Tiles processed: %d\n", totalTiles)
+	fmt.Fprintf(stderr, "  Cache hits:       %d\n", cacheHits)
+	fmt.Fprintf(stderr, "  Ways scored:      %d\n", totalWaysScored)
+	fmt.Fprintf(stderr, "  Segments scored:  %d\n", totalSegments)
+	fmt.Fprintf(stderr, "  Zeroed by deflection: %d\n", totalZeroed)
+
+	// Stage 5: Aggregate
+	collections := quality.Aggregate(allScoredWays)
+
+	// Stage 6: Penalties
+	quality.ApplyPenalties(collections)
+
+	// Stage 7: KML Output
+	f, err := os.Create(*outPath)
+	if err != nil {
+		return fmt.Errorf("creating output file: %w", err)
+	}
+	defer f.Close()
+
+	if err := quality.WriteKML(f, collections, *minScore); err != nil {
+		return fmt.Errorf("writing KML: %w", err)
+	}
+
+	// Count collections above min-score filter
+	aboveMinScore := 0
+	for _, c := range collections {
+		if c.PenalizedScore >= *minScore {
+			aboveMinScore++
+		}
+	}
+
+	if aboveMinScore == 0 {
+		fmt.Fprintf(stderr, "WARNING: No road collections passed the min-score filter (%.0f). KML output is empty.\n", *minScore)
+	}
+
+	fmt.Fprintf(stderr, "Aggregated %d road collections (%d above min-score %.0f).\n", len(collections), aboveMinScore, *minScore)
+
+	// Top 5 roads by penalized score (sorted descending)
+	topN := min(5, len(collections))
+
+	// Sort a copy for summary output
+	sorted := make([]quality.RoadCollection, len(collections))
+	copy(sorted, collections)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].PenalizedScore > sorted[j].PenalizedScore
+	})
+
+	if topN > 0 {
+		fmt.Fprintln(stderr, "Top roads:")
+		for i := range topN {
+			fmt.Fprintf(stderr, "  %d. %-20s — %d\n", i+1, sorted[i].DisplayName(), int(sorted[i].PenalizedScore))
+		}
+	}
+
+	fmt.Fprintf(stderr, "Output: %s\n", *outPath)
 	return nil
 }
 

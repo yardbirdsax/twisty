@@ -2,10 +2,15 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yardbirdsax/twisty/quality"
 )
 
 func TestTermProgressBarStatsString(t *testing.T) {
@@ -111,6 +116,8 @@ func TestScoreFlagSetParsesValidFlags(t *testing.T) {
 	noCache := fs.Bool("no-cache", false, "")
 	clearScoreCache := fs.Bool("clear-score-cache", false, "")
 	verbose := fs.Bool("v", false, "")
+	outPath := fs.String("out", "", "")
+	minScore := fs.Float64("min-score", 0, "")
 
 	err := fs.Parse([]string{
 		"-address", "Asheville, NC",
@@ -120,6 +127,8 @@ func TestScoreFlagSetParsesValidFlags(t *testing.T) {
 		"-no-cache",
 		"-clear-score-cache",
 		"-v",
+		"-out", "roads.kml",
+		"-min-score", "300",
 	})
 	if err != nil {
 		t.Fatalf("unexpected parse error: %v", err)
@@ -146,6 +155,12 @@ func TestScoreFlagSetParsesValidFlags(t *testing.T) {
 	if !*verbose {
 		t.Error("v should be true")
 	}
+	if *outPath != "roads.kml" {
+		t.Errorf("out = %q, want %q", *outPath, "roads.kml")
+	}
+	if *minScore != 300.0 {
+		t.Errorf("min-score = %v, want 300.0", *minScore)
+	}
 }
 
 func TestScoreFlagSetAddressRequired(t *testing.T) {
@@ -156,6 +171,28 @@ func TestScoreFlagSetAddressRequired(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "-address is required") {
 		t.Errorf("runScore() error = %q, want it to contain \"-address is required\"", err.Error())
+	}
+}
+
+func TestScoreOutFlagRequired(t *testing.T) {
+	var stderr bytes.Buffer
+	err := runScore([]string{"-address", "Anywhere"}, &stderr)
+	if err == nil {
+		t.Fatal("runScore() expected error when -out is not provided, got nil")
+	}
+	if !strings.Contains(err.Error(), "-out is required") {
+		t.Errorf("runScore() error = %q, want it to contain \"-out is required\"", err.Error())
+	}
+}
+
+func TestScoreMinScoreDefaultsToZero(t *testing.T) {
+	fs := flag.NewFlagSet("score", flag.ContinueOnError)
+	minScore := fs.Float64("min-score", 0, "")
+	if err := fs.Parse([]string{}); err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if *minScore != 0 {
+		t.Errorf("min-score default = %v, want 0", *minScore)
 	}
 }
 
@@ -176,7 +213,7 @@ func TestScoreRadiusValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr bytes.Buffer
-			err := runScore([]string{"-address", "Anywhere", "-radius", tc.radius}, &stderr)
+			err := runScore([]string{"-address", "Anywhere", "-out", "roads.kml", "-radius", tc.radius}, &stderr)
 			// Valid radii will fail later (geocoding), but should NOT fail on radius validation.
 			// Invalid radii should fail with a radius error.
 			if tc.wantErr {
@@ -191,6 +228,96 @@ func TestScoreRadiusValidation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRunScoreE2EWithSyntheticCache verifies the full runScore flow produces a KML file
+// when synthetic cached tile data is present. Geocoding is bypassed by passing coordinates
+// directly (geocode.Resolve short-circuits when the address is "lat,lon").
+func TestRunScoreE2EWithSyntheticCache(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	// Pick a stable center and tile parameters.
+	const (
+		centerLat = 35.0
+		centerLon = -82.0
+		radius    = 1.0  // km
+		tileSize  = 0.05 // degrees
+	)
+
+	// Determine which tiles runScore will request for this center.
+	tiles := quality.ComputeTiles(centerLat, centerLon, radius, tileSize)
+	if len(tiles) == 0 {
+		t.Fatal("ComputeTiles returned no tiles")
+	}
+
+	// Build a minimal but valid Overpass JSON payload containing a winding road.
+	// The way must survive HardFilter (paved secondary, no disqualifying tags).
+	syntheticWay := map[string]any{
+		"id":   int64(42),
+		"tags": map[string]string{"highway": "secondary"},
+		"geometry": []map[string]float64{
+			{"lat": centerLat, "lon": centerLon},
+			{"lat": centerLat + 0.0002, "lon": centerLon + 0.0001},
+			{"lat": centerLat + 0.0003, "lon": centerLon - 0.0001},
+			{"lat": centerLat + 0.0005, "lon": centerLon + 0.0001},
+		},
+	}
+	payload := map[string]any{
+		"elements": []any{syntheticWay},
+	}
+	rawJSON, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal synthetic tile JSON: %v", err)
+	}
+
+	// Write the synthetic JSON to a temp tile cache directory for every tile.
+	cacheDir := t.TempDir()
+	tileCache := &quality.TileCache{Dir: cacheDir, Precision: 3}
+	if err := tileCache.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir: %v", err)
+	}
+	for _, tile := range tiles {
+		if err := tileCache.Write(tile, rawJSON); err != nil {
+			t.Fatalf("TileCache.Write tile(%v,%v): %v", tile.South, tile.West, err)
+		}
+	}
+
+	// Prepare output KML path.
+	outPath := filepath.Join(t.TempDir(), "output.kml")
+
+	// Run score using coordinate address to bypass geocoding.
+	var stderr bytes.Buffer
+	err = runScore([]string{
+		"-address", "35.0,-82.0",
+		"-radius", "1",
+		"-tile-size", "0.05",
+		"-cache-dir", cacheDir,
+		"-out", outPath,
+		"-no-cache", // skip score cache reads so the pipeline always runs
+	}, &stderr)
+	if err != nil {
+		t.Fatalf("runScore returned error: %v\nstderr: %s", err, stderr.String())
+	}
+
+	// Verify the KML file exists and is non-empty.
+	info, err := os.Stat(outPath)
+	if err != nil {
+		t.Fatalf("KML output file not created: %v", err)
+	}
+	if info.Size() == 0 {
+		t.Fatal("KML output file is empty")
+	}
+
+	// Verify it looks like KML.
+	contents, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("reading KML output: %v", err)
+	}
+	if !strings.Contains(string(contents), "<kml") {
+		t.Errorf("output file does not contain <kml> element; got: %s", string(contents)[:min(200, len(contents))])
 	}
 }
 
