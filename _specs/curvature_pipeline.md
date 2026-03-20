@@ -77,6 +77,95 @@ less desirable but not disqualifying:
 Applied after aggregation because that's when you have the true representation
 of the entire road's score.
 
+### 7. Output KML
+
+Generate a multi-color KML file where each road segment is colored by its curve
+radius tier, following the same visual approach as the Curvature project.
+
+#### Color scheme
+
+Each segment is styled by its curvature tier:
+
+| Tier | Radius   | Color       | KML (AABBGGRR)  |
+|------|----------|-------------|------------------|
+| 0    | >= 175 m | Green       | `F000E010`       |
+| 1    | < 175 m  | Yellow      | `F000FFFF`       |
+| 2    | < 100 m  | Orange      | `F000AAFF`       |
+| 3    | < 60 m   | Dark orange | `F00055FF`       |
+| 4    | < 30 m   | Red         | `F00000FF`       |
+
+#### KML structure
+
+- `<Document>` with `<Style>` definitions for each tier.
+- One `<Folder>` per named road collection (from stage 5), containing the road's
+  name, total score, length, and highway type in its description.
+- Inside each folder, one `<Placemark>` per contiguous run of the same curvature
+  tier. Each placemark holds a `<LineString>` styled by that tier's color. This
+  produces the green-to-red gradient visible when zooming into curves.
+- Folder list style uses `checkHideChildren` so individual segment placemarks
+  are hidden in the sidebar — the user sees road names, not hundreds of segments.
+
+#### Placemark description
+
+Each road folder's description includes:
+- Curvature score (total and per-km)
+- Total length
+- Highway type(s)
+- Constituent OSM way IDs
+
+## Score Cache
+
+Cache scored segments (the output of stages 1–4) per tile to avoid recomputation
+when the underlying data and scoring parameters have not changed.
+
+### Granularity
+
+The score cache operates per-tile, matching the existing `TileCache` used for
+raw Overpass responses. This makes cached scores reusable across overlapping
+queries — if a user shifts their bounding box slightly, tiles that overlap with a
+previous query are already scored.
+
+### What is cached
+
+Pre-aggregation scored segments: the per-way, per-segment scores produced after
+stages 1–4 (fetch, hard filter, score, deflection filter). Aggregation into
+named roads (stage 5) and soft penalties (stage 6) are applied at query time
+on top of the cached segments, because those stages depend on the query area
+boundaries and may change independently of the underlying segment scores.
+
+### Invalidation
+
+A cache entry is valid only when both its inputs are unchanged:
+
+1. **Raw tile data** — if the Overpass tile cache entry has been re-fetched
+   (detected by comparing the raw tile file's modification time or content hash
+   against the value recorded when the score cache entry was written), the score
+   cache entry is stale.
+2. **Scoring parameters** — tier thresholds, tier weights, and deflection filter
+   settings are hashed together into a parameters hash. If any parameter changes,
+   all score cache entries are invalidated.
+
+Each score cache file stores the raw-tile content hash and the parameters hash
+alongside the scored segments. On read, both hashes are recomputed from current
+inputs and compared. A mismatch triggers re-scoring for that tile.
+
+### Storage
+
+Score cache files live alongside the raw tile cache:
+
+```
+.cache/
+  tiles/          # existing raw Overpass JSON responses
+  scores/         # scored segments per tile
+    <tile_key>.json
+```
+
+Each score cache file contains:
+- `raw_tile_hash`: hash of the raw Overpass response used to produce these scores
+- `params_hash`: hash of the scoring parameters at the time of scoring
+- `segments`: the scored segment data (way ID, node coordinates, tier, score,
+  length)
+
 ## Key Concepts
 
 - **Circumcircle**: The unique circle passing through three points. Its radius
@@ -91,3 +180,11 @@ of the entire road's score.
   being buried in a long road's aggregate score.
 - **Why filter deflections**: Prevents intersection doglegs and minor GPS jogs
   from inflating scores on straight roads.
+- **Why multi-color KML**: Per-segment coloring shows riders exactly where curves
+  are and how tight they are, rather than just which roads are twisty overall.
+- **Why cache pre-aggregation**: Aggregation groups ways by name across the query
+  area, so its output changes when the bounding box changes. Segment scores are
+  tile-local and stable, making them the right caching boundary.
+- **Why content-hash invalidation**: Time-based expiry would either serve stale
+  data or discard valid scores unnecessarily. Hashing the actual inputs ensures
+  the cache is always correct and never expires prematurely.
