@@ -141,6 +141,12 @@ const DefaultHighwayPenalty = 1.0
 // during per-way scoring (stage 3). Including them would cause unnecessary
 // cache invalidation when only penalty values change.
 //
+// NOTE: DeflectionLookAheadM and DeflectionMinHeadingChange are intentionally
+// excluded from this hash. Deflection filtering is now applied post-aggregation
+// (after ways are assembled into full roads), not during per-way scoring. The
+// cache stores raw scored ways without deflection applied, so deflection params
+// do not affect cache validity.
+//
 // NOTE: The cache format changed in Task 001 (added Tags field to ScoredWay).
 // Existing cache entries without tags will silently omit tags on read.
 // Users upgrading from a pre-Task-001 cache should run `twisty score --clear-cache`
@@ -149,11 +155,9 @@ func ScoringParamsHash() string {
 	input := fmt.Sprintf(
 		"TierRadius4=%v,TierRadius3=%v,TierRadius2=%v,TierRadius1=%v,"+
 			"TierWeight4=%v,TierWeight3=%v,TierWeight2=%v,TierWeight1=%v,TierWeight0=%v,"+
-			"DeflectionLookAheadM=%v,DeflectionMinHeadingChange=%v,"+
 			"ConnectedEndpointProximityM=%v,StraightGapSplitM=%v",
 		TierRadius4, TierRadius3, TierRadius2, TierRadius1,
 		TierWeight4, TierWeight3, TierWeight2, TierWeight1, TierWeight0,
-		DeflectionLookAheadM, DeflectionMinHeadingChange,
 		ConnectedEndpointProximityM, StraightGapSplitM,
 	)
 	sum := sha256.Sum256([]byte(input))

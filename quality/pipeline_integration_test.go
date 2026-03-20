@@ -46,20 +46,48 @@ func radiusForTier(tier int) float64 {
 }
 
 // fixtureConnectedWays builds a chain of ScoredWays that share endpoints, starting at
-// (startLat, startLon) and advancing north by stepLat each way.
+// (startLat, startLon) and advancing in an alternating NE/NW zigzag pattern.
 // Each way gets one segment of the specified tier with the given length.
+// The zigzag ensures cumulative bearing change > 20° so segments survive the deflection filter.
 func fixtureConnectedWays(startID int64, name, highway string, startLat, startLon, stepLat float64, count int, tier int, segLength float64) []ScoredWay {
+	const (
+		latPerM = 1.0 / 111000.0
+		lonPerM = 1.0 / 78500.0
+	)
+	_, weight := AssignTier(float64(radiusForTier(tier)))
 	ways := make([]ScoredWay, count)
 	lat := startLat
+	lon := startLon
 	for i := range count {
-		endLat := lat + stepLat
-		seg := makeScoredSegment(startID+int64(i), tier, lat, startLon, endLat, startLon, segLength)
+		var dLat, dLon float64
+		if i%2 == 0 {
+			// Bearing ~45° NE
+			dLat = segLength * 0.707 * latPerM
+			dLon = segLength * 0.707 * lonPerM
+		} else {
+			// Bearing ~315° NW
+			dLat = segLength * 0.707 * latPerM
+			dLon = -segLength * 0.707 * lonPerM
+		}
+		endLat := lat + dLat
+		endLon := lon + dLon
+		l := geo.Haversine(geo.Coord{Lat: lat, Lon: lon}, geo.Coord{Lat: endLat, Lon: endLon})
+		seg := ScoredSegment{
+			WayID:  startID + int64(i),
+			Tier:   tier,
+			Weight: weight,
+			Length: l,
+			Score:  l * weight,
+			Start:  geo.Coord{Lat: lat, Lon: lon},
+			End:    geo.Coord{Lat: endLat, Lon: endLon},
+		}
 		ways[i] = ScoredWay{
 			WayID: startID + int64(i),
 			Tags:  map[string]string{"name": name, "highway": highway},
 			Segments: []ScoredSegment{seg},
 		}
 		lat = endLat
+		lon = endLon
 	}
 	return ways
 }
@@ -67,26 +95,50 @@ func fixtureConnectedWays(startID int64, name, highway string, startLat, startLo
 // fixtureTwistyMountainPass builds "Mountain Pass Rd" — 18 connected ways with
 // mixed tier 2-4 segments, highway type "secondary".
 // Each segment is 300 m so total length = 5,400 m > MinRoadLengthM (4,828 m).
+// Uses a zigzag path so the deflection filter retains scored segments.
 func fixtureTwistyMountainPass() []ScoredWay {
 	const (
-		name    = "Mountain Pass Rd"
-		highway = "secondary"
+		name     = "Mountain Pass Rd"
+		highway  = "secondary"
 		startLat = 44.10
 		startLon = -72.50
-		stepLat  = 0.0027 // ~300 m
+		segLen   = 300.0
+		latPerM  = 1.0 / 111000.0
+		lonPerM  = 1.0 / 78500.0
 	)
 	var ways []ScoredWay
 	tiers := []int{2, 3, 4, 2, 3, 4, 2, 3, 2, 3, 4, 3, 2, 4, 3, 2, 3, 4}
 	lat := startLat
+	lon := startLon
 	for i, tier := range tiers {
-		endLat := lat + stepLat
-		seg := makeScoredSegment(int64(100+i), tier, lat, startLon, endLat, startLon, 300.0)
+		_, weight := AssignTier(float64(radiusForTier(tier)))
+		var dLat, dLon float64
+		if i%2 == 0 {
+			dLat = segLen * 0.707 * latPerM
+			dLon = segLen * 0.707 * lonPerM
+		} else {
+			dLat = segLen * 0.707 * latPerM
+			dLon = -segLen * 0.707 * lonPerM
+		}
+		endLat := lat + dLat
+		endLon := lon + dLon
+		l := geo.Haversine(geo.Coord{Lat: lat, Lon: lon}, geo.Coord{Lat: endLat, Lon: endLon})
+		seg := ScoredSegment{
+			WayID:  int64(100 + i),
+			Tier:   tier,
+			Weight: weight,
+			Length: l,
+			Score:  l * weight,
+			Start:  geo.Coord{Lat: lat, Lon: lon},
+			End:    geo.Coord{Lat: endLat, Lon: endLon},
+		}
 		ways = append(ways, ScoredWay{
 			WayID: int64(100 + i),
 			Tags:  map[string]string{"name": name, "highway": highway},
 			Segments: []ScoredSegment{seg},
 		})
 		lat = endLat
+		lon = endLon
 	}
 	return ways
 }
@@ -94,68 +146,119 @@ func fixtureTwistyMountainPass() []ScoredWay {
 // fixtureInterstate builds "Interstate 90" — 10 connected ways, mostly tier 0
 // with a few tier 2-3 segments representing on-ramps, highway type "motorway".
 // Each segment is 500 m so total length = 5,000 m > MinRoadLengthM (4,828 m).
+// Uses a zigzag path so the scored (non-zero-tier) segments survive the deflection filter.
 func fixtureInterstate() []ScoredWay {
 	const (
-		name    = "Interstate 90"
-		highway = "motorway"
+		name     = "Interstate 90"
+		highway  = "motorway"
 		startLat = 44.20
 		startLon = -72.40
-		stepLat  = 0.0045 // ~500 m
+		segLen   = 500.0
+		latPerM  = 1.0 / 111000.0
+		lonPerM  = 1.0 / 78500.0
 	)
 	tiers := []int{0, 0, 2, 3, 0, 0, 0, 2, 0, 0}
 	var ways []ScoredWay
 	lat := startLat
+	lon := startLon
 	for i, tier := range tiers {
-		endLat := lat + stepLat
-		seg := makeScoredSegment(int64(200+i), tier, lat, startLon, endLat, startLon, 500.0)
+		_, weight := AssignTier(float64(radiusForTier(tier)))
+		var dLat, dLon float64
+		if i%2 == 0 {
+			dLat = segLen * 0.707 * latPerM
+			dLon = segLen * 0.707 * lonPerM
+		} else {
+			dLat = segLen * 0.707 * latPerM
+			dLon = -segLen * 0.707 * lonPerM
+		}
+		endLat := lat + dLat
+		endLon := lon + dLon
+		l := geo.Haversine(geo.Coord{Lat: lat, Lon: lon}, geo.Coord{Lat: endLat, Lon: endLon})
+		seg := ScoredSegment{
+			WayID:  int64(200 + i),
+			Tier:   tier,
+			Weight: weight,
+			Length: l,
+			Score:  l * weight,
+			Start:  geo.Coord{Lat: lat, Lon: lon},
+			End:    geo.Coord{Lat: endLat, Lon: endLon},
+		}
 		ways = append(ways, ScoredWay{
 			WayID: int64(200 + i),
 			Tags:  map[string]string{"name": name, "highway": highway},
 			Segments: []ScoredSegment{seg},
 		})
 		lat = endLat
+		lon = endLon
 	}
 	return ways
 }
 
 // fixtureRoute100 builds "Route 100" — two clusters of twisty ways separated by
 // a long straight gap (> StraightGapSplitM = 2414 m), highway type "tertiary".
-// The gap is represented by a single tier-0 segment of 2500 m.
+// The gap is represented by a single tier-0 segment of 2600 m.
 // Each cluster has 5 ways × 1,000 m = 5,000 m > MinRoadLengthM (4,828 m).
+// Uses a zigzag path so the scored segments survive the deflection filter.
 func fixtureRoute100() []ScoredWay {
 	const (
-		name    = "Route 100"
-		highway = "tertiary"
+		name     = "Route 100"
+		highway  = "tertiary"
 		startLat = 44.30
 		startLon = -72.60
-		stepLat  = 0.009 // ~1,000 m
+		segLen   = 1000.0
+		latPerM  = 1.0 / 111000.0
+		lonPerM  = 1.0 / 78500.0
 	)
 
 	var ways []ScoredWay
 	lat := startLat
+	lon := startLon
 
-	// First cluster: 5 twisty ways, each 1,000 m (total 5,000 m > MinRoadLengthM)
+	_, weight2 := AssignTier(float64(radiusForTier(2)))
+	_, weight3 := AssignTier(float64(radiusForTier(3)))
+
+	// First cluster: 5 twisty ways, each ~1,000 m (total ~5,000 m > MinRoadLengthM)
 	for i := range 5 {
-		endLat := lat + stepLat
-		seg := makeScoredSegment(int64(300+i), 2, lat, startLon, endLat, startLon, 1000.0)
+		var dLat, dLon float64
+		if i%2 == 0 {
+			dLat = segLen * 0.707 * latPerM
+			dLon = segLen * 0.707 * lonPerM
+		} else {
+			dLat = segLen * 0.707 * latPerM
+			dLon = -segLen * 0.707 * lonPerM
+		}
+		endLat := lat + dLat
+		endLon := lon + dLon
+		l := geo.Haversine(geo.Coord{Lat: lat, Lon: lon}, geo.Coord{Lat: endLat, Lon: endLon})
+		seg := ScoredSegment{
+			WayID:  int64(300 + i),
+			Tier:   2,
+			Weight: weight2,
+			Length: l,
+			Score:  l * weight2,
+			Start:  geo.Coord{Lat: lat, Lon: lon},
+			End:    geo.Coord{Lat: endLat, Lon: endLon},
+		}
 		ways = append(ways, ScoredWay{
 			WayID: int64(300 + i),
 			Tags:  map[string]string{"name": name, "highway": highway},
 			Segments: []ScoredSegment{seg},
 		})
 		lat = endLat
+		lon = endLon
 	}
 
 	// Gap: one way with a single tier-0 segment of 2600 m (> StraightGapSplitM)
-	gapEndLat := lat + 0.025 // large jump north
+	gapLen := 2600.0
+	gapEndLat := lat + gapLen*latPerM
 	gapSeg := ScoredSegment{
 		WayID:  305,
 		Tier:   0,
 		Weight: TierWeight0,
-		Length: 2600.0,
+		Length: gapLen,
 		Score:  0,
-		Start:  geo.Coord{Lat: lat, Lon: startLon},
-		End:    geo.Coord{Lat: gapEndLat, Lon: startLon},
+		Start:  geo.Coord{Lat: lat, Lon: lon},
+		End:    geo.Coord{Lat: gapEndLat, Lon: lon},
 	}
 	ways = append(ways, ScoredWay{
 		WayID:    305,
@@ -163,17 +266,37 @@ func fixtureRoute100() []ScoredWay {
 		Segments: []ScoredSegment{gapSeg},
 	})
 	lat = gapEndLat
+	// lon stays the same after the straight gap
 
-	// Second cluster: 5 more twisty ways, each 1,000 m (total 5,000 m > MinRoadLengthM)
+	// Second cluster: 5 more twisty ways, each ~1,000 m (total ~5,000 m > MinRoadLengthM)
 	for i := range 5 {
-		endLat := lat + stepLat
-		seg := makeScoredSegment(int64(306+i), 3, lat, startLon, endLat, startLon, 1000.0)
+		var dLat, dLon float64
+		if i%2 == 0 {
+			dLat = segLen * 0.707 * latPerM
+			dLon = segLen * 0.707 * lonPerM
+		} else {
+			dLat = segLen * 0.707 * latPerM
+			dLon = -segLen * 0.707 * lonPerM
+		}
+		endLat := lat + dLat
+		endLon := lon + dLon
+		l := geo.Haversine(geo.Coord{Lat: lat, Lon: lon}, geo.Coord{Lat: endLat, Lon: endLon})
+		seg := ScoredSegment{
+			WayID:  int64(306 + i),
+			Tier:   3,
+			Weight: weight3,
+			Length: l,
+			Score:  l * weight3,
+			Start:  geo.Coord{Lat: lat, Lon: lon},
+			End:    geo.Coord{Lat: endLat, Lon: endLon},
+		}
 		ways = append(ways, ScoredWay{
 			WayID: int64(306 + i),
 			Tags:  map[string]string{"name": name, "highway": highway},
 			Segments: []ScoredSegment{seg},
 		})
 		lat = endLat
+		lon = endLon
 	}
 
 	return ways
@@ -208,16 +331,56 @@ func fixtureUnnamedRoad() []ScoredWay {
 }
 
 // fixtureSpecialCharsRoad builds a road with special characters in its name.
-// Total length = 2,800 + 2,200 = 5,000 m > MinRoadLengthM (4,828 m).
+// Uses multiple short segments with zigzag bearing changes to survive the deflection filter.
+// Total length ≈ 5,600 m > MinRoadLengthM (4,828 m).
 func fixtureSpecialCharsRoad() []ScoredWay {
+	const (
+		latPerM = 1.0 / 111000.0
+		lonPerM = 1.0 / 78500.0
+		segLen  = 400.0 // 14 segs × 400m ≈ 5600m
+	)
+	_, weight2 := AssignTier(float64(radiusForTier(2)))
+	_, weight3 := AssignTier(float64(radiusForTier(3)))
+
+	segs := make([]ScoredSegment, 14)
+	lat := 44.55
+	lon := -72.85
+	for i := range 14 {
+		tier := 2
+		weight := weight2
+		if i >= 7 {
+			tier = 3
+			weight = weight3
+		}
+		var dLat, dLon float64
+		if i%2 == 0 {
+			dLat = segLen * 0.707 * latPerM
+			dLon = segLen * 0.707 * lonPerM
+		} else {
+			dLat = segLen * 0.707 * latPerM
+			dLon = -segLen * 0.707 * lonPerM
+		}
+		endLat := lat + dLat
+		endLon := lon + dLon
+		l := geo.Haversine(geo.Coord{Lat: lat, Lon: lon}, geo.Coord{Lat: endLat, Lon: endLon})
+		segs[i] = ScoredSegment{
+			WayID:  600,
+			Tier:   tier,
+			Weight: weight,
+			Length: l,
+			Score:  l * weight,
+			Start:  geo.Coord{Lat: lat, Lon: lon},
+			End:    geo.Coord{Lat: endLat, Lon: endLon},
+		}
+		lat = endLat
+		lon = endLon
+	}
+
 	return []ScoredWay{
 		{
-			WayID: 600,
-			Tags:  map[string]string{"name": "Route 9 & 20", "highway": "secondary"},
-			Segments: []ScoredSegment{
-				makeScoredSegment(600, 2, 44.55, -72.85, 44.576, -72.85, 2800.0),
-				makeScoredSegment(600, 3, 44.576, -72.85, 44.596, -72.85, 2200.0),
-			},
+			WayID:    600,
+			Tags:     map[string]string{"name": "Route 9 & 20", "highway": "secondary"},
+			Segments: segs,
 		},
 	}
 }
@@ -599,15 +762,50 @@ func TestPipelineIntegration_AllBelowMinScore(t *testing.T) {
 }
 
 // TestPipelineIntegration_SingleWayRoad verifies a single-way road produces one collection.
-// The segment is 5,000 m long to exceed MinRoadLengthM (4,828 m) and appear in KML output.
+// Uses multiple segments with bearing changes to survive the deflection filter.
+// Total length > MinRoadLengthM (4,828 m) so it appears in KML output.
 func TestPipelineIntegration_SingleWayRoad(t *testing.T) {
+	const (
+		latPerM = 1.0 / 111000.0
+		lonPerM = 1.0 / 78500.0
+		segLen  = 700.0 // 8 segs × 700m = 5600m > MinRoadLengthM
+	)
+	_, weight3 := AssignTier(float64(radiusForTier(3)))
+
+	// Build 8 segments with zigzag bearing changes
+	segs := make([]ScoredSegment, 8)
+	lat := 44.70
+	lon := -73.00
+	for i := range 8 {
+		var dLat, dLon float64
+		if i%2 == 0 {
+			dLat = segLen * 0.707 * latPerM
+			dLon = segLen * 0.707 * lonPerM
+		} else {
+			dLat = segLen * 0.707 * latPerM
+			dLon = -segLen * 0.707 * lonPerM
+		}
+		endLat := lat + dLat
+		endLon := lon + dLon
+		l := geo.Haversine(geo.Coord{Lat: lat, Lon: lon}, geo.Coord{Lat: endLat, Lon: endLon})
+		segs[i] = ScoredSegment{
+			WayID:  800,
+			Tier:   3,
+			Weight: weight3,
+			Length: l,
+			Score:  l * weight3,
+			Start:  geo.Coord{Lat: lat, Lon: lon},
+			End:    geo.Coord{Lat: endLat, Lon: endLon},
+		}
+		lat = endLat
+		lon = endLon
+	}
+
 	ways := []ScoredWay{
 		{
-			WayID: 800,
-			Tags:  map[string]string{"name": "Lone Way", "highway": "tertiary"},
-			Segments: []ScoredSegment{
-				makeScoredSegment(800, 3, 44.70, -73.00, 44.745, -73.00, 5000.0),
-			},
+			WayID:    800,
+			Tags:     map[string]string{"name": "Lone Way", "highway": "tertiary"},
+			Segments: segs,
 		},
 	}
 

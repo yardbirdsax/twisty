@@ -42,10 +42,9 @@ type scoredWayJSON struct {
 // scoreCacheEntryJSON is the on-disk format for a cached tile's scored segments.
 // Uses JSON-safe representations for floating-point values.
 type scoreCacheEntryJSON struct {
-	RawTileHash        string          `json:"raw_tile_hash"`
-	ParamsHash         string          `json:"params_hash"`
-	Ways               []scoredWayJSON `json:"ways"`
-	ZeroedByDeflection int             `json:"zeroed_by_deflection"`
+	RawTileHash string          `json:"raw_tile_hash"`
+	ParamsHash  string          `json:"params_hash"`
+	Ways        []scoredWayJSON `json:"ways"`
 }
 
 // ScoreCacheEntry is the on-disk format for a cached tile's scored segments.
@@ -86,46 +85,45 @@ func (c *ScoreCache) ClearAll() error {
 }
 
 // Read loads a cache entry and validates both hashes. Returns the cached
-// scored ways, the zeroed-by-deflection count, and true if valid, or nil, 0,
-// and false if the cache misses.
-func (c *ScoreCache) Read(t Tile, rawTileData []byte) ([]ScoredWay, int, bool) {
+// scored ways and true if valid, or nil and false if the cache misses.
+func (c *ScoreCache) Read(t Tile, rawTileData []byte) ([]ScoredWay, bool) {
 	if !c.Has(t) {
-		return nil, 0, false
+		return nil, false
 	}
 
 	data, err := os.ReadFile(c.Path(t))
 	if err != nil {
-		return nil, 0, false
+		return nil, false
 	}
 
 	var entry scoreCacheEntryJSON
 	if err := json.Unmarshal(data, &entry); err != nil {
-		return nil, 0, false
+		return nil, false
 	}
 
 	if entry.RawTileHash != hashBytes(rawTileData) {
-		return nil, 0, false
+		return nil, false
 	}
 	if entry.ParamsHash != ScoringParamsHash() {
-		return nil, 0, false
+		return nil, false
 	}
 
 	ways := scoredWaysFromJSON(entry.Ways)
-	return ways, entry.ZeroedByDeflection, true
+	return ways, true
 }
 
-// Write stores scored ways along with the current raw tile hash, params hash,
-// and the zeroed-by-deflection count.
-func (c *ScoreCache) Write(t Tile, rawTileData []byte, ways []ScoredWay, zeroedByDeflection int) error {
+// Write stores scored ways along with the current raw tile hash and params hash.
+// Deflection filtering is applied post-aggregation (after assembly), so raw
+// scored ways are stored here without deflection applied.
+func (c *ScoreCache) Write(t Tile, rawTileData []byte, ways []ScoredWay) error {
 	if err := c.EnsureDir(); err != nil {
 		return fmt.Errorf("ensure dir: %w", err)
 	}
 
 	entry := scoreCacheEntryJSON{
-		RawTileHash:        hashBytes(rawTileData),
-		ParamsHash:         ScoringParamsHash(),
-		Ways:               scoredWaysToJSON(ways),
-		ZeroedByDeflection: zeroedByDeflection,
+		RawTileHash: hashBytes(rawTileData),
+		ParamsHash:  ScoringParamsHash(),
+		Ways:        scoredWaysToJSON(ways),
 	}
 
 	data, err := json.Marshal(entry)

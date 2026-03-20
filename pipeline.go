@@ -12,19 +12,17 @@ import (
 
 // tileResult holds the output of processing a single tile.
 type tileResult struct {
-	ways      []quality.ScoredWay
-	zeroed    int
-	wayCount  int
-	segCount  int
-	cacheHit  bool
+	ways     []quality.ScoredWay
+	wayCount int
+	segCount int
+	cacheHit bool
 }
 
 // pipelineStats accumulates aggregate statistics from tile processing.
 type pipelineStats struct {
-	cacheHits   atomic.Int64
-	totalWays   atomic.Int64
-	totalSegs   atomic.Int64
-	totalZeroed atomic.Int64
+	cacheHits atomic.Int64
+	totalWays atomic.Int64
+	totalSegs atomic.Int64
 }
 
 // tileProcessorFunc is the function signature for processing a single tile.
@@ -135,7 +133,6 @@ func processTilesConcurrentlyWith(
 		}
 		stats.totalWays.Add(int64(res.wayCount))
 		stats.totalSegs.Add(int64(res.segCount))
-		stats.totalZeroed.Add(int64(res.zeroed))
 
 		for _, w := range res.ways {
 			name := w.Tags["name"]
@@ -195,7 +192,7 @@ func processSingleTile(
 	}
 
 	if !noCache {
-		if cachedWays, zeroed, hit := scoreCache.Read(tile, rawData); hit {
+		if cachedWays, hit := scoreCache.Read(tile, rawData); hit {
 			logger.Debug("score cache hit", "south", tile.South, "west", tile.West)
 			segCount := 0
 			for _, w := range cachedWays {
@@ -203,7 +200,6 @@ func processSingleTile(
 			}
 			return &tileResult{
 				ways:     cachedWays,
-				zeroed:   zeroed,
 				wayCount: len(cachedWays),
 				segCount: segCount,
 				cacheHit: true,
@@ -219,13 +215,12 @@ func processSingleTile(
 
 	result := quality.RunScorePipeline(ways)
 
-	if err := scoreCache.Write(tile, rawData, result.ScoredWays, result.ZeroedByDeflection); err != nil {
+	if err := scoreCache.Write(tile, rawData, result.ScoredWays); err != nil {
 		logger.Warn("failed to write score cache", "south", tile.South, "west", tile.West, "error", err)
 	}
 
 	return &tileResult{
 		ways:     result.ScoredWays,
-		zeroed:   result.ZeroedByDeflection,
 		wayCount: len(result.ScoredWays),
 		segCount: result.TotalSegments,
 		cacheHit: false,
@@ -337,7 +332,18 @@ func processNameGroup(name string, namedWays []quality.ScoredWay) ([]quality.Roa
 
 	var nameCollections []quality.RoadCollection
 	for _, component := range components {
-		ordered := quality.OrderWays(component)
+		// Deep-copy the component's ways so that UnflattenWaySegments writes to
+		// freshly allocated segment slices, preventing data races when multiple
+		// goroutines process groups whose input ways share backing arrays.
+		componentCopy := quality.DeepCopyWays(component)
+		ordered := quality.OrderWays(componentCopy)
+
+		// Apply deflection filter on the full assembled chain before splitting.
+		// This gives the 2400m look-ahead window cross-way-boundary visibility.
+		flatSegs := quality.FlattenWaySegments(ordered)
+		quality.DeflectionFilterSegments(flatSegs)
+		quality.UnflattenWaySegments(ordered, flatSegs)
+
 		segGroups := quality.SplitAtStraightGaps(ordered, quality.StraightGapSplitM)
 
 		for _, segs := range segGroups {

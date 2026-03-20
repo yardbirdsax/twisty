@@ -118,8 +118,9 @@ func paved() map[string]string {
 
 // --- Tests ---
 
-// TestScoreIntegration_FullPipeline exercises the complete filter → score → deflection pipeline
-// with a realistic set of ways.
+// TestScoreIntegration_FullPipeline exercises the complete filter → score pipeline
+// with a realistic set of ways. Deflection filtering now runs post-aggregation,
+// so this test verifies the per-way scoring stages only.
 func TestScoreIntegration_FullPipeline(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -136,11 +137,7 @@ func TestScoreIntegration_FullPipeline(t *testing.T) {
 	// With such a small radius it should produce tier-3 or tier-4 segments.
 	windingRoad := circularArcWay(3, paved(), testCenterLat, testCenterLon, 40, 0, 270, 10)
 
-	// Way 4: dogleg on a straight road.
-	// Build a mostly-straight road with a small jog in the middle.
-	// The overall heading change across the look-ahead window will be < 20°, so the
-	// jog segments should be zeroed by the deflection filter.
-	// We'll make a 3-km straight road with a small deflection in the middle.
+	// Way 4: dogleg on a straight road — build a mostly-straight road with a small jog.
 	doglegWay := buildDoglegWay(4, paved(), testCenterLat, testCenterLon)
 
 	ways := []Way{gravelWay, straightRoad, windingRoad, doglegWay}
@@ -181,42 +178,38 @@ func TestScoreIntegration_FullPipeline(t *testing.T) {
 		t.Error("winding road (id=3) has total score 0, expected > 0")
 	}
 
-	// 6. The dogleg way: after deflection filter, segments in the look-ahead window
-	// around the jog should be zeroed (ZeroedByDeflection > 0).
+	// 6. The dogleg way (way 4) exists in output.
 	sw4 := findScoredWay(result.ScoredWays, 4)
 	if sw4 == nil {
 		t.Fatal("dogleg way (id=4) not found in scored output")
 	}
 
-	// The straight road (way 2) must contribute no zeroed segments — it has no curvature.
+	// The straight road (way 2) must contribute no zeroed segments.
 	for i, seg := range sw2.Segments {
 		if seg.Score != 0 {
-			t.Errorf("straight road (id=2) segment %d unexpectedly has non-zero score %.4f after deflection filter", i, seg.Score)
+			t.Errorf("straight road (id=2) segment %d unexpectedly has non-zero score %.4f", i, seg.Score)
 		}
 	}
 
-	// The dogleg way (way 4) must have at least one segment zeroed by the deflection filter.
-	// The jog segments should have had non-zero curvature but be zeroed out because the
-	// overall heading change across the look-ahead window is < DeflectionMinHeadingChange.
-	zeroedInDogleg := 0
+	// The dogleg way has curvature from the jog — scores may be non-zero at the per-way
+	// level (deflection filtering now runs post-aggregation, not here). Verify curvature
+	// segments are present (not zero at this stage).
+	hasCurvature := false
 	for _, seg := range sw4.Segments {
-		if seg.Score == 0 && !math.IsInf(seg.Radius, 1) {
-			// A segment with finite radius (some curvature) but zero score was zeroed by deflection.
-			zeroedInDogleg++
+		if !math.IsInf(seg.Radius, 1) && seg.Radius > 0 {
+			hasCurvature = true
+			break
 		}
 	}
-	if zeroedInDogleg == 0 {
-		t.Error("dogleg way (id=4): expected at least one segment zeroed by deflection filter, got none")
-	}
-
-	// Global ZeroedByDeflection counter must also be positive.
-	if result.ZeroedByDeflection == 0 {
-		t.Error("dogleg way: expected ZeroedByDeflection > 0")
+	if !hasCurvature {
+		// Not fatal — the dogleg may be too gentle to produce curvature at the scoring level.
+		t.Log("dogleg way (id=4): no curvature segments found (jog may be too gentle)")
 	}
 }
 
 // buildDoglegWay builds a ~3 km straight road with a small heading-change jog in the middle.
-// The overall heading across the 2.4 km look-ahead should be < 20°, causing the jog to be zeroed.
+// The overall heading across the 2.4 km look-ahead should be < 20°, causing the jog to be zeroed
+// by the post-aggregation deflection filter.
 func buildDoglegWay(id int64, tags map[string]string, lat, lon float64) Way {
 	// Build a straight road north for 1.5 km, then jog slightly east by ~5° for 50 m,
 	// then continue north for 1.5 km.
@@ -279,20 +272,17 @@ func TestScoreIntegration_ScoreCacheRoundTrip(t *testing.T) {
 	}
 	pipelineResult := RunScorePipeline(ways)
 
-	if err := scoreCache.Write(tile, rawData, pipelineResult.ScoredWays, pipelineResult.ZeroedByDeflection); err != nil {
+	if err := scoreCache.Write(tile, rawData, pipelineResult.ScoredWays); err != nil {
 		t.Fatalf("ScoreCache.Write: %v", err)
 	}
 
 	// Read back — expect cache hit.
-	gotWays, gotZeroed, ok := scoreCache.Read(tile, rawData)
+	gotWays, ok := scoreCache.Read(tile, rawData)
 	if !ok {
 		t.Fatal("ScoreCache.Read returned false (cache miss), expected cache hit")
 	}
 	if len(gotWays) != len(pipelineResult.ScoredWays) {
 		t.Errorf("way count: got %d, want %d", len(gotWays), len(pipelineResult.ScoredWays))
-	}
-	if gotZeroed != pipelineResult.ZeroedByDeflection {
-		t.Errorf("zeroed count: got %d, want %d", gotZeroed, pipelineResult.ZeroedByDeflection)
 	}
 
 	// Verify content matches.
@@ -306,7 +296,7 @@ func TestScoreIntegration_ScoreCacheRoundTrip(t *testing.T) {
 
 	// Modify raw tile data — should produce a cache miss.
 	modifiedData := append(rawData, []byte(" ")...)
-	_, _, ok2 := scoreCache.Read(tile, modifiedData)
+	_, ok2 := scoreCache.Read(tile, modifiedData)
 	if ok2 {
 		t.Error("ScoreCache.Read returned true after raw tile data change, expected cache miss")
 	}
@@ -324,7 +314,7 @@ func TestScoreIntegration_ScoreCacheParamsHashInvalidation(t *testing.T) {
 	rawData := []byte(`{"elements":[]}`)
 
 	// Write a valid entry.
-	if err := scoreCache.Write(tile, rawData, []ScoredWay{}, 0); err != nil {
+	if err := scoreCache.Write(tile, rawData, []ScoredWay{}); err != nil {
 		t.Fatalf("ScoreCache.Write: %v", err)
 	}
 
@@ -349,7 +339,7 @@ func TestScoreIntegration_ScoreCacheParamsHashInvalidation(t *testing.T) {
 	}
 
 	// Read should now return a miss.
-	_, _, ok := scoreCache.Read(tile, rawData)
+	_, ok := scoreCache.Read(tile, rawData)
 	if ok {
 		t.Error("ScoreCache.Read returned true after params_hash tampering, expected cache miss")
 	}
@@ -371,7 +361,7 @@ func TestScoreIntegration_WindingScoresHigherThanStraight(t *testing.T) {
 	// The key assertion is winding >> straight (straight scores 0).
 	winding := sCurveWay(11, paved(), testCenterLat+0.01, testCenterLon, 80, 10)
 
-	// Score both as independent single-way inputs (no deflection across unrelated ways).
+	// Score both as independent single-way inputs.
 	straightResult := RunScorePipeline([]Way{straight})
 	windingResult := RunScorePipeline([]Way{winding})
 

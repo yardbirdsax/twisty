@@ -395,7 +395,6 @@ func runScore(args []string, stderr io.Writer) error {
 	fmt.Fprintf(stderr, "  Cache hits:       %d\n", stats.cacheHits.Load())
 	fmt.Fprintf(stderr, "  Ways scored:      %d\n", stats.totalWays.Load())
 	fmt.Fprintf(stderr, "  Segments scored:  %d\n", stats.totalSegs.Load())
-	fmt.Fprintf(stderr, "  Zeroed by deflection: %d\n", stats.totalZeroed.Load())
 
 	// Phase B: Concurrent per-name-group processing.
 	collections, err := processNameGroupsConcurrently(context.Background(), grouped)

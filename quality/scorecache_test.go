@@ -55,16 +55,13 @@ func TestScoreCache_WriteAndRead(t *testing.T) {
 	rawData := []byte(`{"raw":"tile data"}`)
 	ways := sampleScoredWays()
 
-	if err := c.Write(tile, rawData, ways, 3); err != nil {
+	if err := c.Write(tile, rawData, ways); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
-	got, zeroed, ok := c.Read(tile, rawData)
+	got, ok := c.Read(tile, rawData)
 	if !ok {
 		t.Fatal("Read returned false, expected true")
-	}
-	if zeroed != 3 {
-		t.Errorf("zeroed: got %d, want 3", zeroed)
 	}
 
 	if len(got) != len(ways) {
@@ -114,11 +111,11 @@ func TestScoreCache_TagsRoundTrip(t *testing.T) {
 	rawData := []byte(`{"raw":"tile data"}`)
 	ways := sampleScoredWays()
 
-	if err := c.Write(tile, rawData, ways, 0); err != nil {
+	if err := c.Write(tile, rawData, ways); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
-	got, _, ok := c.Read(tile, rawData)
+	got, ok := c.Read(tile, rawData)
 	if !ok {
 		t.Fatal("Read returned false, expected true")
 	}
@@ -145,12 +142,12 @@ func TestScoreCache_RawTileDataChanged(t *testing.T) {
 	rawData := []byte(`{"raw":"tile data"}`)
 	ways := sampleScoredWays()
 
-	if err := c.Write(tile, rawData, ways, 0); err != nil {
+	if err := c.Write(tile, rawData, ways); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
 	differentData := []byte(`{"raw":"different tile data"}`)
-	got, _, ok := c.Read(tile, differentData)
+	got, ok := c.Read(tile, differentData)
 	if ok {
 		t.Error("Read returned true, expected false (raw tile data changed)")
 	}
@@ -179,7 +176,7 @@ func TestScoreCache_ParamsHashChanged(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	got, _, ok := c.Read(tile, rawData)
+	got, ok := c.Read(tile, rawData)
 	if ok {
 		t.Error("Read returned true, expected false (params hash mismatch)")
 	}
@@ -193,7 +190,7 @@ func TestScoreCache_CacheMiss_NoFile(t *testing.T) {
 	tile := sampleTile()
 	rawData := []byte(`{"raw":"tile data"}`)
 
-	got, _, ok := c.Read(tile, rawData)
+	got, ok := c.Read(tile, rawData)
 	if ok {
 		t.Error("Read returned true on empty cache, expected false")
 	}
@@ -213,7 +210,7 @@ func TestScoreCache_ClearAll(t *testing.T) {
 	}
 
 	for _, tile := range tiles {
-		if err := c.Write(tile, rawData, ways, 0); err != nil {
+		if err := c.Write(tile, rawData, ways); err != nil {
 			t.Fatalf("Write: %v", err)
 		}
 	}
@@ -234,7 +231,7 @@ func TestScoreCache_ClearAll(t *testing.T) {
 		if c.Has(tile) {
 			t.Errorf("expected cache to NOT have tile %v after ClearAll", tile)
 		}
-		got, _, ok := c.Read(tile, rawData)
+		got, ok := c.Read(tile, rawData)
 		if ok || got != nil {
 			t.Errorf("Read after ClearAll should return nil,false for tile %v", tile)
 		}
@@ -247,7 +244,7 @@ func TestScoreCache_AtomicWrite(t *testing.T) {
 	rawData := []byte(`{"raw":"tile data"}`)
 	ways := sampleScoredWays()
 
-	if err := c.Write(tile, rawData, ways, 0); err != nil {
+	if err := c.Write(tile, rawData, ways); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 

@@ -300,6 +300,13 @@ func Aggregate(ways []ScoredWay) []RoadCollection {
 
 		for _, component := range components {
 			ordered := OrderWays(component)
+
+			// Apply deflection filter on the full assembled chain before splitting.
+			// This gives the 2400m look-ahead window cross-way-boundary visibility.
+			flatSegs := FlattenWaySegments(ordered)
+			DeflectionFilterSegments(flatSegs)
+			UnflattenWaySegments(ordered, flatSegs)
+
 			segGroups := SplitAtStraightGaps(ordered, StraightGapSplitM)
 
 			for _, segs := range segGroups {
@@ -355,6 +362,51 @@ func buildRoadCollection(name string, wayByID map[int64]ScoredWay, segs []Scored
 	}
 
 	return rc
+}
+
+// DeepCopyWays returns a deep copy of the given ways, with each way's Segments
+// slice freshly allocated. This prevents races when multiple goroutines process
+// groups whose ways share segment slice backing arrays (e.g. when the same
+// input map is passed to concurrent processNameGroup calls in tests).
+func DeepCopyWays(ways []ScoredWay) []ScoredWay {
+	result := make([]ScoredWay, len(ways))
+	for i, w := range ways {
+		segs := make([]ScoredSegment, len(w.Segments))
+		copy(segs, w.Segments)
+		result[i] = ScoredWay{
+			WayID:    w.WayID,
+			Tags:     w.Tags,
+			Segments: segs,
+		}
+	}
+	return result
+}
+
+// FlattenWaySegments returns all segments from ordered ways as a single slice.
+// Each segment's WayID is set from its parent way if not already set.
+func FlattenWaySegments(ways []ScoredWay) []ScoredSegment {
+	var all []ScoredSegment
+	for _, w := range ways {
+		for _, seg := range w.Segments {
+			if seg.WayID == 0 {
+				seg.WayID = w.WayID
+			}
+			all = append(all, seg)
+		}
+	}
+	return all
+}
+
+// UnflattenWaySegments writes a flat segment slice back into the ordered ways,
+// preserving the original segment count per way.
+func UnflattenWaySegments(ways []ScoredWay, flat []ScoredSegment) {
+	idx := 0
+	for i := range ways {
+		for j := range ways[i].Segments {
+			ways[i].Segments[j] = flat[idx]
+			idx++
+		}
+	}
 }
 
 // reverseWay returns a copy of the ScoredWay with its segments reversed

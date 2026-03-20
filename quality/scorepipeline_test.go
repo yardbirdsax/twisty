@@ -21,31 +21,16 @@ func straightWayGeometry(origin geo.Coord, n int) []geo.Coord {
 	return coords
 }
 
-// curvyWayGeometry returns a geometry that produces non-zero curvature scores
-// and guarantees ZeroedByDeflection == 0 for the entire way.
+// curvyWayGeometry returns a geometry that produces non-zero curvature scores.
 //
 // Structure:
 //  1. A 6-node zigzag (5 segments) with tight turns (~20 m steps) that produce
 //     non-zero curvature scores (circumradii < 60 m, tier >= 3).
-//  2. A single 300 m north step followed by a single 300 m west step. The wide
-//     90° turn has legs of 300 m each, giving a circumradius ~212 m (tier 0),
-//     so no curvature score is assigned at the junction.
-//  3. A 50-node west-going tail at 50 m spacing (~2500 m, all tier 0 due to
-//     collinear geometry).
-//
-// The long west tail ensures that for every non-zero-scored segment in the
-// zigzag, the deflection look-ahead window (2400 m) terminates inside the west
-// tail. The last segment in each window faces west (270°), which differs from
-// all zigzag-segment bearings (N, E, NE, SE) by at least 90°, so every
-// non-zero segment passes the deflection filter and ZeroedByDeflection == 0.
 func curvyWayGeometry(origin geo.Coord) []geo.Coord {
 	const (
-		step     = 20.0
-		bigStep  = 300.0
-		tailStep = 50.0
-		tailN    = 50
-		latPerM  = 1.0 / 111000.0
-		lonPerM  = 1.0 / 78500.0
+		step    = 20.0
+		latPerM = 1.0 / 111000.0
+		lonPerM = 1.0 / 78500.0
 	)
 	latStep := step * latPerM
 	lonStep := step * lonPerM
@@ -60,32 +45,7 @@ func curvyWayGeometry(origin geo.Coord) []geo.Coord {
 		{Lat: origin.Lat + latStep, Lon: origin.Lon + 4*lonStep},   // SE
 	}
 
-	// Wide-turn waypoints: 300 m N then 300 m W. The junction circumradius
-	// is ~212 m (≥ 175 m threshold), so these segments score tier 0.
-	zigEnd := zigzag[len(zigzag)-1]
-	turnNorth := geo.Coord{
-		Lat: zigEnd.Lat + bigStep*latPerM,
-		Lon: zigEnd.Lon,
-	}
-	turnWest := geo.Coord{
-		Lat: turnNorth.Lat,
-		Lon: turnNorth.Lon - bigStep*lonPerM,
-	}
-
-	// West tail: 50 nodes at 50 m spacing (~2500 m), all tier 0.
-	tail := make([]geo.Coord, tailN)
-	for i := range tailN {
-		tail[i] = geo.Coord{
-			Lat: turnWest.Lat,
-			Lon: turnWest.Lon - float64(i+1)*tailStep*lonPerM,
-		}
-	}
-
-	result := make([]geo.Coord, 0, len(zigzag)+2+tailN)
-	result = append(result, zigzag...)
-	result = append(result, turnNorth, turnWest)
-	result = append(result, tail...)
-	return result
+	return zigzag
 }
 
 func TestRunScorePipeline_EndToEnd(t *testing.T) {
@@ -162,6 +122,7 @@ func TestRunScorePipeline_EndToEnd(t *testing.T) {
 	}
 
 	// The curvy way should have at least one non-zero scored segment.
+	// (Deflection filtering now runs post-aggregation, not here.)
 	curvyHasScore := false
 	for _, seg := range curvyWay.Segments {
 		if seg.Score > 0 {
@@ -180,13 +141,6 @@ func TestRunScorePipeline_EndToEnd(t *testing.T) {
 	}
 	if result.TotalSegments != totalSegs {
 		t.Errorf("TotalSegments = %d, want %d", result.TotalSegments, totalSegs)
-	}
-
-	// ZeroedByDeflection should be exactly 0: the curvy way survives the
-	// deflection filter and the straight way has all-zero scores so nothing
-	// is zeroed by it.
-	if result.ZeroedByDeflection != 0 {
-		t.Errorf("ZeroedByDeflection = %d, want 0", result.ZeroedByDeflection)
 	}
 }
 
@@ -234,9 +188,6 @@ func TestRunScorePipeline_EmptyInput(t *testing.T) {
 	if result.TotalSegments != 0 {
 		t.Errorf("TotalSegments = %d, want 0", result.TotalSegments)
 	}
-	if result.ZeroedByDeflection != 0 {
-		t.Errorf("ZeroedByDeflection = %d, want 0", result.ZeroedByDeflection)
-	}
 	if len(result.ScoredWays) != 0 {
 		t.Errorf("len(ScoredWays) = %d, want 0", len(result.ScoredWays))
 	}
@@ -277,8 +228,5 @@ func TestRunScorePipeline_AllFiltered(t *testing.T) {
 	}
 	if result.TotalSegments != 0 {
 		t.Errorf("TotalSegments = %d, want 0", result.TotalSegments)
-	}
-	if result.ZeroedByDeflection != 0 {
-		t.Errorf("ZeroedByDeflection = %d, want 0", result.ZeroedByDeflection)
 	}
 }

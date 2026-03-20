@@ -2,24 +2,18 @@ package quality
 
 import "github.com/yardbirdsax/twisty/geo"
 
-// DeflectionFilter zeroes out curvature scores for segments that are minor
-// heading deviations in an otherwise straight road. It modifies the scored
-// segments in place.
+// DeflectionFilterSegments zeroes out curvature scores for segments that are
+// minor heading deviations in an otherwise straight section of road. It
+// modifies the segments in place.
 //
-// The algorithm uses a sliding look-ahead window of DeflectionLookAheadM
-// (2400 m, from the Curvature project). For each segment with a non-zero
-// score, it accumulates segments forward until the cumulative distance reaches
-// 2400 m or the end of the way. If the cumulative heading change across the
-// window — the sum of absolute bearing differences between every consecutive
-// pair of segments — is less than DeflectionMinHeadingChange (20°, from the
-// Curvature project), all segments in the window are zeroed out.
-func DeflectionFilter(sw *ScoredWay) {
-	segs := sw.Segments
+// This function is intended to be called on the assembled, ordered segment
+// chain of a road (after connected-component analysis and way ordering) so
+// that the 2400 m look-ahead window can see across OSM way boundaries.
+func DeflectionFilterSegments(segs []ScoredSegment) {
 	n := len(segs)
 	i := 0
 	for i < n {
-		seg := segs[i]
-		if seg.Score == 0 {
+		if segs[i].Score == 0 {
 			i++
 			continue
 		}
@@ -31,7 +25,6 @@ func DeflectionFilter(sw *ScoredWay) {
 			cumDist += segs[windowEnd].Length
 			windowEnd++
 		}
-		// windowEnd is exclusive: window covers segs[i..windowEnd-1].
 
 		// Compute cumulative heading change across the window.
 		cumBearingChange := 0.0
@@ -47,19 +40,9 @@ func DeflectionFilter(sw *ScoredWay) {
 				segs[j].Tier = 0
 				segs[j].Weight = 0
 			}
-			// Advance past the zeroed window to avoid double-processing.
 			i = windowEnd
 		} else {
-			// Window passed: advance one segment so interior scored
-			// segments can anchor their own look-ahead evaluation.
 			i++
 		}
-	}
-}
-
-// ApplyDeflectionFilter applies the deflection filter to all scored ways.
-func ApplyDeflectionFilter(ways []ScoredWay) {
-	for i := range ways {
-		DeflectionFilter(&ways[i])
 	}
 }
