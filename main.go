@@ -270,11 +270,15 @@ func runFetch(args []string) {
 // termProgressBar renders a progress bar to w using carriage-return overwriting.
 // It implements quality.ProgressReporter.
 type termProgressBar struct {
-	w       io.Writer
-	total   int
-	current int
-	cached  int
-	fetched int
+	w                  io.Writer
+	total              int
+	current            int
+	cached             int
+	fetched            int
+	retries            int
+	lastFetchDuration  time.Duration
+	totalFetchDuration time.Duration
+	fetchCount         int
 }
 
 func (b *termProgressBar) SetTotal(n int) {
@@ -297,8 +301,16 @@ func (b *termProgressBar) Done() {
 	fmt.Fprintln(b.w)
 }
 
-func (b *termProgressBar) Retry()                        {}
-func (b *termProgressBar) FetchDuration(_ time.Duration) {}
+func (b *termProgressBar) Retry() {
+	b.retries++
+	b.render()
+}
+
+func (b *termProgressBar) FetchDuration(d time.Duration) {
+	b.lastFetchDuration = d
+	b.totalFetchDuration += d
+	b.fetchCount++
+}
 
 func (b *termProgressBar) render() {
 	const width = 30
@@ -312,8 +324,28 @@ func (b *termProgressBar) render() {
 	} else {
 		bar = strings.Repeat("=", filled-1) + ">" + strings.Repeat(" ", width-filled)
 	}
-	fmt.Fprintf(b.w, "\rFetching tiles: [%s] %d/%d (%d cached, %d fetched)",
-		bar, b.current, b.total, b.cached, b.fetched)
+	fmt.Fprintf(b.w, "\rFetching tiles: [%s] %d/%d (%s)",
+		bar, b.current, b.total, b.statsString())
+}
+
+func (b *termProgressBar) statsString() string {
+	parts := []string{
+		fmt.Sprintf("%d cached", b.cached),
+		fmt.Sprintf("%d fetched", b.fetched),
+	}
+	if b.retries > 0 {
+		noun := "retries"
+		if b.retries == 1 {
+			noun = "retry"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", b.retries, noun))
+	}
+	if b.fetchCount > 0 {
+		avg := time.Duration(int64(b.totalFetchDuration) / int64(b.fetchCount))
+		parts = append(parts, fmt.Sprintf("last: %.1fs", b.lastFetchDuration.Seconds()))
+		parts = append(parts, fmt.Sprintf("avg: %.1fs", avg.Seconds()))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // isTerminal reports whether the given file is connected to a terminal.
