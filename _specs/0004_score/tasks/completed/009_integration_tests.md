@@ -75,3 +75,70 @@ Task 007 or Task 008 — requires the full pipeline to be wired.
 - Use `bytes.Buffer` as the `io.Writer` for KML output to avoid temp files.
 - Consider using `encoding/xml` to parse and verify the output rather than string matching — it's more robust.
 - The test fixtures should use geographically plausible coordinates (e.g., Vermont area) so that distance calculations produce realistic results.
+
+---
+# Task 009 Review: Integration Tests
+
+**Reviewer:** Senior Software Engineer
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implements end-to-end integration tests for the stages 5-7 pipeline (Aggregate, ApplyPenalties, WriteKML) using synthetic road fixture data. The previous review identified three MUST FIX issues; all three have been addressed in the current revision. All tests pass including with the `-race` flag.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/pipeline_integration_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/penalty.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/kml.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scoring_params.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| Integration tests exercise the full stages 5-7 pipeline | PASS |
+| Test fixtures represent realistic road scenarios | PASS |
+| Aggregation correctly groups, splits, and scores | PASS |
+| Penalties correctly reduce motorway/trunk scores | PASS |
+| KML output is valid XML with correct structure | PASS |
+| Sort order, filtering, and edge cases verified | PASS |
+| All tests pass including with `-race` flag | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test -short ./...                                    # PASS — all packages
+go vet ./...                                            # no issues
+go test -race ./quality/...                             # PASS — no race conditions
+go test -v -run TestPipelineIntegration ./quality/...  # all subtests PASS
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met. The three issues from the prior review (MinScoreFilter not asserting exclusion occurred, FullPipeline not verifying folder count or road names, Interstate90 penalty sub-test silently skipping its assertion) have all been resolved. Tests pass with `-race`.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **NEEDS REVISION**: One or more issues found. Address all MUST FIX items before re-review.
