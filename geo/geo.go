@@ -4,8 +4,8 @@ import "math"
 
 // Coord represents a geographic coordinate.
 type Coord struct {
-	Lat float64
-	Lon float64
+	Lat float64 `json:"lat"`
+	Lon float64 `json:"lon"`
 }
 
 // Haversine returns the great-circle distance in meters between two coordinates.

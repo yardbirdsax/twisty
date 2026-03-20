@@ -8,19 +8,19 @@ import (
 
 // ScoredSegment holds the curvature score for a single segment between two nodes.
 type ScoredSegment struct {
-	Start  geo.Coord
-	End    geo.Coord
-	Radius float64 // circumradius in meters; +Inf for straight segments
-	Tier   int
-	Weight float64
-	Length float64 // Haversine distance in meters
-	Score  float64 // Length * Weight
+	Start  geo.Coord `json:"start"`
+	End    geo.Coord `json:"end"`
+	Radius float64   `json:"radius"` // circumradius in meters; +Inf for straight segments
+	Tier   int       `json:"tier"`
+	Weight float64   `json:"weight"`
+	Length float64   `json:"length"` // Haversine distance in meters
+	Score  float64   `json:"score"`  // Length * Weight
 }
 
 // ScoredWay holds scored segments for a single OSM way.
 type ScoredWay struct {
-	WayID    int64
-	Segments []ScoredSegment
+	WayID    int64           `json:"way_id"`
+	Segments []ScoredSegment `json:"segments"`
 }
 
 // ScoreWay computes curvature scores for all segments in a way.

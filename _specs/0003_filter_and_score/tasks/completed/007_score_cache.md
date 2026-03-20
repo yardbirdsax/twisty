@@ -112,3 +112,68 @@ func hashBytes(data []byte) string
 - The `ScoreCache` is structurally very similar to `TileCache` — follow the same patterns for `EnsureDir`, `Path`, atomic writes, etc.
 - `geo.Coord` may need JSON tags added — this is a small, safe change. Check the existing struct first.
 - `+Inf` does not serialize cleanly in JSON. Handle this by encoding infinite radius as `-1` or a sentinel value in JSON, and converting back on read. Alternatively, use `math.MaxFloat64` as the sentinel.
+
+---
+# Task 007 Review: Score Cache
+
+**Reviewer:** Senior Software Engineer Agent
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements a per-tile score cache that persists the output of the hard filter, scoring, and deflection filter stages. Cache entries are keyed by tile coordinates and invalidated when either the raw tile data hash or the scoring parameters hash changes. The implementation uses a private shadow JSON type hierarchy (`scoredSegmentJSON`, `scoredWayJSON`, `scoreCacheEntryJSON`) to safely round-trip `+Inf` radius values via a `-1` sentinel, and follows the atomic write pattern established by `TileCache`.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scorecache.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scorecache_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/curvature.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/geo/geo.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch.go` | Reviewed (TileCache pattern reference) |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `quality/scorecache.go` exists with `ScoreCache`, `ScoreCacheEntry`, and all methods | PASS |
+| `quality/scorecache_test.go` passes with `go test ./quality/...` | PASS |
+| Cache hits return stored data when both hashes match | PASS |
+| Cache misses when raw tile data changes | PASS |
+| Cache misses when params hash doesn't match | PASS |
+| `ClearAll` removes all cache entries | PASS |
+| Writes are atomic (temp file → rename) | PASS |
+| JSON serialization round-trips correctly for all scored segment fields | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # PASS — all packages including quality (9.7s)
+make lint   # PASS — go vet ./... clean
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria pass. The test suite is clean, lint is clear, atomic writes are correctly implemented with a defer-based temp-file cleanup guard, `+Inf` radius round-trips correctly through the `-1` sentinel, and the exported `ScoreCacheEntry` type is present alongside the private serialization shadow types.
