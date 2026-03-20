@@ -83,3 +83,63 @@ None — this is a standalone utility. Can be done in parallel with Task 002.
 - Use short delays in tests (e.g., 10ms initial) to keep test suite fast.
 - The PRD specifies 3 retries with 2s/4s/8s delays. The caller will pass `maxRetries=3, initialDelay=2*time.Second`. The helper itself is parameterized.
 - This helper will be used in Task 005 when implementing the per-tile fetch.
+
+---
+# Task 003 Review: Retry Helper with Exponential Backoff
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-19
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements a parameterized `retryWithBackoff` helper in `quality/retry.go` with exponential backoff, non-retryable error short-circuiting, and context cancellation support. All six required unit tests are present in `quality/retry_test.go`. Uses `time.NewTimer` with explicit `Stop()` to avoid timer leaks on context cancellation.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/retry.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/retry_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `retryWithBackoff` function implemented with exponential backoff | PASS |
+| Non-retryable errors cause immediate return without retry | PASS |
+| Context cancellation interrupts the retry loop | PASS |
+| Delays double on each retry attempt | PASS |
+| All unit tests pass | PASS |
+| Function is generic (not coupled to HTTP/Overpass logic) | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages PASS (quality: 0.598s)
+make lint   # no issues
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria pass. Implementation is correct, uses `time.NewTimer` with `Stop()` to prevent timer leaks, and the full test suite passes with no linter issues.
