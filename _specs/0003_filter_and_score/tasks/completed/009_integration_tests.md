@@ -80,3 +80,69 @@ Write integration tests that exercise the full scoring pipeline end-to-end: tile
 - The circular arc helper is particularly useful — it lets you create ways with a known circumradius to verify tier assignment.
 - Keep test ways small (5–20 nodes) to keep tests fast and readable.
 - These tests do NOT require network access — all data is synthetic or from fixture files.
+
+---
+# Task 009 Review: Integration Tests
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implements `quality/score_integration_test.go` with five integration tests that exercise the full scoring pipeline (hard filter → curvature scoring → deflection filter → score cache) using synthetic geometric fixtures. All post-review changes from the prior review cycle have been applied: `arcRadius` is 50 m, `sCurveWay` produces a genuine two-arc S-curve, deflection assertions are scoped to the dogleg way at the segment level, and geometry helpers use `geo.DestinationPoint` from the `geo` package.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/score_integration_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scorepipeline.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scorecache.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/curvature.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/deflection.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scoring_params.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/geo/geo.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `quality/score_integration_test.go` passes with `go test ./quality/...` | PASS |
+| Full pipeline end-to-end test covers filter → score → deflection | PASS |
+| Score cache hit/miss behavior is verified | PASS |
+| Score cache invalidation on data change is verified | PASS |
+| Winding roads demonstrably score higher than straight roads | PASS |
+| Test fixtures use realistic geographic coordinates and distances | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test          # PASS — all packages, short mode (integration tests skipped via -short)
+make lint          # PASS — go vet clean
+go test -v ./quality/... -run TestScoreIntegration  # all 5 PASS; winding=288.95, straight=0.00
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria pass, `go vet` is clean, and all four items from the prior review cycle have been correctly addressed. The test file uses `geo.DestinationPoint`, the known-curvature test uses a 50 m radius with a single-tier assertion, `sCurveWay` produces a genuine S-shape, and the deflection filter is verified at the per-segment level on the dogleg way.

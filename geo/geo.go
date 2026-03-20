@@ -69,6 +69,27 @@ func DecodePolyline(encoded string, precision float64) []Coord {
 	return coords
 }
 
+// DestinationPoint returns the point that is distM meters from origin along bearingDeg.
+// bearingDeg follows the compass convention (0 = north, 90 = east).
+// Uses the spherical-earth destination formula with the same earth radius as Haversine.
+func DestinationPoint(origin Coord, bearingDeg, distM float64) Coord {
+	const R = 6371000.0
+	δ := distM / R
+	θ := bearingDeg * math.Pi / 180
+	φ1 := origin.Lat * math.Pi / 180
+	λ1 := origin.Lon * math.Pi / 180
+
+	φ2 := math.Asin(math.Sin(φ1)*math.Cos(δ) + math.Cos(φ1)*math.Sin(δ)*math.Cos(θ))
+	λ2 := λ1 + math.Atan2(
+		math.Sin(θ)*math.Sin(δ)*math.Cos(φ1),
+		math.Cos(δ)-math.Sin(φ1)*math.Sin(φ2),
+	)
+	return Coord{
+		Lat: φ2 * 180 / math.Pi,
+		Lon: λ2 * 180 / math.Pi,
+	}
+}
+
 // AngleDiff returns the absolute difference between two bearings, handling
 // 360°/0° wraparound. Result is in [0, 180].
 func AngleDiff(a, b float64) float64 {
