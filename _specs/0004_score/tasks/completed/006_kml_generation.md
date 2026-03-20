@@ -159,3 +159,69 @@ func WriteKML(w io.Writer, collections []RoadCollection, minScore float64) error
 - The `xmlns` attribute for KML is `http://www.opengis.net/kml/2.2`.
 - Description format example: `Score: 1219 | Per km: 99 | Length: 12.3 km | Types: secondary | Ways: 12345, 12346`
 - Road lengths in the description should be in km (divide meters by 1000), rounded to one decimal.
+
+---
+
+# Task 006 Review: KML Generation
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implements stage 7 of the twisty pipeline: rendering `RoadCollection` values as a multi-color KML file where each tier run is colored by curvature tier. The implementation covers XML struct definitions, tier-run merging, coordinate formatting, and the top-level `WriteKML` function.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/kml.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/kml_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scoring_params.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| KML output is valid XML that follows the KML structure from the PRD | PASS |
+| Five tier styles defined with correct AABBGGRR colors and 4px line width | PASS |
+| Each road collection renders as a folder with name, description, and hidden children | PASS |
+| Contiguous same-tier segments are merged into single placemarks | PASS |
+| Coordinates use `lon,lat,0` format (longitude first) | PASS |
+| Collections sorted by penalized score descending | PASS |
+| `-min-score` filtering excludes low-scoring roads | PASS |
+| Empty input produces valid empty KML document with document name "Twisty Roads" | PASS |
+| All unit tests pass | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # PASS — all packages pass
+make lint   # PASS — go vet ./... clean, no output
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met, all tests pass, and lint is clean.
