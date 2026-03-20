@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yardbirdsax/twisty/geo"
@@ -241,11 +242,17 @@ func runFetch(args []string) {
 	done("result", centerResult.DisplayName)
 
 	// Run tiled fetch
+	var progress quality.ProgressReporter = quality.NoopProgressReporter{}
+	if !*verbose && isTerminal(os.Stderr) {
+		progress = &termProgressBar{w: os.Stderr}
+	}
+
 	cfg := quality.TileFetchConfig{
 		TileSize: *tileSize,
 		Cache:    cache,
 		NoCache:  *noCache,
 		Logger:   logger,
+		Progress: progress,
 	}
 
 	done = stageTimer(logger, "fetch-tiled-ways")
@@ -258,6 +265,61 @@ func runFetch(args []string) {
 
 	fmt.Printf("Tiled fetch complete: %d deduplicated ways found.\n", len(ways))
 	logger.Debug("pipeline done", "total_elapsed_ms", time.Since(pipelineStart).Milliseconds())
+}
+
+// termProgressBar renders a progress bar to w using carriage-return overwriting.
+// It implements quality.ProgressReporter.
+type termProgressBar struct {
+	w       io.Writer
+	total   int
+	current int
+	cached  int
+	fetched int
+}
+
+func (b *termProgressBar) SetTotal(n int) {
+	b.total = n
+	b.render()
+}
+
+func (b *termProgressBar) Tick(cached bool) {
+	b.current++
+	if cached {
+		b.cached++
+	} else {
+		b.fetched++
+	}
+	b.render()
+}
+
+func (b *termProgressBar) Done() {
+	b.render()
+	fmt.Fprintln(b.w)
+}
+
+func (b *termProgressBar) render() {
+	const width = 30
+	filled := 0
+	if b.total > 0 {
+		filled = width * b.current / b.total
+	}
+	var bar string
+	if filled == 0 {
+		bar = strings.Repeat(" ", width)
+	} else {
+		bar = strings.Repeat("=", filled-1) + ">" + strings.Repeat(" ", width-filled)
+	}
+	fmt.Fprintf(b.w, "\rFetching tiles: [%s] %d/%d (%d cached, %d fetched)",
+		bar, b.current, b.total, b.cached, b.fetched)
+}
+
+// isTerminal reports whether the given file is connected to a terminal.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // parseDuration parses a duration string supporting Nd (days), Nm (months),

@@ -117,3 +117,67 @@ cfg := quality.TileFetchConfig{
 - No third-party libraries should be added for this feature.
 
 ---
+
+# Task 011 Review: Implement Terminal Progress Bar and Wire into CLI
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-19
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Task 011 adds `termProgressBar` to `main.go`, implements `isTerminal` for TTY detection, and wires the progress reporter into `runFetch`.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| Progress bar renders per-tile without `-v` | PASS |
+| Bar format matches `[======>         ] N/TOTAL (C cached, F fetched)` | PASS |
+| Newline after all tiles processed | PASS |
+| `-v` suppresses progress bar | PASS |
+| Piped stderr suppresses progress bar and `\r` | PASS |
+| `go build ./...` and `go test ./...` pass | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Good Practices Observed
+
+No positive aspects to report per review guidelines.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages pass
+make lint   # go vet clean, no output
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met. Build and test suite pass. Lint is clean.
