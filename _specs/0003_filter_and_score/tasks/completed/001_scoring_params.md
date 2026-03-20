@@ -68,3 +68,76 @@ None — this is the foundational task.
 
 - Tier thresholds are exclusive lower bounds: a radius of exactly 175m is tier 0, not tier 1. The PRD states ">= 175 m" is tier 0 and "< 175 m" is tier 1.
 - The deflection constants (2.4 km, 20°) come from the Curvature project — note this in comments.
+
+---
+# Task 001 Review: Define Scoring Parameters
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task created `quality/scoring_params.go` as the single source of truth for all tier radius thresholds, tier weights, and deflection filter constants, along with `AssignTier` and `ScoringParamsHash` helper functions and corresponding unit tests.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scoring_params.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scoring_params_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `quality/scoring_params.go` exists with all constants and helper functions | PASS |
+| `quality/scoring_params_test.go` passes with `go test ./quality/...` | PASS |
+| Every constant has an explanatory comment | PASS |
+| `AssignTier` correctly assigns tiers at all boundary values | PASS |
+| `ScoringParamsHash` is deterministic | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Good Practices Observed
+
+1. **Boundary semantics documented in comments:** Each `TierRadiusN` constant comment states the inclusive/exclusive bounds of its tier band, preventing future ambiguity.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test ./quality/...  # ok github.com/yardbirdsax/twisty/quality 8.874s
+go vet ./quality/...   # no output (clean)
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met, tests pass, and `go vet` is clean.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **APPROVED WITH CHANGES**: All acceptance criteria met, minor issues found. Can merge after addressing SHOULD FIX items, or merge as-is with follow-up.
+- **NEEDS REVISION**: Acceptance criteria not met or critical issues found. Must address MUST FIX items before re-review.
