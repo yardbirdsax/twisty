@@ -22,7 +22,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: twisty <route|fetch> [flags]")
+		fmt.Fprintln(os.Stderr, "Usage: twisty <route|fetch|score> [flags]")
 		os.Exit(1)
 	}
 	switch os.Args[1] {
@@ -30,6 +30,11 @@ func main() {
 		runRoute(os.Args[2:])
 	case "fetch":
 		runFetch(os.Args[2:])
+	case "score":
+		if err := runScore(os.Args[2:], os.Stderr); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", os.Args[1])
 		os.Exit(1)
@@ -265,6 +270,151 @@ func runFetch(args []string) {
 
 	fmt.Printf("Tiled fetch complete: %d deduplicated ways found.\n", len(ways))
 	logger.Debug("pipeline done", "total_elapsed_ms", time.Since(pipelineStart).Milliseconds())
+}
+
+func runScore(args []string, stderr io.Writer) error {
+	fs := flag.NewFlagSet("score", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	address := fs.String("address", "", "Location center address")
+	radius := fs.Float64("radius", 25.0, "Search radius in km (max 50)")
+	tileSize := fs.Float64("tile-size", 0.05, "Tile size in degrees")
+	cacheDir := fs.String("cache-dir", "", "Overpass tile cache directory (default: ~/.twisty/cache/overpass/)")
+	noCache := fs.Bool("no-cache", false, "Skip score cache reads (still writes)")
+	clearScoreCache := fs.Bool("clear-score-cache", false, "Delete all score cache entries before running")
+	verbose := fs.Bool("v", false, "Enable verbose logging to stderr")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	var logger *slog.Logger
+	if *verbose {
+		handler := slog.NewTextHandler(stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})
+		logger = slog.New(handler)
+	} else {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	if *address == "" {
+		fs.Usage()
+		return fmt.Errorf("Error: -address is required")
+	}
+
+	if *radius <= 0 || *radius > 50 {
+		return fmt.Errorf("Error: -radius must be between 0 and 50 km")
+	}
+
+	if *tileSize <= 0 {
+		return fmt.Errorf("Error: -tile-size must be greater than 0")
+	}
+
+	if *cacheDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("cannot determine home directory: %w", err)
+		}
+		*cacheDir = filepath.Join(home, ".twisty", "cache", "overpass")
+	}
+
+	scoreCacheDir := filepath.Join(filepath.Dir(*cacheDir), "scores")
+
+	tileCache := &quality.TileCache{
+		Dir:       *cacheDir,
+		Precision: 3,
+	}
+	scoreCache := &quality.ScoreCache{
+		Dir:       scoreCacheDir,
+		Precision: 3,
+	}
+
+	if err := scoreCache.EnsureDir(); err != nil {
+		return fmt.Errorf("Error creating score cache dir: %w", err)
+	}
+
+	if *clearScoreCache {
+		logger.Info("clearing score cache", "dir", scoreCacheDir)
+		if err := scoreCache.ClearAll(); err != nil {
+			return fmt.Errorf("Error clearing score cache: %w", err)
+		}
+		fmt.Fprintln(os.Stdout, "Score cache cleared.")
+	}
+
+	// Geocode the address.
+	centerResult, err := geocode.Resolve(*address, "Center")
+	if err != nil {
+		return fmt.Errorf("Error resolving address: %w", err)
+	}
+	logger.Debug("geocoded address", "display_name", centerResult.DisplayName)
+
+	// Compute tiles.
+	tiles := quality.ComputeTiles(centerResult.Lat, centerResult.Lon, *radius, *tileSize)
+	logger.Debug("computed tiles", "count", len(tiles))
+
+	// Aggregate stats.
+	totalTiles := len(tiles)
+	cacheHits := 0
+	totalWaysScored := 0
+	totalSegments := 0
+	totalZeroed := 0
+	tilesWithData := 0
+
+	for _, tile := range tiles {
+		if !tileCache.Has(tile) {
+			logger.Warn("no raw tile data, skipping", "south", tile.South, "west", tile.West)
+			continue
+		}
+
+		rawData, err := tileCache.Read(tile)
+		if err != nil {
+			logger.Warn("failed to read tile data, skipping", "south", tile.South, "west", tile.West, "error", err)
+			continue
+		}
+
+		if !*noCache {
+			if cachedWays, zeroed, hit := scoreCache.Read(tile, rawData); hit {
+				logger.Debug("score cache hit", "south", tile.South, "west", tile.West)
+				cacheHits++
+				tilesWithData++
+				// Accumulate stats from cached ways.
+				for _, w := range cachedWays {
+					totalSegments += len(w.Segments)
+				}
+				totalWaysScored += len(cachedWays)
+				totalZeroed += zeroed
+				continue
+			}
+		}
+
+		ways, err := quality.ParseTileData(rawData)
+		if err != nil {
+			logger.Warn("failed to parse tile data, skipping", "south", tile.South, "west", tile.West, "error", err)
+			continue
+		}
+		tilesWithData++
+
+		result := quality.RunScorePipeline(ways)
+
+		if err := scoreCache.Write(tile, rawData, result.ScoredWays, result.ZeroedByDeflection); err != nil {
+			logger.Warn("failed to write score cache", "south", tile.South, "west", tile.West, "error", err)
+		}
+
+		totalWaysScored += len(result.ScoredWays)
+		totalSegments += result.TotalSegments
+		totalZeroed += result.ZeroedByDeflection
+	}
+
+	if tilesWithData == 0 {
+		return fmt.Errorf("No cached tile data found. Run 'twisty fetch -address \"...\"' first.")
+	}
+
+	fmt.Println("Score complete.")
+	fmt.Printf("  Tiles processed: %d\n", totalTiles)
+	fmt.Printf("  Cache hits:       %d\n", cacheHits)
+	fmt.Printf("  Ways scored:      %d\n", totalWaysScored)
+	fmt.Printf("  Segments scored:  %d\n", totalSegments)
+	fmt.Printf("  Zeroed by deflection: %d\n", totalZeroed)
+	return nil
 }
 
 // termProgressBar renders a progress bar to w using carriage-return overwriting.

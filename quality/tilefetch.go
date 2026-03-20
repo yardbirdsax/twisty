@@ -350,6 +350,11 @@ func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64,
 	return mergeAndDeduplicate(allTileData, cfg.Logger)
 }
 
+// ParseTileData parses raw Overpass JSON bytes into a slice of Ways.
+func ParseTileData(data []byte) ([]Way, error) {
+	return parseTileData(data)
+}
+
 // parseTileData parses raw Overpass JSON bytes into a slice of Ways.
 func parseTileData(data []byte) ([]Way, error) {
 	var oResp overpassResponse

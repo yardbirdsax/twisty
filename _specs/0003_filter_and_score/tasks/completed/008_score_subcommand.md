@@ -88,3 +88,78 @@ Wire up the `twisty score` CLI subcommand that runs stages 2–4 over previously
 - Reuse as much infrastructure as possible from the `fetch` command: geocoding, `ComputeTiles`, `TileCache`, home directory resolution, flag validation patterns.
 - The score cache directory is derived from the cache dir: if cache dir is `~/.twisty/cache/overpass/`, the score cache dir is `~/.twisty/cache/scores/`. Use `filepath.Join(filepath.Dir(cacheDir), "scores")` or similar.
 - Tiles are processed sequentially — no goroutines needed per the PRD's non-goals.
+
+---
+# Task 008 Review: `score` Subcommand
+
+**Reviewer:** Senior Software Engineer
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implemented the `twisty score` CLI subcommand in `main.go`, exported `ParseTileData` from `quality/tilefetch.go`, and added unit tests in `main_test.go`. The subcommand reads previously fetched tiles from the tile cache, runs the score pipeline, uses the score cache for efficiency, and prints a summary. All issues from prior review passes have been resolved: `ZeroedByDeflection` is now persisted in `scoreCacheEntryJSON` and correctly accumulated from cache hits, and `TestScoreRadiusValidation` now calls `runScore` directly.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/tilefetch.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scorepipeline.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scorecache.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scorecache_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `twisty score -address "..." -radius 25` runs end-to-end when tile data exists | PASS |
+| Reads from tile cache, does NOT fetch from Overpass API | PASS |
+| Score cache is used: second run shows all cache hits | PASS |
+| `-no-cache` skips score cache reads but still writes | PASS |
+| `-clear-score-cache` deletes all score cache entries before running | PASS |
+| Console summary prints accurate statistics | PASS |
+| Missing tile data produces a warning per tile and error if no tiles have data | PASS |
+| `-v` enables verbose logging | PASS |
+| All existing tests continue to pass | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test
+# ok  github.com/yardbirdsax/twisty          0.387s
+# ok  github.com/yardbirdsax/twisty/geo      (cached)
+# ok  github.com/yardbirdsax/twisty/geocode  0.354s
+# ok  github.com/yardbirdsax/twisty/gpx      0.482s
+# ok  github.com/yardbirdsax/twisty/quality  9.021s
+# ok  github.com/yardbirdsax/twisty/route    0.799s
+
+make lint
+# go vet ./...  (no issues)
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria pass. Both previously flagged issues are resolved: `ZeroedByDeflection` is persisted in the score cache entry and correctly restored on cache hits (`scorecache.go:47`, `scorecache.go:90`, `scorecache.go:118`, `main.go:375–384`), and `TestScoreRadiusValidation` exercises `runScore` directly with string radius arguments (`main_test.go:179`).

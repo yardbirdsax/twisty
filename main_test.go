@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"strings"
 	"testing"
 	"time"
@@ -98,6 +99,98 @@ func TestTermProgressBarFetchDurationAccumulates(t *testing.T) {
 	}
 	if b.totalFetchDuration != 8*time.Second {
 		t.Errorf("totalFetchDuration = %v, want 8s", b.totalFetchDuration)
+	}
+}
+
+func TestScoreFlagSetParsesValidFlags(t *testing.T) {
+	fs := flag.NewFlagSet("score", flag.ContinueOnError)
+	address := fs.String("address", "", "")
+	radius := fs.Float64("radius", 25.0, "")
+	tileSize := fs.Float64("tile-size", 0.05, "")
+	cacheDir := fs.String("cache-dir", "", "")
+	noCache := fs.Bool("no-cache", false, "")
+	clearScoreCache := fs.Bool("clear-score-cache", false, "")
+	verbose := fs.Bool("v", false, "")
+
+	err := fs.Parse([]string{
+		"-address", "Asheville, NC",
+		"-radius", "30",
+		"-tile-size", "0.1",
+		"-cache-dir", "/tmp/tiles",
+		"-no-cache",
+		"-clear-score-cache",
+		"-v",
+	})
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+
+	if *address != "Asheville, NC" {
+		t.Errorf("address = %q, want %q", *address, "Asheville, NC")
+	}
+	if *radius != 30.0 {
+		t.Errorf("radius = %v, want 30.0", *radius)
+	}
+	if *tileSize != 0.1 {
+		t.Errorf("tile-size = %v, want 0.1", *tileSize)
+	}
+	if *cacheDir != "/tmp/tiles" {
+		t.Errorf("cache-dir = %q, want %q", *cacheDir, "/tmp/tiles")
+	}
+	if !*noCache {
+		t.Error("no-cache should be true")
+	}
+	if !*clearScoreCache {
+		t.Error("clear-score-cache should be true")
+	}
+	if !*verbose {
+		t.Error("v should be true")
+	}
+}
+
+func TestScoreFlagSetAddressRequired(t *testing.T) {
+	var stderr bytes.Buffer
+	err := runScore([]string{}, &stderr)
+	if err == nil {
+		t.Fatal("runScore() expected error when -address is not provided, got nil")
+	}
+	if !strings.Contains(err.Error(), "-address is required") {
+		t.Errorf("runScore() error = %q, want it to contain \"-address is required\"", err.Error())
+	}
+}
+
+func TestScoreRadiusValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		radius  string
+		wantErr bool
+	}{
+		{"valid radius", "25", false},
+		{"min boundary valid", "0.1", false},
+		{"max boundary valid", "50", false},
+		{"radius too large", "51", true},
+		{"radius zero", "0", true},
+		{"radius negative", "-5", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			err := runScore([]string{"-address", "Anywhere", "-radius", tc.radius}, &stderr)
+			// Valid radii will fail later (geocoding), but should NOT fail on radius validation.
+			// Invalid radii should fail with a radius error.
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("expected error for radius %s, got nil", tc.radius)
+				} else if !strings.Contains(err.Error(), "-radius") {
+					t.Errorf("expected radius error for %s, got: %v", tc.radius, err)
+				}
+			} else {
+				if err != nil && strings.Contains(err.Error(), "-radius") {
+					t.Errorf("unexpected radius error for %s: %v", tc.radius, err)
+				}
+			}
+		})
 	}
 }
 
