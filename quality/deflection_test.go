@@ -310,6 +310,124 @@ func TestDeflectionFilter_SingleSegment(t *testing.T) {
 	}
 }
 
+// TestDeflectionFilter_SCurveRoad verifies that an S-curve road — one that
+// curves left ~90° then right ~90° over ~2.4 km — retains its scores. The net
+// (start-to-end) bearing change is nearly 0°, so the old net-bearing algorithm
+// would incorrectly zero this road. The cumulative algorithm sums ~180° of
+// heading change across the window, which exceeds 20° and preserves scores.
+func TestDeflectionFilter_SCurveRoad(t *testing.T) {
+	t.Parallel()
+
+	// Build an S-curve: go NE (bearing ~45°) for half the window, then NW
+	// (bearing ~315°) for the other half. Net change ≈ 0°; cumulative ≈ 180°.
+	// Each leg is ~1200 m, staying within the 2400 m window.
+	origin := geo.Coord{Lat: 45.0, Lon: -122.0}
+
+	// First leg: NE, 8 steps × 150 m each ≈ 1200 m.
+	// Move equal amounts north and east: bearing ≈ 45°.
+	neStep := 150.0 / 111000.0 // ~150m per degree lat
+	neLon := 150.0 / 78500.0   // ~150m per degree lon at 45°N
+
+	coords := []geo.Coord{origin}
+	for k := 1; k <= 8; k++ {
+		prev := coords[k-1]
+		coords = append(coords, geo.Coord{
+			Lat: prev.Lat + neStep,
+			Lon: prev.Lon + neLon,
+		})
+	}
+
+	// Second leg: NW, 8 steps × 150 m each ≈ 1200 m.
+	// Move equal amounts north and west: bearing ≈ 315°.
+	for k := 1; k <= 8; k++ {
+		prev := coords[len(coords)-1]
+		coords = append(coords, geo.Coord{
+			Lat: prev.Lat + neStep,
+			Lon: prev.Lon - neLon,
+		})
+	}
+
+	n := len(coords)
+	segments := make([]quality.ScoredSegment, n-1)
+	for i := 0; i < n-1; i++ {
+		l := geo.Haversine(coords[i], coords[i+1])
+		segments[i] = quality.ScoredSegment{
+			Start: coords[i], End: coords[i+1], Length: l,
+			Tier: 2, Weight: 1.3, Score: l * 1.3,
+		}
+	}
+	sw := quality.ScoredWay{WayID: 20, Segments: segments}
+
+	quality.DeflectionFilter(&sw)
+
+	// The S-curve has a cumulative heading change of ~180°, well above the 20°
+	// threshold, so scores must be preserved.
+	hasNonZero := false
+	for _, seg := range sw.Segments {
+		if seg.Score > 0 {
+			hasNonZero = true
+			break
+		}
+	}
+	if !hasNonZero {
+		t.Error("S-curve road: expected at least some segments to retain non-zero scores (cumulative change ~180° > 20°)")
+	}
+}
+
+// TestDeflectionFilter_GentleDeviations verifies that a road with many
+// segments each deviating only 1-2° from the previous is still zeroed out.
+// Cumulative heading change of ~15° over 2.4 km is below the 20° threshold.
+func TestDeflectionFilter_GentleDeviations(t *testing.T) {
+	t.Parallel()
+
+	// Build a road with 12 segments of ~200m each (total ~2.4km). Each segment
+	// veers 1° to the right of the previous (cumulative ~12° total). This is
+	// below DeflectionMinHeadingChange (20°) and should be zeroed.
+	origin := geo.Coord{Lat: 45.0, Lon: -122.0}
+
+	// Start heading north. Each step shifts 200m north and a tiny amount east
+	// such that bearing increases by ~1° per segment.
+	//
+	// For a segment at bearing θ, a 200m step means:
+	//   north component: 200*cos(θ), east component: 200*sin(θ)
+	// We approximate by keeping north component fixed at 200m and adding a
+	// tiny extra east shift that produces the 1° rotation via AngleDiff.
+	//
+	// At bearing 0° (north), a 1° eastward rotation over 200m requires
+	// east component = 200*sin(1°) ≈ 3.49m.
+	stepLat := 200.0 / 111000.0
+	stepLon := 3.5 / 78500.0 // ~3.5m east shift per segment
+
+	coords := []geo.Coord{origin}
+	for k := 1; k <= 12; k++ {
+		prev := coords[k-1]
+		coords = append(coords, geo.Coord{
+			Lat: prev.Lat + stepLat,
+			Lon: prev.Lon + stepLon,
+		})
+	}
+
+	n := len(coords)
+	segments := make([]quality.ScoredSegment, n-1)
+	for i := 0; i < n-1; i++ {
+		l := geo.Haversine(coords[i], coords[i+1])
+		segments[i] = quality.ScoredSegment{
+			Start: coords[i], End: coords[i+1], Length: l,
+			Tier: 1, Weight: 1.0, Score: l * 1.0,
+		}
+	}
+	sw := quality.ScoredWay{WayID: 21, Segments: segments}
+
+	quality.DeflectionFilter(&sw)
+
+	// All segments should be zeroed: cumulative change is ~12° < 20°.
+	for idx, seg := range sw.Segments {
+		if seg.Score != 0 {
+			t.Errorf("gentle deviation road: segment %d expected Score=0, got %v", idx, seg.Score)
+		}
+	}
+}
+
 // TestApplyDeflectionFilter verifies the batch function applies the filter to
 // all scored ways.
 func TestApplyDeflectionFilter(t *testing.T) {

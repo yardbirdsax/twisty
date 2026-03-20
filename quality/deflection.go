@@ -9,9 +9,10 @@ import "github.com/yardbirdsax/twisty/geo"
 // The algorithm uses a sliding look-ahead window of DeflectionLookAheadM
 // (2400 m, from the Curvature project). For each segment with a non-zero
 // score, it accumulates segments forward until the cumulative distance reaches
-// 2400 m or the end of the way. If the overall bearing change across the window
-// is less than DeflectionMinHeadingChange (20°, from the Curvature project),
-// all segments in the window are zeroed out.
+// 2400 m or the end of the way. If the cumulative heading change across the
+// window — the sum of absolute bearing differences between every consecutive
+// pair of segments — is less than DeflectionMinHeadingChange (20°, from the
+// Curvature project), all segments in the window are zeroed out.
 func DeflectionFilter(sw *ScoredWay) {
 	segs := sw.Segments
 	n := len(segs)
@@ -31,13 +32,16 @@ func DeflectionFilter(sw *ScoredWay) {
 			windowEnd++
 		}
 		// windowEnd is exclusive: window covers segs[i..windowEnd-1].
-		last := windowEnd - 1
 
-		startBearing := geo.Bearing(segs[i].Start, segs[i].End)
-		endBearing := geo.Bearing(segs[last].Start, segs[last].End)
-		bearingChange := geo.AngleDiff(startBearing, endBearing)
+		// Compute cumulative heading change across the window.
+		cumBearingChange := 0.0
+		for j := i; j < windowEnd-1; j++ {
+			bj := geo.Bearing(segs[j].Start, segs[j].End)
+			bk := geo.Bearing(segs[j+1].Start, segs[j+1].End)
+			cumBearingChange += geo.AngleDiff(bj, bk)
+		}
 
-		if bearingChange < DeflectionMinHeadingChange {
+		if cumBearingChange < DeflectionMinHeadingChange {
 			for j := i; j < windowEnd; j++ {
 				segs[j].Score = 0
 				segs[j].Tier = 0
