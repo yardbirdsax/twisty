@@ -62,3 +62,67 @@ type RoadCollection struct {
 
 - The `PenaltyFactor`, `PenalizedScore`, and `PenalizedPerKm` fields will be zero-valued until stage 6 populates them. This is intentional — stages are additive.
 - `HighwayTypes` is a deduplicated slice (not a map) for easy iteration and serialization.
+
+---
+# Task 002 Review: Road Collection Data Model
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implemented the `RoadCollection` struct in `quality/aggregate.go` and a `DisplayName()` helper method, along with unit tests covering all specified cases.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `RoadCollection` struct defined in `quality/aggregate.go` | PASS |
+| `DisplayName()` method works correctly for sub-indexed and non-sub-indexed collections | PASS |
+| Unit tests pass for `DisplayName()` | PASS |
+| Code compiles with no errors | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Good Practices Observed
+
+1. **Correct logic for DisplayName:** The `SubIndex+1` offset correctly translates 0-based index to 1-based display suffix.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages pass, including quality
+make lint   # go vet passes, no issues reported
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met. Tests pass, linter is clean, and the implementation matches the specification exactly.
