@@ -28,11 +28,11 @@ func GroupWaysByName(ways []ScoredWay) map[string][]ScoredWay
 - Add a helper to extract the start and end coordinates of a `ScoredWay`:
 
 ```go
-func wayEndpoints(w ScoredWay) (start, end geo.Coord)
+func wayEndpoints(w ScoredWay) (start, end geo.Coord, ok bool)
 ```
 
 - Start = first segment's `Start`, End = last segment's `End`.
-- Handle edge case: way with zero segments (skip it).
+- Handle edge case: way with zero segments — return zero coords and `ok = false`.
 
 ### 3. Implement Connected Component Discovery
 
@@ -90,3 +90,66 @@ func OrderWays(ways []ScoredWay) []ScoredWay
 - Use the existing `geo` package for distance calculations. Check what's available — there should be a Haversine or similar function.
 - The connected component algorithm is O(n²) in the number of ways per name group. This is fine — name groups rarely exceed a few hundred ways.
 - Way ordering doesn't need to handle complex topologies (branches, loops). A simple greedy chain is sufficient.
+
+---
+# Task 003 Review: Aggregation — Group by Name and Find Connected Components
+
+**Reviewer:** Senior Software Engineer Agent
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implements `GroupWaysByName`, `FindConnectedComponents`, `OrderWays`, and the `wayEndpoints`/`reverseWay` helpers in `quality/aggregate.go`, with unit tests in `quality/aggregate_test.go` and the `ConnectedEndpointProximityM` constant in `quality/scoring_params.go`. All three issues flagged in the prior review cycle have been resolved.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scoring_params.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `GroupWaysByName` correctly groups and excludes unnamed ways | PASS |
+| `FindConnectedComponents` correctly separates geographically distant same-named roads | PASS |
+| `FindConnectedComponents` merges nearby same-named roads into one component | PASS |
+| `OrderWays` produces a continuous chain from unordered ways | PASS |
+| Proximity constant defined in `scoring_params.go` | PASS |
+| All unit tests pass | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # All packages pass, including quality (9.2s)
+make lint   # go vet only, no issues reported
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria pass, tests are green, lint is clean, and all prior-cycle SHOULD FIX items have been addressed: `ConnectedEndpointProximityM` is now included in `ScoringParamsHash`, `TestFindConnectedComponents_AllDisconnected` covers the fully-disconnected-valid-ways path, and the `wayEndpoints` implementation correctly returns the `ok bool` third value.
+
+---
