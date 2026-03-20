@@ -200,7 +200,7 @@ func TestWriteKML_MinScoreFilter(t *testing.T) {
 }
 
 func TestWriteKML_SortOrder(t *testing.T) {
-	col1 := makeCollection("Low", 200.0, 2000.0, 100.0, []string{"tertiary"}, []int64{1}, simpleSegments())
+	col1 := makeCollection("Low", 200.0, 5000.0, 100.0, []string{"tertiary"}, []int64{1}, simpleSegments())
 	col2 := makeCollection("High", 800.0, 8000.0, 100.0, []string{"tertiary"}, []int64{2}, simpleSegments())
 	col3 := makeCollection("Mid", 500.0, 5000.0, 100.0, []string{"tertiary"}, []int64{3}, simpleSegments())
 	var buf bytes.Buffer
@@ -273,5 +273,95 @@ func TestWriteKML_StyleDefinitions(t *testing.T) {
 		if s.LineStyle.Width != KMLLineWidth {
 			t.Errorf("tier %d: expected width %d, got %d", tier, KMLLineWidth, s.LineStyle.Width)
 		}
+	}
+}
+
+// TestWriteKML_MinLengthFilter verifies that collections with TotalLength < MinRoadLengthM
+// are excluded from output, and that both filters are independent.
+func TestWriteKML_MinLengthFilter(t *testing.T) {
+	// Collections with varying lengths (all have high score so only length filter matters).
+	short1km := makeCollection("Short 1km", 1000.0, 1000.0, 200.0, []string{"tertiary"}, []int64{1}, simpleSegments())
+	short3km := makeCollection("Short 3km", 1000.0, 3000.0, 200.0, []string{"tertiary"}, []int64{2}, simpleSegments())
+	above5km := makeCollection("Above 5km", 1000.0, 5000.0, 200.0, []string{"tertiary"}, []int64{3}, simpleSegments())
+	above10km := makeCollection("Above 10km", 1000.0, 10000.0, 200.0, []string{"tertiary"}, []int64{4}, simpleSegments())
+
+	var buf bytes.Buffer
+	err := WriteKML(&buf, []RoadCollection{short1km, short3km, above5km, above10km}, 0)
+	if err != nil {
+		t.Fatalf("WriteKML returned error: %v", err)
+	}
+	var kml KMLDocument
+	if err := xml.Unmarshal([]byte(buf.String()[len(xml.Header):]), &kml); err != nil {
+		t.Fatalf("invalid XML: %v", err)
+	}
+
+	// Only collections >= MinRoadLengthM (4,828 m) should appear.
+	if len(kml.Doc.Folders) != 2 {
+		t.Fatalf("expected 2 folders (collections >= MinRoadLengthM), got %d", len(kml.Doc.Folders))
+	}
+	names := make(map[string]bool)
+	for _, f := range kml.Doc.Folders {
+		names[f.Name] = true
+	}
+	if !names["Above 5km"] {
+		t.Error("expected 'Above 5km' in output")
+	}
+	if !names["Above 10km"] {
+		t.Error("expected 'Above 10km' in output")
+	}
+	if names["Short 1km"] {
+		t.Error("'Short 1km' should be excluded (length < MinRoadLengthM)")
+	}
+	if names["Short 3km"] {
+		t.Error("'Short 3km' should be excluded (length < MinRoadLengthM)")
+	}
+}
+
+// TestWriteKML_HighScoreShortLengthExcluded verifies a high-score but short collection
+// is excluded by the length filter.
+func TestWriteKML_HighScoreShortLengthExcluded(t *testing.T) {
+	highScoreShort := makeCollection("High Score Short", 9999.0, 1000.0, 9999.0, []string{"tertiary"}, []int64{1}, simpleSegments())
+	longRoad := makeCollection("Long Road", 100.0, 10000.0, 10.0, []string{"tertiary"}, []int64{2}, simpleSegments())
+
+	var buf bytes.Buffer
+	err := WriteKML(&buf, []RoadCollection{highScoreShort, longRoad}, 0)
+	if err != nil {
+		t.Fatalf("WriteKML returned error: %v", err)
+	}
+	var kml KMLDocument
+	if err := xml.Unmarshal([]byte(buf.String()[len(xml.Header):]), &kml); err != nil {
+		t.Fatalf("invalid XML: %v", err)
+	}
+
+	if len(kml.Doc.Folders) != 1 {
+		t.Fatalf("expected 1 folder, got %d", len(kml.Doc.Folders))
+	}
+	if kml.Doc.Folders[0].Name != "Long Road" {
+		t.Errorf("expected 'Long Road' in output, got %q", kml.Doc.Folders[0].Name)
+	}
+}
+
+// TestWriteKML_LowScoreLongLengthExcludedByMinScore verifies that a long road
+// with score below minScore is still excluded — both filters are independent.
+func TestWriteKML_LowScoreLongLengthExcludedByMinScore(t *testing.T) {
+	lowScoreLong := makeCollection("Low Score Long", 50.0, 10000.0, 5.0, []string{"tertiary"}, []int64{1}, simpleSegments())
+	highScoreLong := makeCollection("High Score Long", 500.0, 10000.0, 50.0, []string{"tertiary"}, []int64{2}, simpleSegments())
+
+	var buf bytes.Buffer
+	// minScore = 100 excludes low-score-long but not high-score-long.
+	err := WriteKML(&buf, []RoadCollection{lowScoreLong, highScoreLong}, 100.0)
+	if err != nil {
+		t.Fatalf("WriteKML returned error: %v", err)
+	}
+	var kml KMLDocument
+	if err := xml.Unmarshal([]byte(buf.String()[len(xml.Header):]), &kml); err != nil {
+		t.Fatalf("invalid XML: %v", err)
+	}
+
+	if len(kml.Doc.Folders) != 1 {
+		t.Fatalf("expected 1 folder, got %d", len(kml.Doc.Folders))
+	}
+	if kml.Doc.Folders[0].Name != "High Score Long" {
+		t.Errorf("expected 'High Score Long', got %q", kml.Doc.Folders[0].Name)
 	}
 }

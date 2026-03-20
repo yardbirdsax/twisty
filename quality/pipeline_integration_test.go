@@ -66,20 +66,21 @@ func fixtureConnectedWays(startID int64, name, highway string, startLat, startLo
 
 // fixtureTwistyMountainPass builds "Mountain Pass Rd" — 18 connected ways with
 // mixed tier 2-4 segments, highway type "secondary".
+// Each segment is 300 m so total length = 5,400 m > MinRoadLengthM (4,828 m).
 func fixtureTwistyMountainPass() []ScoredWay {
 	const (
 		name    = "Mountain Pass Rd"
 		highway = "secondary"
 		startLat = 44.10
 		startLon = -72.50
-		stepLat  = 0.0005 // ~55 m
+		stepLat  = 0.0027 // ~300 m
 	)
 	var ways []ScoredWay
 	tiers := []int{2, 3, 4, 2, 3, 4, 2, 3, 2, 3, 4, 3, 2, 4, 3, 2, 3, 4}
 	lat := startLat
 	for i, tier := range tiers {
 		endLat := lat + stepLat
-		seg := makeScoredSegment(int64(100+i), tier, lat, startLon, endLat, startLon, 80.0)
+		seg := makeScoredSegment(int64(100+i), tier, lat, startLon, endLat, startLon, 300.0)
 		ways = append(ways, ScoredWay{
 			WayID: int64(100 + i),
 			Tags:  map[string]string{"name": name, "highway": highway},
@@ -92,20 +93,21 @@ func fixtureTwistyMountainPass() []ScoredWay {
 
 // fixtureInterstate builds "Interstate 90" — 10 connected ways, mostly tier 0
 // with a few tier 2-3 segments representing on-ramps, highway type "motorway".
+// Each segment is 500 m so total length = 5,000 m > MinRoadLengthM (4,828 m).
 func fixtureInterstate() []ScoredWay {
 	const (
 		name    = "Interstate 90"
 		highway = "motorway"
 		startLat = 44.20
 		startLon = -72.40
-		stepLat  = 0.001 // ~111 m
+		stepLat  = 0.0045 // ~500 m
 	)
 	tiers := []int{0, 0, 2, 3, 0, 0, 0, 2, 0, 0}
 	var ways []ScoredWay
 	lat := startLat
 	for i, tier := range tiers {
 		endLat := lat + stepLat
-		seg := makeScoredSegment(int64(200+i), tier, lat, startLon, endLat, startLon, 150.0)
+		seg := makeScoredSegment(int64(200+i), tier, lat, startLon, endLat, startLon, 500.0)
 		ways = append(ways, ScoredWay{
 			WayID: int64(200 + i),
 			Tags:  map[string]string{"name": name, "highway": highway},
@@ -119,22 +121,23 @@ func fixtureInterstate() []ScoredWay {
 // fixtureRoute100 builds "Route 100" — two clusters of twisty ways separated by
 // a long straight gap (> StraightGapSplitM = 2414 m), highway type "tertiary".
 // The gap is represented by a single tier-0 segment of 2500 m.
+// Each cluster has 5 ways × 1,000 m = 5,000 m > MinRoadLengthM (4,828 m).
 func fixtureRoute100() []ScoredWay {
 	const (
 		name    = "Route 100"
 		highway = "tertiary"
 		startLat = 44.30
 		startLon = -72.60
-		stepLat  = 0.0005 // ~55 m
+		stepLat  = 0.009 // ~1,000 m
 	)
 
 	var ways []ScoredWay
 	lat := startLat
 
-	// First cluster: 5 twisty ways
+	// First cluster: 5 twisty ways, each 1,000 m (total 5,000 m > MinRoadLengthM)
 	for i := range 5 {
 		endLat := lat + stepLat
-		seg := makeScoredSegment(int64(300+i), 2, lat, startLon, endLat, startLon, 100.0)
+		seg := makeScoredSegment(int64(300+i), 2, lat, startLon, endLat, startLon, 1000.0)
 		ways = append(ways, ScoredWay{
 			WayID: int64(300 + i),
 			Tags:  map[string]string{"name": name, "highway": highway},
@@ -161,10 +164,10 @@ func fixtureRoute100() []ScoredWay {
 	})
 	lat = gapEndLat
 
-	// Second cluster: 5 more twisty ways
+	// Second cluster: 5 more twisty ways, each 1,000 m (total 5,000 m > MinRoadLengthM)
 	for i := range 5 {
 		endLat := lat + stepLat
-		seg := makeScoredSegment(int64(306+i), 3, lat, startLon, endLat, startLon, 100.0)
+		seg := makeScoredSegment(int64(306+i), 3, lat, startLon, endLat, startLon, 1000.0)
 		ways = append(ways, ScoredWay{
 			WayID: int64(306 + i),
 			Tags:  map[string]string{"name": name, "highway": highway},
@@ -178,14 +181,15 @@ func fixtureRoute100() []ScoredWay {
 
 // fixtureMainStreet builds two geographically disconnected clusters both named
 // "Main Street". Cluster A is in Vermont, cluster B is in North Carolina.
+// Each cluster has 4 ways × 1,250 m = 5,000 m > MinRoadLengthM (4,828 m).
 func fixtureMainStreet() []ScoredWay {
 	const name = "Main Street"
 
-	// Cluster A: 4 ways in Vermont area
-	clusterA := fixtureConnectedWays(400, name, "residential", 44.40, -72.70, 0.0005, 4, 2, 120.0)
+	// Cluster A: 4 ways in Vermont area, each 1,250 m (total 5,000 m > MinRoadLengthM)
+	clusterA := fixtureConnectedWays(400, name, "residential", 44.40, -72.70, 0.01125, 4, 2, 1250.0)
 
 	// Cluster B: 4 ways in North Carolina — far enough that they form a separate component
-	clusterB := fixtureConnectedWays(410, name, "residential", 36.00, -80.00, 0.0005, 4, 2, 120.0)
+	clusterB := fixtureConnectedWays(410, name, "residential", 36.00, -80.00, 0.01125, 4, 2, 1250.0)
 
 	return append(clusterA, clusterB...)
 }
@@ -204,29 +208,31 @@ func fixtureUnnamedRoad() []ScoredWay {
 }
 
 // fixtureSpecialCharsRoad builds a road with special characters in its name.
+// Total length = 2,800 + 2,200 = 5,000 m > MinRoadLengthM (4,828 m).
 func fixtureSpecialCharsRoad() []ScoredWay {
 	return []ScoredWay{
 		{
 			WayID: 600,
 			Tags:  map[string]string{"name": "Route 9 & 20", "highway": "secondary"},
 			Segments: []ScoredSegment{
-				makeScoredSegment(600, 2, 44.55, -72.85, 44.551, -72.85, 300.0),
-				makeScoredSegment(600, 3, 44.551, -72.85, 44.552, -72.85, 200.0),
+				makeScoredSegment(600, 2, 44.55, -72.85, 44.576, -72.85, 2800.0),
+				makeScoredSegment(600, 3, 44.576, -72.85, 44.596, -72.85, 2200.0),
 			},
 		},
 	}
 }
 
 // fixtureAllTierZeroRoad builds a road whose all segments are tier 0.
+// Length = 5,000 m > MinRoadLengthM (4,828 m) so it passes the length filter.
 func fixtureAllTierZeroRoad() []ScoredWay {
 	return []ScoredWay{
 		{
 			WayID: 700,
 			Tags:  map[string]string{"name": "Flat Street", "highway": "residential"},
 			Segments: []ScoredSegment{
-				{WayID: 700, Tier: 0, Weight: 0, Length: 500, Score: 0,
+				{WayID: 700, Tier: 0, Weight: 0, Length: 5000, Score: 0,
 					Start: geo.Coord{Lat: 44.60, Lon: -72.90},
-					End:   geo.Coord{Lat: 44.605, Lon: -72.90}},
+					End:   geo.Coord{Lat: 44.645, Lon: -72.90}},
 			},
 		},
 	}
@@ -288,9 +294,11 @@ func TestPipelineIntegration_FullPipelineProducesValidKML(t *testing.T) {
 
 	// Verify exact folder count and key road names.
 	// Expected: Mountain Pass Rd (1) + Interstate 90 (1) + Route 100 (2) +
-	//           Main Street (2) + Route 9 & 20 (1) + Flat Street (1) = 8.
-	// Unnamed road is excluded; all collections pass when minScore=0.
-	const wantFolders = 8
+	//           Main Street (2) + Route 9 & 20 (1) = 7.
+	// Flat Street is excluded by MinRoadLengthM: its all-tier-0 segments are dropped
+	// by SplitAtStraightGaps leaving TotalLength=0. Unnamed road has no name tag.
+	// All remaining collections pass when minScore=0.
+	const wantFolders = 7
 	if len(kml.Doc.Folders) != wantFolders {
 		t.Errorf("folder count: got %d, want %d", len(kml.Doc.Folders), wantFolders)
 	}
@@ -591,13 +599,14 @@ func TestPipelineIntegration_AllBelowMinScore(t *testing.T) {
 }
 
 // TestPipelineIntegration_SingleWayRoad verifies a single-way road produces one collection.
+// The segment is 5,000 m long to exceed MinRoadLengthM (4,828 m) and appear in KML output.
 func TestPipelineIntegration_SingleWayRoad(t *testing.T) {
 	ways := []ScoredWay{
 		{
 			WayID: 800,
 			Tags:  map[string]string{"name": "Lone Way", "highway": "tertiary"},
 			Segments: []ScoredSegment{
-				makeScoredSegment(800, 3, 44.70, -73.00, 44.701, -73.00, 200.0),
+				makeScoredSegment(800, 3, 44.70, -73.00, 44.745, -73.00, 5000.0),
 			},
 		},
 	}
@@ -643,7 +652,9 @@ func TestPipelineIntegration_AllTierZeroSegments(t *testing.T) {
 		t.Errorf("expected PenalizedScore = 0 for all-tier-0 road, got %v", rc.PenalizedScore)
 	}
 
-	// KML with minScore=0 should include it; with minScore>0 should exclude it.
+	// KML with minScore=0: the all-tier-0 road is excluded because SplitAtStraightGaps
+	// drops all tier-0 segments (they form a long straight gap), leaving TotalLength=0
+	// which is below MinRoadLengthM. The collection is present in the slice but not in KML.
 	var buf bytes.Buffer
 	if err := WriteKML(&buf, collections, 0); err != nil {
 		t.Fatalf("WriteKML: %v", err)
@@ -652,11 +663,11 @@ func TestPipelineIntegration_AllTierZeroSegments(t *testing.T) {
 	if err := xml.Unmarshal([]byte(buf.String()[len(xml.Header):]), &kml); err != nil {
 		t.Fatalf("all-tier-0 KML is invalid XML: %v", err)
 	}
-	if len(kml.Doc.Folders) != 1 {
-		t.Errorf("expected 1 folder for all-tier-0 road with minScore=0, got %d", len(kml.Doc.Folders))
+	if len(kml.Doc.Folders) != 0 {
+		t.Errorf("expected 0 folders for all-tier-0 road (excluded by min-length filter), got %d", len(kml.Doc.Folders))
 	}
 
-	// Now filter with minScore=1: should produce 0 folders.
+	// With minScore=1: also excluded (both by min-score and min-length filters).
 	var buf2 bytes.Buffer
 	if err := WriteKML(&buf2, collections, 1.0); err != nil {
 		t.Fatalf("WriteKML(minScore=1): %v", err)

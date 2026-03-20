@@ -417,19 +417,19 @@ func runScore(args []string, stderr io.Writer) error {
 		return fmt.Errorf("writing KML: %w", err)
 	}
 
-	// Count collections above min-score filter
-	aboveMinScore := 0
+	// Count collections that pass both the min-score and min-length filters.
+	inOutput := 0
 	for _, c := range collections {
-		if c.PenalizedScore >= *minScore {
-			aboveMinScore++
+		if c.PenalizedScore >= *minScore && c.TotalLength >= quality.MinRoadLengthM {
+			inOutput++
 		}
 	}
 
-	if aboveMinScore == 0 {
-		fmt.Fprintf(stderr, "WARNING: No road collections passed the min-score filter (%.0f). KML output is empty.\n", *minScore)
+	if inOutput == 0 {
+		fmt.Fprintf(stderr, "WARNING: No road collections passed the min-score (%.0f) and min-length (%.0f m) filters. KML output is empty.\n", *minScore, quality.MinRoadLengthM)
 	}
 
-	fmt.Fprintf(stderr, "Aggregated %d road collections (%d above min-score %.0f).\n", len(collections), aboveMinScore, *minScore)
+	fmt.Fprintf(stderr, "Aggregated %d road collections (%d in output after min-score %.0f and min-length %.0f m filters).\n", len(collections), inOutput, *minScore, quality.MinRoadLengthM)
 
 	// Top 5 roads by penalized score (sorted descending)
 	topN := min(5, len(collections))

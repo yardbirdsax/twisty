@@ -111,14 +111,16 @@ func formatCoordinates(segments []ScoredSegment) string {
 
 // WriteKML writes road collections as a KML file.
 // Collections are sorted by penalized score descending.
-// Collections with penalized score below minScore are excluded.
+// Collections with penalized score below minScore or total length below
+// MinRoadLengthM are excluded.
 func WriteKML(w io.Writer, collections []RoadCollection, minScore float64) error {
-	// Filter by minScore
+	// Filter by minScore and MinRoadLengthM
 	var filtered []RoadCollection
 	for _, c := range collections {
-		if c.PenalizedScore >= minScore {
-			filtered = append(filtered, c)
+		if c.PenalizedScore < minScore || c.TotalLength < MinRoadLengthM {
+			continue
 		}
+		filtered = append(filtered, c)
 	}
 
 	// Sort by penalized score descending
