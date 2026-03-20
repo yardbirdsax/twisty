@@ -62,7 +62,7 @@ type ScoredWay struct {
 
 **Reviewer:** Claude (Sonnet 4.6)
 **Date:** 2026-03-20
-**Verdict:** APPROVED WITH CHANGES
+**Verdict:** APPROVED
 
 ---
 
@@ -101,45 +101,7 @@ No blocking issues found.
 
 ## SHOULD FIX
 
-### 1. Missing Comment on Cache Format Change in `scoring_params.go`
-
-**File:** `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scoring_params.go`
-**Line:** 96-112
-
-**Observation:** The task spec (Direction 4) explicitly requires documenting that the cache format changed due to the new `Tags` field, and that users must clear their score cache. No such comment was added to `ScoringParamsHash()` or anywhere in the file.
-
-**Current:**
-```
-// ScoringParamsHash returns a SHA-256 hash of all scoring constants...
-```
-
-**Recommended:**
-```
-// ScoringParamsHash returns a SHA-256 hash of all scoring constants...
-// NOTE: The cache format changed in Task 001 (added Tags field to ScoredWay).
-// Existing cache entries without tags will silently omit tags on read.
-// Users upgrading from a pre-Task-001 cache should run `twisty score --clear-cache`
-// or manually delete the score cache directory.
-```
-
-**Rationale:** The spec explicitly called this out. Without the comment, future maintainers have no in-code record of why old caches are incompatible.
-
-### 2. `TestScoreCache_WriteAndRead` Does Not Assert Tags
-
-**File:** `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scorecache_test.go`
-**Line:** 52-99
-
-**Observation:** `TestScoreCache_WriteAndRead` uses `sampleScoredWays()` which now includes tags, but the test body never asserts that `got[0].Tags` matches `ways[0].Tags`. Tag verification is only in the separate `TestScoreCache_TagsRoundTrip` test. This means the primary write/read smoke test does not catch a regression where tags are silently dropped.
-
-**Rationale:** The primary round-trip test should be self-contained and comprehensive. A missing tag assertion here means a tag-drop regression would not be caught by the most obvious test.
-
----
-
-## Good Practices Observed
-
-1. **Atomic write preserved:** The existing temp-file-then-rename write pattern was kept intact; no regression introduced.
-2. **Tag propagation at the lowest level:** Tags are set directly in `ScoreWay` (the leaf function) rather than patched on afterward in the pipeline, which is the correct place to own this invariant.
-3. **Dedicated tag round-trip test:** `TestScoreCache_TagsRoundTrip` and `TestScoreCache_JSONRoundTrip` both assert tag values individually by key, not just by length, which would catch partial-tag regressions.
+No additional suggestions.
 
 ---
 
@@ -154,9 +116,9 @@ make lint   # go vet ./...: no issues
 
 ## Final Verdict
 
-**APPROVED WITH CHANGES**
+**APPROVED**
 
-All acceptance criteria are met and tests pass. Two non-blocking items should be addressed: add the in-code comment about cache format incompatibility (explicitly required by the spec), and add a tag assertion to the primary `TestScoreCache_WriteAndRead` test.
+All acceptance criteria are met, all tests pass, linter is clean, and the previously noted SHOULD FIX items (cache format comment in `ScoringParamsHash()` and tag assertions in `TestScoreCache_WriteAndRead`) have been addressed.
 
 ---
 
@@ -165,14 +127,3 @@ All acceptance criteria are met and tests pass. Two non-blocking items should be
 - **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
 - **APPROVED WITH CHANGES**: All acceptance criteria met, minor issues found. Can merge after addressing SHOULD FIX items, or merge as-is with follow-up.
 - **NEEDS REVISION**: Acceptance criteria not met or critical issues found. Must address MUST FIX items before re-review.
-
----
-
-## SHOULD FIX Follow-up (2026-03-20)
-
-Both SHOULD FIX items addressed:
-
-1. Added cache format change comment to `ScoringParamsHash()` in `scoring_params.go` noting the Task 001 backward-incompatible cache change and directing users to clear the score cache.
-2. Added tag assertions to `TestScoreCache_WriteAndRead` in `scorecache_test.go` verifying `got[0].Tags` matches `ways[0].Tags`.
-
-All `quality` package tests pass.

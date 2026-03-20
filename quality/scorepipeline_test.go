@@ -74,7 +74,7 @@ func curvyWayGeometry(origin geo.Coord) []geo.Coord {
 
 	// West tail: 50 nodes at 50 m spacing (~2500 m), all tier 0.
 	tail := make([]geo.Coord, tailN)
-	for i := 0; i < tailN; i++ {
+	for i := range tailN {
 		tail[i] = geo.Coord{
 			Lat: turnWest.Lat,
 			Lon: turnWest.Lon - float64(i+1)*tailStep*lonPerM,
@@ -187,6 +187,36 @@ func TestRunScorePipeline_EndToEnd(t *testing.T) {
 	// is zeroed by it.
 	if result.ZeroedByDeflection != 0 {
 		t.Errorf("ZeroedByDeflection = %d, want 0", result.ZeroedByDeflection)
+	}
+}
+
+func TestRunScorePipeline_TagsPropagated(t *testing.T) {
+	t.Parallel()
+
+	origin := geo.Coord{Lat: 45.0, Lon: -122.0}
+	ways := []quality.Way{
+		{
+			ID:       10,
+			Tags:     map[string]string{"highway": "secondary", "name": "Curvy Lane"},
+			Geometry: curvyWayGeometry(origin),
+		},
+	}
+
+	result := quality.RunScorePipeline(ways)
+
+	if len(result.ScoredWays) != 1 {
+		t.Fatalf("expected 1 scored way, got %d", len(result.ScoredWays))
+	}
+
+	sw := result.ScoredWays[0]
+	if sw.Tags == nil {
+		t.Fatal("ScoredWay.Tags is nil, expected tags to be propagated")
+	}
+	if sw.Tags["highway"] != "secondary" {
+		t.Errorf("Tags[highway]: got %q, want %q", sw.Tags["highway"], "secondary")
+	}
+	if sw.Tags["name"] != "Curvy Lane" {
+		t.Errorf("Tags[name]: got %q, want %q", sw.Tags["name"], "Curvy Lane")
 	}
 }
 

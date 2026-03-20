@@ -98,6 +98,11 @@ func AssignTier(radius float64) (tier int, weight float64) {
 // calls and across process restarts. It is used by the score cache (Task 007)
 // to detect when parameters have changed and cached scores must be
 // invalidated.
+//
+// NOTE: The cache format changed in Task 001 (added Tags field to ScoredWay).
+// Existing cache entries without tags will silently omit tags on read.
+// Users upgrading from a pre-Task-001 cache should run `twisty score --clear-cache`
+// or manually delete the score cache directory.
 func ScoringParamsHash() string {
 	input := fmt.Sprintf(
 		"TierRadius4=%v,TierRadius3=%v,TierRadius2=%v,TierRadius1=%v,"+

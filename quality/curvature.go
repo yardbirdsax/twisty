@@ -19,8 +19,9 @@ type ScoredSegment struct {
 
 // ScoredWay holds scored segments for a single OSM way.
 type ScoredWay struct {
-	WayID    int64           `json:"way_id"`
-	Segments []ScoredSegment `json:"segments"`
+	WayID    int64             `json:"way_id"`
+	Tags     map[string]string `json:"tags"`
+	Segments []ScoredSegment   `json:"segments"`
 }
 
 // ScoreWay computes curvature scores for all segments in a way.
@@ -29,13 +30,14 @@ func ScoreWay(w Way) ScoredWay {
 	n := len(w.Geometry)
 
 	if n < 2 {
-		return ScoredWay{WayID: w.ID}
+		return ScoredWay{WayID: w.ID, Tags: w.Tags}
 	}
 
 	if n == 2 {
 		length := geo.Haversine(w.Geometry[0], w.Geometry[1])
 		return ScoredWay{
 			WayID: w.ID,
+			Tags:  w.Tags,
 			Segments: []ScoredSegment{
 				{
 					Start:  w.Geometry[0],
@@ -89,6 +91,7 @@ func ScoreWay(w Way) ScoredWay {
 
 	return ScoredWay{
 		WayID:    w.ID,
+		Tags:     w.Tags,
 		Segments: segments,
 	}
 }

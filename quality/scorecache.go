@@ -34,7 +34,8 @@ type coordJSON struct {
 }
 
 type scoredWayJSON struct {
-	WayID    int64                `json:"way_id"`
+	WayID    int64              `json:"way_id"`
+	Tags     map[string]string  `json:"tags"`
 	Segments []scoredSegmentJSON `json:"segments"`
 }
 
@@ -190,7 +191,7 @@ func scoredWaysToJSON(ways []ScoredWay) []scoredWayJSON {
 				Score:  seg.Score,
 			}
 		}
-		result[i] = scoredWayJSON{WayID: w.WayID, Segments: segs}
+		result[i] = scoredWayJSON{WayID: w.WayID, Tags: w.Tags, Segments: segs}
 	}
 	return result
 }
@@ -216,7 +217,7 @@ func scoredWaysFromJSON(ways []scoredWayJSON) []ScoredWay {
 				Score:  seg.Score,
 			}
 		}
-		result[i] = ScoredWay{WayID: w.WayID, Segments: segs}
+		result[i] = ScoredWay{WayID: w.WayID, Tags: w.Tags, Segments: segs}
 	}
 	return result
 }

@@ -20,6 +20,7 @@ func sampleScoredWays() []ScoredWay {
 	return []ScoredWay{
 		{
 			WayID: 12345,
+			Tags:  map[string]string{"highway": "secondary", "name": "Test Road"},
 			Segments: []ScoredSegment{
 				{
 					Start:  geo.Coord{Lat: 45.1, Lon: -122.5},
@@ -84,6 +85,16 @@ func TestScoreCache_WriteAndRead(t *testing.T) {
 		t.Errorf("Radius: got %v, want +Inf", seg1.Radius)
 	}
 
+	// Verify tags round-trip.
+	if len(got[0].Tags) != len(ways[0].Tags) {
+		t.Errorf("Tags length: got %d, want %d", len(got[0].Tags), len(ways[0].Tags))
+	}
+	for k, want := range ways[0].Tags {
+		if got[0].Tags[k] != want {
+			t.Errorf("Tags[%q]: got %q, want %q", k, got[0].Tags[k], want)
+		}
+	}
+
 	// Verify other fields.
 	seg0 := got[0].Segments[0]
 	if seg0.Radius != 50.0 {
@@ -94,6 +105,37 @@ func TestScoreCache_WriteAndRead(t *testing.T) {
 	}
 	if seg0.Start.Lat != 45.1 || seg0.Start.Lon != -122.5 {
 		t.Errorf("Start: got %v, want {45.1, -122.5}", seg0.Start)
+	}
+}
+
+func TestScoreCache_TagsRoundTrip(t *testing.T) {
+	c := newTestScoreCache(t)
+	tile := sampleTile()
+	rawData := []byte(`{"raw":"tile data"}`)
+	ways := sampleScoredWays()
+
+	if err := c.Write(tile, rawData, ways, 0); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	got, _, ok := c.Read(tile, rawData)
+	if !ok {
+		t.Fatal("Read returned false, expected true")
+	}
+
+	if len(got) == 0 {
+		t.Fatal("Read returned no ways")
+	}
+
+	wantTags := map[string]string{"highway": "secondary", "name": "Test Road"}
+	gotTags := got[0].Tags
+	if len(gotTags) != len(wantTags) {
+		t.Fatalf("Tags: got %v, want %v", gotTags, wantTags)
+	}
+	for k, v := range wantTags {
+		if gotTags[k] != v {
+			t.Errorf("Tags[%q]: got %q, want %q", k, gotTags[k], v)
+		}
 	}
 }
 
@@ -284,6 +326,7 @@ func TestScoreCache_JSONRoundTrip(t *testing.T) {
 	ways := []ScoredWay{
 		{
 			WayID: 99,
+			Tags:  map[string]string{"highway": "primary", "name": "Main St"},
 			Segments: []ScoredSegment{
 				{
 					Start:  geo.Coord{Lat: 1.23, Lon: 4.56},
@@ -315,6 +358,9 @@ func TestScoreCache_JSONRoundTrip(t *testing.T) {
 	}
 	if restored[0].WayID != 99 {
 		t.Errorf("WayID: got %d, want 99", restored[0].WayID)
+	}
+	if restored[0].Tags["highway"] != "primary" || restored[0].Tags["name"] != "Main St" {
+		t.Errorf("Tags: got %v, want {highway:primary name:Main St}", restored[0].Tags)
 	}
 	if len(restored[0].Segments) != 2 {
 		t.Fatalf("segment count: got %d, want 2", len(restored[0].Segments))
