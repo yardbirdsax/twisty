@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/yardbirdsax/twisty/geo"
@@ -16,14 +20,30 @@ import (
 )
 
 func main() {
-	origin := flag.String("origin", "", "Origin address or lat,lon")
-	dest := flag.String("dest", "", "Destination address or lat,lon")
-	twist := flag.Float64("twist", 0.5, "0.0 = fastest, 1.0 = twistiest")
-	out := flag.String("out", "route.gpx", "Output file path")
-	showAll := flag.Bool("show-all", false, "Print candidate comparison table")
-	verbose := flag.Bool("v", false, "Enable verbose timing logs to stderr")
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: twisty <route|fetch> [flags]")
+		os.Exit(1)
+	}
+	switch os.Args[1] {
+	case "route":
+		runRoute(os.Args[2:])
+	case "fetch":
+		runFetch(os.Args[2:])
+	default:
+		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", os.Args[1])
+		os.Exit(1)
+	}
+}
 
-	flag.Parse()
+func runRoute(args []string) {
+	fs := flag.NewFlagSet("route", flag.ExitOnError)
+	origin := fs.String("origin", "", "Origin address or lat,lon")
+	dest := fs.String("dest", "", "Destination address or lat,lon")
+	twist := fs.Float64("twist", 0.5, "0.0 = fastest, 1.0 = twistiest")
+	out := fs.String("out", "route.gpx", "Output file path")
+	showAll := fs.Bool("show-all", false, "Print candidate comparison table")
+	verbose := fs.Bool("v", false, "Enable verbose timing logs to stderr")
+	fs.Parse(args)
 
 	var logger *slog.Logger
 	if *verbose {
@@ -38,7 +58,7 @@ func main() {
 	pipelineStart := time.Now()
 
 	if *origin == "" || *dest == "" {
-		flag.Usage()
+		fs.Usage()
 		fmt.Fprintln(os.Stderr, "Error: -origin and -dest are required")
 		os.Exit(1)
 	}
@@ -127,9 +147,155 @@ func main() {
 	done("path", *out)
 
 	// Stage 8: Print summary
-	printSummary(routes, selectedIdx, *twist, *out, *showAll)
+	printSummary(routes, selectedIdx, *out, *showAll)
 
 	logger.Debug("pipeline done", "total_elapsed_ms", time.Since(pipelineStart).Milliseconds())
+}
+
+func runFetch(args []string) {
+	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
+	address := fs.String("address", "", "Address for curvature pipeline center point")
+	radius := fs.Float64("radius", 25.0, "Search radius in km (max 50)")
+	tileSize := fs.Float64("tile-size", 0.05, "Tile size in degrees")
+	cacheDir := fs.String("cache-dir", "", "Overpass tile cache directory (default: ~/.twisty/cache/overpass/)")
+	noCache := fs.Bool("no-cache", false, "Bypass cache reads (still writes)")
+	clearCache := fs.Bool("clear-cache", false, "Delete all cached tiles before fetching")
+	purgeOlderThan := fs.String("purge-older-than", "", "Purge cache files older than duration (e.g., 90d, 6m where m=months not minutes)")
+	verbose := fs.Bool("v", false, "Enable verbose timing logs to stderr")
+	fs.Parse(args)
+
+	var logger *slog.Logger
+	if *verbose {
+		handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})
+		logger = slog.New(handler)
+	} else {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	pipelineStart := time.Now()
+
+	if *address == "" {
+		fmt.Fprintln(os.Stderr, "Error: --address is required")
+		os.Exit(1)
+	}
+
+	if *radius <= 0 || *radius > 50 {
+		fmt.Fprintln(os.Stderr, "Error: --radius must be between 0 and 50 km")
+		os.Exit(1)
+	}
+
+	if *tileSize <= 0 {
+		fmt.Fprintln(os.Stderr, "Error: --tile-size must be greater than 0")
+		os.Exit(1)
+	}
+
+	if *cacheDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("cannot determine home directory: %v", err)
+		}
+		*cacheDir = filepath.Join(home, ".twisty", "cache", "overpass")
+	}
+
+	cache := &quality.TileCache{
+		Dir:       *cacheDir,
+		Precision: 3,
+	}
+
+	// Handle --clear-cache
+	if *clearCache {
+		logger.Info("clearing cache", "dir", *cacheDir)
+		if err := cache.ClearAll(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error clearing cache: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Cache cleared.")
+	}
+
+	// Handle --purge-older-than
+	if *purgeOlderThan != "" {
+		dur, err := parseDuration(*purgeOlderThan)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing --purge-older-than: %v\n", err)
+			os.Exit(1)
+		}
+		count, err := cache.PurgeOlderThan(dur)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error purging cache: %v\n", err)
+			os.Exit(1)
+		}
+		logger.Info("purged old cache files", "count", count, "older_than", *purgeOlderThan)
+		fmt.Printf("Purged %d old cache file(s).\n", count)
+	}
+
+	// Geocode the address
+	logger.Info("pipeline start", "mode", "tiled-fetch", "address", *address)
+	done := stageTimer(logger, "geocode-center")
+	centerResult, err := geocode.Resolve(*address, "Center")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving address: %v\n", err)
+		os.Exit(1)
+	}
+	done("result", centerResult.DisplayName)
+
+	// Run tiled fetch
+	cfg := quality.TileFetchConfig{
+		TileSize: *tileSize,
+		Cache:    cache,
+		NoCache:  *noCache,
+		Logger:   logger,
+	}
+
+	done = stageTimer(logger, "fetch-tiled-ways")
+	ways, err := quality.FetchTiledWays(context.Background(), centerResult.Lat, centerResult.Lon, *radius, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error fetching tiled ways: %v\n", err)
+		os.Exit(1)
+	}
+	done("ways", len(ways))
+
+	fmt.Printf("Tiled fetch complete: %d deduplicated ways found.\n", len(ways))
+	logger.Debug("pipeline done", "total_elapsed_ms", time.Since(pipelineStart).Milliseconds())
+}
+
+// parseDuration parses a duration string supporting Nd (days), Nm (months),
+// and standard Go durations (e.g., 24h).
+func parseDuration(s string) (time.Duration, error) {
+	if len(s) == 0 {
+		return 0, fmt.Errorf("empty duration string")
+	}
+
+	suffix := s[len(s)-1]
+	switch suffix {
+	case 'd':
+		prefix := s[:len(s)-1]
+		n, err := strconv.Atoi(prefix)
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q: prefix must be a positive integer", s)
+		}
+		if n <= 0 {
+			return 0, fmt.Errorf("invalid duration %q: prefix must be a positive integer", s)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	case 'm':
+		// Treat Nm as months (approximate: 1 month = 30 days).
+		// e.g., "6m" → 180 days. Use Go duration parsing for other forms (e.g., "24h").
+		// Note: "m" means months here, not minutes. Use "Nh" for hour-based durations.
+		prefix := s[:len(s)-1]
+		n, err := strconv.Atoi(prefix)
+		if err != nil {
+			return 0, fmt.Errorf("invalid duration %q: prefix must be a positive integer (note: 'm' means months, not minutes; use e.g. '24h' for Go durations)", s)
+		}
+		if n <= 0 {
+			return 0, fmt.Errorf("invalid duration %q: prefix must be a positive integer", s)
+		}
+		return time.Duration(n) * 30 * 24 * time.Hour, nil
+	default:
+		// Try standard Go duration
+		return time.ParseDuration(s)
+	}
 }
 
 // stageTimer logs the start of a pipeline stage and returns a closure that logs
@@ -153,7 +319,7 @@ func collectAllPoints(routes []route.Route) [][]geo.Coord {
 }
 
 // printSummary prints the route comparison table (if showAll) and the selected route summary.
-func printSummary(routes []route.Route, selectedIdx int, twist float64, outPath string, showAll bool) {
+func printSummary(routes []route.Route, selectedIdx int, outPath string, showAll bool) {
 	if showAll {
 		fmt.Println("Route comparison:")
 		fmt.Println("--------")
