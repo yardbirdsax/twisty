@@ -72,3 +72,64 @@ This calls `DeflectionFilter` on each way (by pointer).
 - `geo.AngleDiff()` already handles the 360°/0° wraparound correctly (returns values in [0, 180]).
 - The filter advances past the window after processing it — this prevents double-processing segments that were already zeroed.
 - These values (2.4km, 20°) are from the Curvature project and should be noted in comments.
+
+---
+# Task 005 Review: Deflection Filter
+
+**Reviewer:** Senior Software Engineer Agent
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implements a look-ahead deflection filter (`DeflectionFilter`) that zeroes out curvature scores for segments representing minor heading deviations within an otherwise straight 2.4 km window, plus a batch wrapper `ApplyDeflectionFilter`. This is stage 4 of the scoring pipeline.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/deflection.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/deflection_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `quality/deflection.go` exists with `DeflectionFilter` and `ApplyDeflectionFilter` | PASS |
+| `quality/deflection_test.go` passes with `go test ./quality/...` | PASS |
+| A straight road with an intersection dogleg has its curvature zeroed | PASS |
+| A genuinely winding road retains its curvature scores | PASS |
+| Zeroed segments have tier 0, weight 0, and score 0 | PASS |
+| The filter uses `DeflectionLookAheadM` and `DeflectionMinHeadingChange` constants | PASS |
+| The filter skips segments that already have zero scores | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # all packages pass (quality: 8.940s)
+make lint   # go vet ./... — no issues reported
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria pass, tests pass, linter is clean. Previous review issues (window advance logic, `latOffset` documentation, preserved-segment field assertion) were all addressed in post-review fixes and are confirmed resolved in the current code.
