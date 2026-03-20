@@ -135,11 +135,12 @@ func processTilesConcurrentlyWith(
 		stats.totalSegs.Add(int64(res.segCount))
 
 		for _, w := range res.ways {
-			name := w.Tags["name"]
-			if name == "" {
-				continue
+			if name := w.Tags["name"]; name != "" {
+				grouped[name] = append(grouped[name], w)
 			}
-			grouped[name] = append(grouped[name], w)
+			if ref := w.Tags["ref"]; ref != "" {
+				grouped[ref] = append(grouped[ref], w)
+			}
 		}
 
 		if progress != nil {

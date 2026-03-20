@@ -52,6 +52,23 @@ func GroupWaysByName(ways []ScoredWay) map[string][]ScoredWay {
 	return result
 }
 
+// GroupWays groups scored ways by both their "name" and "ref" tags.
+// A way with both tags appears in both groups. Ways with neither tag are excluded.
+// This enables roads like "PA 345" (which changes name along its length) to be
+// treated as a single road via the ref grouping.
+func GroupWays(ways []ScoredWay) map[string][]ScoredWay {
+	result := make(map[string][]ScoredWay)
+	for _, w := range ways {
+		if name := w.Tags["name"]; name != "" {
+			result[name] = append(result[name], w)
+		}
+		if ref := w.Tags["ref"]; ref != "" {
+			result[ref] = append(result[ref], w)
+		}
+	}
+	return result
+}
+
 // wayEndpoints extracts the start and end coordinates of a ScoredWay.
 // Returns zero coords and false if the way has no segments.
 func wayEndpoints(w ScoredWay) (start, end geo.Coord, ok bool) {
@@ -330,7 +347,7 @@ func Aggregate(ways []ScoredWay) []RoadCollection {
 		return nil
 	}
 
-	nameGroups := GroupWaysByName(ways)
+	nameGroups := GroupWays(ways)
 
 	var collections []RoadCollection
 
