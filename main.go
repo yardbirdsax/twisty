@@ -297,6 +297,9 @@ func (b *termProgressBar) Done() {
 	fmt.Fprintln(b.w)
 }
 
+func (b *termProgressBar) Retry()                        {}
+func (b *termProgressBar) FetchDuration(_ time.Duration) {}
+
 func (b *termProgressBar) render() {
 	const width = 30
 	filled := 0

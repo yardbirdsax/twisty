@@ -1,5 +1,7 @@
 package quality
 
+import "time"
+
 // ProgressReporter is implemented by types that want to receive progress
 // events during a tiled fetch. All methods must be safe to call on a nil
 // receiver or a no-op implementation.
@@ -13,6 +15,14 @@ type ProgressReporter interface {
 	// from the local cache.
 	Tick(cached bool)
 
+	// Retry is called once per retry attempt (not the initial attempt).
+	Retry()
+
+	// FetchDuration is called after each call to fetchTileRaw completes
+	// (success or failure), with the wall-clock duration of that single HTTP
+	// round-trip. It is not called for cache hits.
+	FetchDuration(d time.Duration)
+
 	// Done is called after all tiles have been processed. Implementations
 	// should use this to finalize any output (e.g., print a trailing newline).
 	Done()
@@ -24,6 +34,8 @@ var _ ProgressReporter = NoopProgressReporter{}
 // It is the safe default when no progress output is desired.
 type NoopProgressReporter struct{}
 
-func (NoopProgressReporter) SetTotal(_ int) {}
-func (NoopProgressReporter) Tick(_ bool)    {}
-func (NoopProgressReporter) Done()          {}
+func (NoopProgressReporter) SetTotal(_ int)            {}
+func (NoopProgressReporter) Tick(_ bool)               {}
+func (NoopProgressReporter) Retry()                    {}
+func (NoopProgressReporter) FetchDuration(_ time.Duration) {}
+func (NoopProgressReporter) Done()                     {}

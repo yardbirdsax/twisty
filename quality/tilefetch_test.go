@@ -536,6 +536,10 @@ func (s *spyProgressReporter) Tick(cached bool) {
 	s.ticks = append(s.ticks, cached)
 }
 
+func (s *spyProgressReporter) Retry() {}
+
+func (s *spyProgressReporter) FetchDuration(_ time.Duration) {}
+
 func (s *spyProgressReporter) Done() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
