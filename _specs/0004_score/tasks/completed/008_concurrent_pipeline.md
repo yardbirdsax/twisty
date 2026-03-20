@@ -78,3 +78,77 @@ func processNameGroupsConcurrently(groups map[string][]ScoredWay) ([]RoadCollect
 - Worker pool size defaults to `runtime.GOMAXPROCS(0)` but could be made configurable via a flag in the future (not in scope for this task).
 - Test with `-race` flag to catch data races: `go test -race ./...`
 - Keep the concurrent code in `main.go` or extract to a new file like `pipeline.go` — whichever keeps things cleaner.
+
+---
+# Task 008 Review: Concurrent Pipeline Architecture
+
+**Reviewer:** Senior Software Engineer Agent
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implemented the two-phase concurrent pipeline. Phase A (`processTilesConcurrently`) fans out tile processing across a bounded worker pool (`runtime.GOMAXPROCS(0)` workers) and collects results into a grouped map at a barrier. Phase B (`processNameGroupsConcurrently`) fans out per-name-group processing across another worker pool. Both phases use context-based cancellation, atomic stats, and a pluggable `tileProcessorFunc` to support error injection in tests. `runScore()` is wired to both phases. All previously identified issues have been addressed.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/pipeline.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/pipeline_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| Tile processing runs concurrently with bounded worker pool | PASS |
+| Name group processing runs concurrently after barrier | PASS |
+| Output is identical to sequential pipeline (deterministic after sorting) | PASS |
+| Progress reporting still works correctly | PASS |
+| Errors propagate cleanly from workers | PASS |
+| No data races (passes `go test -race`) | PASS |
+| All existing tests still pass | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test -short ./...                                                              # all packages: PASS
+go vet ./...                                                                      # no warnings
+go test -race -short ./...                                                        # all packages: PASS (no data races)
+go test -race -short -run 'TestProcessTilesConcurrently_WorkerError' -count=10 . # PASS (consistent)
+go test -race -short -run 'TestProcessNameGroupsConcurrently_ErrorPropagation' -count=10 . # PASS (consistent)
+go test -race -short -run 'TestProcessNameGroupsConcurrently_NoDataRace' -count=5 .        # PASS (consistent)
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met. Both previously identified MUST FIX issues have been resolved: `termProgressBar` is now protected by a `sync.Mutex` with a doc comment explaining the concurrency contract, and `TestProcessTilesConcurrently_WorkerError` exercises real worker error propagation via the injected `tileProcessorFunc`. Both SHOULD FIX items were also addressed: the misleading `tilesWithData` stat was removed in favor of `len(grouped) == 0`, and the Phase B `workCh` buffer was reduced to `workerCount`. No new issues found.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **NEEDS REVISION**: One or more issues found. Address all MUST FIX items and SHOULD FIX items where reasonable before re-review.

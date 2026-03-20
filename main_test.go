@@ -16,31 +16,31 @@ import (
 func TestTermProgressBarStatsString(t *testing.T) {
 	tests := []struct {
 		name        string
-		bar         termProgressBar
+		bar         *termProgressBar
 		wantContain []string
 		wantAbsent  []string
 	}{
 		{
 			name: "no retries no fetches",
-			bar:  termProgressBar{cached: 2, fetched: 3},
+			bar:  &termProgressBar{cached: 2, fetched: 3},
 			wantContain: []string{"2 cached", "3 fetched"},
 			wantAbsent:  []string{"retry", "last:", "avg:"},
 		},
 		{
 			name:        "one retry singular",
-			bar:         termProgressBar{cached: 0, fetched: 1, retries: 1},
+			bar:         &termProgressBar{cached: 0, fetched: 1, retries: 1},
 			wantContain: []string{"1 retry"},
 			wantAbsent:  []string{"retries"},
 		},
 		{
 			name:        "multiple retries plural",
-			bar:         termProgressBar{cached: 0, fetched: 1, retries: 3},
+			bar:         &termProgressBar{cached: 0, fetched: 1, retries: 3},
 			wantContain: []string{"3 retries"},
 			wantAbsent:  []string{"3 retry"},
 		},
 		{
 			name: "one fetch duration",
-			bar: termProgressBar{
+			bar: &termProgressBar{
 				cached:             0,
 				fetched:            1,
 				fetchCount:         1,
@@ -51,7 +51,7 @@ func TestTermProgressBarStatsString(t *testing.T) {
 		},
 		{
 			name: "multiple fetch durations averages correctly",
-			bar: termProgressBar{
+			bar: &termProgressBar{
 				cached:             0,
 				fetched:            2,
 				fetchCount:         2,

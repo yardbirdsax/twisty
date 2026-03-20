@@ -8,10 +8,11 @@ import (
 	"log"
 	"log/slog"
 	"os"
-	"sort"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yardbirdsax/twisty/geo"
@@ -250,7 +251,7 @@ func runFetch(args []string) {
 	// Run tiled fetch
 	var progress quality.ProgressReporter = quality.NoopProgressReporter{}
 	if !*verbose && isTerminal(os.Stderr) {
-		progress = &termProgressBar{w: os.Stderr}
+		progress = &termProgressBar{w: os.Stderr, label: "Fetching tiles:"}
 	}
 
 	cfg := quality.TileFetchConfig{
@@ -359,64 +360,27 @@ func runScore(args []string, stderr io.Writer) error {
 	tiles := quality.ComputeTiles(centerResult.Lat, centerResult.Lon, *radius, *tileSize)
 	logger.Debug("computed tiles", "count", len(tiles))
 
-	// Aggregate stats.
 	totalTiles := len(tiles)
-	cacheHits := 0
-	totalWaysScored := 0
-	totalSegments := 0
-	totalZeroed := 0
-	tilesWithData := 0
 
-	var allScoredWays []quality.ScoredWay
-
-	for _, tile := range tiles {
-		if !tileCache.Has(tile) {
-			logger.Warn("no raw tile data, skipping", "south", tile.South, "west", tile.West)
-			continue
-		}
-
-		rawData, err := tileCache.Read(tile)
-		if err != nil {
-			logger.Warn("failed to read tile data, skipping", "south", tile.South, "west", tile.West, "error", err)
-			continue
-		}
-
-		if !*noCache {
-			if cachedWays, zeroed, hit := scoreCache.Read(tile, rawData); hit {
-				logger.Debug("score cache hit", "south", tile.South, "west", tile.West)
-				cacheHits++
-				tilesWithData++
-				// Accumulate stats from cached ways.
-				for _, w := range cachedWays {
-					totalSegments += len(w.Segments)
-				}
-				totalWaysScored += len(cachedWays)
-				totalZeroed += zeroed
-				allScoredWays = append(allScoredWays, cachedWays...)
-				continue
-			}
-		}
-
-		ways, err := quality.ParseTileData(rawData)
-		if err != nil {
-			logger.Warn("failed to parse tile data, skipping", "south", tile.South, "west", tile.West, "error", err)
-			continue
-		}
-		tilesWithData++
-
-		result := quality.RunScorePipeline(ways)
-
-		if err := scoreCache.Write(tile, rawData, result.ScoredWays, result.ZeroedByDeflection); err != nil {
-			logger.Warn("failed to write score cache", "south", tile.South, "west", tile.West, "error", err)
-		}
-
-		totalWaysScored += len(result.ScoredWays)
-		totalSegments += result.TotalSegments
-		totalZeroed += result.ZeroedByDeflection
-		allScoredWays = append(allScoredWays, result.ScoredWays...)
+	// Phase A: Concurrent tile processing.
+	var scoreProgress quality.ProgressReporter = quality.NoopProgressReporter{}
+	if !*verbose && isTerminal(os.Stderr) {
+		scoreProgress = &termProgressBar{w: os.Stderr, label: "Scoring tiles:"}
+	}
+	grouped, stats, err := processTilesConcurrently(
+		context.Background(),
+		tiles,
+		tileCache,
+		scoreCache,
+		*noCache,
+		logger,
+		scoreProgress,
+	)
+	if err != nil {
+		return fmt.Errorf("processing tiles: %w", err)
 	}
 
-	if tilesWithData == 0 {
+	if len(grouped) == 0 {
 		fmt.Fprintln(stderr, "WARNING: No cached tile data found. Run 'twisty fetch -address \"...\"' first. Writing empty KML.")
 		f, err := os.Create(*outPath)
 		if err != nil {
@@ -428,15 +392,18 @@ func runScore(args []string, stderr io.Writer) error {
 
 	fmt.Fprintln(stderr, "Score complete.")
 	fmt.Fprintf(stderr, "  Tiles processed: %d\n", totalTiles)
-	fmt.Fprintf(stderr, "  Cache hits:       %d\n", cacheHits)
-	fmt.Fprintf(stderr, "  Ways scored:      %d\n", totalWaysScored)
-	fmt.Fprintf(stderr, "  Segments scored:  %d\n", totalSegments)
-	fmt.Fprintf(stderr, "  Zeroed by deflection: %d\n", totalZeroed)
+	fmt.Fprintf(stderr, "  Cache hits:       %d\n", stats.cacheHits.Load())
+	fmt.Fprintf(stderr, "  Ways scored:      %d\n", stats.totalWays.Load())
+	fmt.Fprintf(stderr, "  Segments scored:  %d\n", stats.totalSegs.Load())
+	fmt.Fprintf(stderr, "  Zeroed by deflection: %d\n", stats.totalZeroed.Load())
 
-	// Stage 5: Aggregate
-	collections := quality.Aggregate(allScoredWays)
+	// Phase B: Concurrent per-name-group processing.
+	collections, err := processNameGroupsConcurrently(context.Background(), grouped)
+	if err != nil {
+		return fmt.Errorf("processing name groups: %w", err)
+	}
 
-	// Stage 6: Penalties
+	// Penalties applied after aggregation.
 	quality.ApplyPenalties(collections)
 
 	// Stage 7: KML Output
@@ -487,8 +454,15 @@ func runScore(args []string, stderr io.Writer) error {
 
 // termProgressBar renders a progress bar to w using carriage-return overwriting.
 // It implements quality.ProgressReporter.
+//
+// All exported methods are safe for concurrent use; an internal mutex serializes
+// state updates and rendering. This is required because termProgressBar may be
+// passed into processTilesConcurrently, which calls Tick from its collector
+// goroutine while SetTotal and Done are called from the calling goroutine.
 type termProgressBar struct {
+	mu                 sync.Mutex
 	w                  io.Writer
+	label              string
 	total              int
 	current            int
 	cached             int
@@ -500,11 +474,15 @@ type termProgressBar struct {
 }
 
 func (b *termProgressBar) SetTotal(n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.total = n
 	b.render()
 }
 
 func (b *termProgressBar) Tick(cached bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.current++
 	if cached {
 		b.cached++
@@ -515,16 +493,22 @@ func (b *termProgressBar) Tick(cached bool) {
 }
 
 func (b *termProgressBar) Done() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.render()
 	fmt.Fprintln(b.w)
 }
 
 func (b *termProgressBar) Retry() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.retries++
 	b.render()
 }
 
 func (b *termProgressBar) FetchDuration(d time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.lastFetchDuration = d
 	b.totalFetchDuration += d
 	b.fetchCount++
@@ -542,8 +526,8 @@ func (b *termProgressBar) render() {
 	} else {
 		bar = strings.Repeat("=", filled-1) + ">" + strings.Repeat(" ", width-filled)
 	}
-	fmt.Fprintf(b.w, "\rFetching tiles: [%s] %d/%d (%s)",
-		bar, b.current, b.total, b.statsString())
+	fmt.Fprintf(b.w, "\r%s [%s] %d/%d (%s)",
+		b.label, bar, b.current, b.total, b.statsString())
 }
 
 func (b *termProgressBar) statsString() string {
