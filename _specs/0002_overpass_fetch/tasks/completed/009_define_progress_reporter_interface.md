@@ -67,3 +67,67 @@ go build ./quality/...
 - The `bool` parameter on `Tick` (rather than separate `TickCached`/`TickFetched` methods) keeps the interface minimal while still giving renderers enough information to display cache-hit vs. live-fetch counts.
 
 ---
+
+# Task 009 Review: Define ProgressReporter Interface
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-19
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task adds `quality/progress.go`, which defines the `ProgressReporter` interface and a `NoopProgressReporter` struct that satisfies it. The implementation includes a compile-time interface satisfaction assertion (`var _ ProgressReporter = NoopProgressReporter{}`), which goes beyond the spec's minimum requirements.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/progress.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `quality/progress.go` exists and is part of `package quality` | PASS |
+| `ProgressReporter` interface has exactly three methods: `SetTotal(int)`, `Tick(bool)`, `Done()` | PASS |
+| `NoopProgressReporter` implements `ProgressReporter` (verified by compiler) | PASS |
+| `go build ./quality/...` passes with no errors | PASS |
+| No existing tests are broken (`go test ./quality/...`) | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## SHOULD FIX
+
+No additional suggestions.
+
+---
+
+## Good Practices Observed
+
+(Per review instructions, positive observations are omitted.)
+
+---
+
+## Verification Commands Run
+
+```bash
+go build ./quality/...         # BUILD OK
+go test -short ./quality/...   # ok github.com/yardbirdsax/twisty/quality 3.493s
+go vet ./...                   # no issues
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met, the build is clean, tests pass, and the linter reports no issues.
