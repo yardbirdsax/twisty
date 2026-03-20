@@ -185,3 +185,90 @@ If there are tests that assert on KML output format, update them for the new def
 - The logarithmic scale is important — it gives good visual differentiation for roads in the 0–1000 range rather than making everything look the same until it hits 4000.
 - Consider whether to use `TotalScore` or `PenalizedScore` for the color. `TotalScore` reflects actual curvature; `PenalizedScore` reflects "ride quality" (highways penalized). Start with `TotalScore` for the color since the visual should reflect actual road geometry, while `PenalizedScore` is used for filtering and sort order.
 - The inline style approach (one style per folder) avoids needing 511 shared style definitions in the document header.
+
+---
+# Task 014 Review: Single-Color Per-Road KML Rendering
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-03-20
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task added single-color-per-road KML rendering: each road is colored uniformly by a logarithmic yellow-to-magenta gradient derived from its `TotalScore`. The previous per-segment tier coloring is retained as an opt-in via `-multi-color`. Supporting constants were added to `scoring_params.go` and are correctly excluded from the scoring cache hash.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/kml.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/kml_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/scoring_params.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/pipeline_integration_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `CurvatureColorLevel` implements Curvature's logarithmic score-to-level mapping | PASS |
+| `GradientColor` produces a continuous yellow-to-red-to-magenta gradient in AABBGGRR format | PASS |
+| `WriteKMLSingleColor` renders each road as a single-color polyline based on total score | PASS |
+| Default `twisty score` output uses single-color rendering | PASS |
+| `-multi-color` flag falls back to per-segment tier coloring | PASS |
+| Min-score and min-length filters work identically in both modes | PASS |
+| Unit tests cover color mapping, gradient output, and KML generation | PASS |
+| Integration test verifies full pipeline through single-color output | PASS |
+| `go test -race ./...` passes | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Good Practices Observed
+
+- `CurvatureColorLevel` matches the spec algorithm exactly: uses `score < minCurvature` (strictly less than) so score=0 maps to level 1 (faintest yellow) rather than green; clamps with `pct > 1` and runs the log formula rather than fast-pathing, so score=4000 correctly produces 506 (not an artificial 511).
+- `TestCurvatureColorLevel` pins the score=0, score=4000, and score=1e9 assertions to exact values (1, 506, 506 respectively) and verifies full monotonicity across a representative sweep.
+- `GradientColor` boundary values (level 0, 256, 511) are tested against exact AABBGGRR strings; level 1 is tested structurally (correct channel positions and magnitudes) rather than with a fragile full-string match.
+- `WriteKMLSingleColor` correctly uses `TotalScore` for color (actual road geometry) and `PenalizedScore` for filter and sort, with the design choice explicitly documented in the function comment.
+- The `KMLSingleColorDocument` / `KMLSingleColorFolder` / `KMLInlinePlacemark` type hierarchy cleanly separates single-color output from the shared-style output without touching existing types.
+- `TestWriteKMLSingleColor_MatchesWriteKML_Filtering` explicitly verifies that both rendering modes include and exclude identical collections given the same inputs.
+- `TestPipelineIntegration_SingleColorKML` runs the full `Aggregate -> ApplyPenalties -> WriteKMLSingleColor` pipeline, checks folder count parity with `WriteKML`, verifies exactly one placemark per folder, and validates coordinate format.
+- `TestRunScore_DefaultSingleColorOutput` and `TestRunScore_MultiColorFlag` in `main_test.go` verify the CLI-level behavior: default produces no `#tier` styleUrl, and `-multi-color` produces tier style content.
+- `DefaultMinCurvature` and `DefaultMaxCurvature` constants are correctly placed in `scoring_params.go` and intentionally excluded from `ScoringParamsHash` per spec direction.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test        # PASS — all packages
+make lint        # PASS — go vet clean
+go test -race -short ./...   # PASS — all packages, no data races
+go test -v -run TestCurvatureColorLevel ./quality/...   # PASS
+go test -v -run TestGradientColor ./quality/...         # PASS
+go test -v -run "TestWriteKMLSingleColor|TestPipelineIntegration_SingleColorKML" ./quality/...  # PASS
+go test -v -run "TestRunScore_DefaultSingleColorOutput|TestRunScore_MultiColorFlag" ./...       # PASS
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met. The algorithm matches the spec verbatim, tests pin exact boundary values, filters are consistent across both rendering modes, and both `make test` and `make lint` pass cleanly.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **NEEDS REVISION**: One or more issues found. Address all MUST FIX items before re-review.

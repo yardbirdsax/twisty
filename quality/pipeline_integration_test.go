@@ -675,6 +675,85 @@ func TestPipelineIntegration_OrderingAndFiltering(t *testing.T) {
 	})
 }
 
+// TestPipelineIntegration_SingleColorKML exercises the full pipeline through
+// WriteKMLSingleColor and verifies the output properties.
+func TestPipelineIntegration_SingleColorKML(t *testing.T) {
+	ways := allFixtures()
+	collections := Aggregate(ways)
+	ApplyPenalties(collections)
+
+	var buf bytes.Buffer
+	if err := WriteKMLSingleColor(&buf, collections, 0); err != nil {
+		t.Fatalf("WriteKMLSingleColor returned error: %v", err)
+	}
+
+	out := buf.String()
+
+	// Must begin with XML header
+	if !strings.HasPrefix(out, xml.Header) {
+		t.Errorf("output does not start with XML header")
+	}
+
+	// Must be parseable as valid XML
+	var kml KMLSingleColorDocument
+	xmlBody := out[len(xml.Header):]
+	if err := xml.Unmarshal([]byte(xmlBody), &kml); err != nil {
+		t.Fatalf("output is not valid XML: %v\n---\n%s", err, out)
+	}
+
+	// Document name must be "Twisty Roads"
+	if kml.Doc.Name != "Twisty Roads" {
+		t.Errorf("document name: got %q, want %q", kml.Doc.Name, "Twisty Roads")
+	}
+
+	// Single-color document has no shared styles
+	// Folder count should match WriteKML (same filtering logic)
+	var bufKML bytes.Buffer
+	if err := WriteKML(&bufKML, collections, 0); err != nil {
+		t.Fatalf("WriteKML returned error: %v", err)
+	}
+	var kmlDoc KMLDocument
+	if err := xml.Unmarshal([]byte(bufKML.String()[len(xml.Header):]), &kmlDoc); err != nil {
+		t.Fatalf("WriteKML output is not valid XML: %v", err)
+	}
+	if len(kml.Doc.Folders) != len(kmlDoc.Doc.Folders) {
+		t.Errorf("folder count mismatch: WriteKMLSingleColor=%d, WriteKML=%d",
+			len(kml.Doc.Folders), len(kmlDoc.Doc.Folders))
+	}
+
+	// Each folder must have exactly one placemark (no tier-run splitting)
+	for _, folder := range kml.Doc.Folders {
+		if len(folder.Placemarks) != 1 {
+			t.Errorf("folder %q: expected 1 placemark, got %d", folder.Name, len(folder.Placemarks))
+		}
+		// Each placemark must have a non-empty color
+		pm := folder.Placemarks[0]
+		if pm.Style.LineStyle.Color == "" {
+			t.Errorf("folder %q: placemark has no inline color", folder.Name)
+		}
+	}
+
+	// Verify all placemark coordinates are in lon,lat,0 format
+	for _, folder := range kml.Doc.Folders {
+		for _, pm := range folder.Placemarks {
+			coords := strings.TrimSpace(pm.LineString.Coordinates)
+			if coords == "" {
+				continue
+			}
+			for pair := range strings.FieldsSeq(coords) {
+				parts := strings.Split(pair, ",")
+				if len(parts) != 3 {
+					t.Errorf("folder %q: coordinate %q not in lon,lat,0 format", folder.Name, pair)
+					break
+				}
+				if parts[2] != "0" {
+					t.Errorf("folder %q: altitude field is %q, want 0", folder.Name, parts[2])
+				}
+			}
+		}
+	}
+}
+
 // scoreByFolder looks up the penalized score for the given folder name from collections.
 func scoreByFolder(collections []RoadCollection, name string) float64 {
 	for _, rc := range collections {

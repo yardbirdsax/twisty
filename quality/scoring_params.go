@@ -85,6 +85,15 @@ const (
 	DeflectionMinHeadingChange = 20.0
 )
 
+// DefaultMinCurvature is the minimum total curvature score for the single-color
+// gradient. Roads below this score render as green. Matches the Curvature project default.
+const DefaultMinCurvature = 0.0
+
+// DefaultMaxCurvature is the total curvature score that maps to the maximum color
+// intensity in single-color rendering. Roads at or above this score render as magenta.
+// Matches the Curvature project default of 4000.
+const DefaultMaxCurvature = 4000.0
+
 // AssignTier maps a circumradius (in metres) to its curvature tier and the
 // associated score weight. Tiers are checked from tightest to widest; the
 // first threshold the radius falls below determines the tier.

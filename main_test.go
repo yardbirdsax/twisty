@@ -118,6 +118,7 @@ func TestScoreFlagSetParsesValidFlags(t *testing.T) {
 	verbose := fs.Bool("v", false, "")
 	outPath := fs.String("out", "", "")
 	minScore := fs.Float64("min-score", 0, "")
+	multiColor := fs.Bool("multi-color", false, "")
 
 	err := fs.Parse([]string{
 		"-address", "Asheville, NC",
@@ -129,6 +130,7 @@ func TestScoreFlagSetParsesValidFlags(t *testing.T) {
 		"-v",
 		"-out", "roads.kml",
 		"-min-score", "300",
+		"-multi-color",
 	})
 	if err != nil {
 		t.Fatalf("unexpected parse error: %v", err)
@@ -160,6 +162,9 @@ func TestScoreFlagSetParsesValidFlags(t *testing.T) {
 	}
 	if *minScore != 300.0 {
 		t.Errorf("min-score = %v, want 300.0", *minScore)
+	}
+	if !*multiColor {
+		t.Error("multi-color should be true")
 	}
 }
 
@@ -318,6 +323,149 @@ func TestRunScoreE2EWithSyntheticCache(t *testing.T) {
 	}
 	if !strings.Contains(string(contents), "<kml") {
 		t.Errorf("output file does not contain <kml> element; got: %s", string(contents)[:min(200, len(contents))])
+	}
+}
+
+// TestRunScore_DefaultSingleColorOutput verifies that without -multi-color, the
+// default KML output uses single-color per-road rendering (no shared tier styles).
+func TestRunScore_DefaultSingleColorOutput(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	const (
+		centerLat = 35.0
+		centerLon = -82.0
+		radius    = 1.0
+		tileSize  = 0.05
+	)
+
+	tiles := quality.ComputeTiles(centerLat, centerLon, radius, tileSize)
+	if len(tiles) == 0 {
+		t.Fatal("ComputeTiles returned no tiles")
+	}
+
+	syntheticWay := map[string]any{
+		"id":   int64(42),
+		"tags": map[string]string{"highway": "secondary"},
+		"geometry": []map[string]float64{
+			{"lat": centerLat, "lon": centerLon},
+			{"lat": centerLat + 0.0002, "lon": centerLon + 0.0001},
+			{"lat": centerLat + 0.0003, "lon": centerLon - 0.0001},
+			{"lat": centerLat + 0.0005, "lon": centerLon + 0.0001},
+		},
+	}
+	payload := map[string]any{"elements": []any{syntheticWay}}
+	rawJSON, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal synthetic tile JSON: %v", err)
+	}
+
+	cacheDir := t.TempDir()
+	tileCache := &quality.TileCache{Dir: cacheDir, Precision: 3}
+	if err := tileCache.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir: %v", err)
+	}
+	for _, tile := range tiles {
+		if err := tileCache.Write(tile, rawJSON); err != nil {
+			t.Fatalf("TileCache.Write: %v", err)
+		}
+	}
+
+	outPath := filepath.Join(t.TempDir(), "output.kml")
+	var stderr bytes.Buffer
+	// Default — no -multi-color flag
+	err = runScore([]string{
+		"-address", "35.0,-82.0",
+		"-radius", "1",
+		"-tile-size", "0.05",
+		"-cache-dir", cacheDir,
+		"-out", outPath,
+		"-no-cache",
+	}, &stderr)
+	if err != nil {
+		t.Fatalf("runScore returned error: %v\nstderr: %s", err, stderr.String())
+	}
+
+	contents, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("reading KML output: %v", err)
+	}
+	// Single-color output should NOT contain shared tier style definitions like "#tier0"
+	// It renders each road with an inline style, not a shared style URL
+	if strings.Contains(string(contents), "<styleUrl>#tier") {
+		t.Errorf("default output contains tier-based styleUrl; expected single-color rendering")
+	}
+}
+
+// TestRunScore_MultiColorFlag verifies that -multi-color produces per-segment
+// tier-based coloring.
+func TestRunScore_MultiColorFlag(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	const (
+		centerLat = 35.0
+		centerLon = -82.0
+		radius    = 1.0
+		tileSize  = 0.05
+	)
+
+	tiles := quality.ComputeTiles(centerLat, centerLon, radius, tileSize)
+	if len(tiles) == 0 {
+		t.Fatal("ComputeTiles returned no tiles")
+	}
+
+	syntheticWay := map[string]any{
+		"id":   int64(42),
+		"tags": map[string]string{"highway": "secondary"},
+		"geometry": []map[string]float64{
+			{"lat": centerLat, "lon": centerLon},
+			{"lat": centerLat + 0.0002, "lon": centerLon + 0.0001},
+			{"lat": centerLat + 0.0003, "lon": centerLon - 0.0001},
+			{"lat": centerLat + 0.0005, "lon": centerLon + 0.0001},
+		},
+	}
+	payload := map[string]any{"elements": []any{syntheticWay}}
+	rawJSON, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal synthetic tile JSON: %v", err)
+	}
+
+	cacheDir := t.TempDir()
+	tileCache := &quality.TileCache{Dir: cacheDir, Precision: 3}
+	if err := tileCache.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir: %v", err)
+	}
+	for _, tile := range tiles {
+		if err := tileCache.Write(tile, rawJSON); err != nil {
+			t.Fatalf("TileCache.Write: %v", err)
+		}
+	}
+
+	outPath := filepath.Join(t.TempDir(), "output.kml")
+	var stderr bytes.Buffer
+	err = runScore([]string{
+		"-address", "35.0,-82.0",
+		"-radius", "1",
+		"-tile-size", "0.05",
+		"-cache-dir", cacheDir,
+		"-out", outPath,
+		"-no-cache",
+		"-multi-color",
+	}, &stderr)
+	if err != nil {
+		t.Fatalf("runScore returned error: %v\nstderr: %s", err, stderr.String())
+	}
+
+	contents, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("reading KML output: %v", err)
+	}
+	// Multi-color output uses shared tier styles
+	if !strings.Contains(string(contents), "tier") {
+		t.Errorf("-multi-color output does not contain tier style definitions; expected per-segment tier coloring")
 	}
 }
 

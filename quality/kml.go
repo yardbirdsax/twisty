@@ -65,6 +65,35 @@ type KMLPlacemark struct {
 	LineString KMLLineString `xml:"LineString"`
 }
 
+// KMLInlinePlacemark is a placemark that carries its own inline Style element
+// instead of referencing a shared style by URL. Used by WriteKMLSingleColor.
+type KMLInlinePlacemark struct {
+	Style      KMLStyle      `xml:"Style"`
+	LineString KMLLineString `xml:"LineString"`
+}
+
+// KMLSingleColorFolder is a KML Folder element that uses inline-styled placemarks.
+type KMLSingleColorFolder struct {
+	Name        string               `xml:"name"`
+	Description string               `xml:"description"`
+	Style       *KMLFolderStyle      `xml:"Style,omitempty"`
+	Placemarks  []KMLInlinePlacemark `xml:"Placemark"`
+}
+
+// KMLSingleColorDocInner is the Document element for single-color KML output.
+// It has no shared Styles — each placemark carries its own inline style.
+type KMLSingleColorDocInner struct {
+	Name    string                 `xml:"name"`
+	Folders []KMLSingleColorFolder `xml:"Folder"`
+}
+
+// KMLSingleColorDocument is the root kml element for single-color output.
+type KMLSingleColorDocument struct {
+	XMLName xml.Name               `xml:"kml"`
+	XMLNS   string                 `xml:"xmlns,attr"`
+	Doc     KMLSingleColorDocInner `xml:"Document"`
+}
+
 type KMLLineString struct {
 	Coordinates string `xml:"coordinates"`
 }
@@ -167,6 +196,109 @@ func WriteKML(w io.Writer, collections []RoadCollection, minScore float64) error
 		Doc: KMLDocInner{
 			Name:    "Twisty Roads",
 			Styles:  styles,
+			Folders: folders,
+		},
+	}
+
+	out, err := xml.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	_, err = fmt.Fprintf(w, "%s%s", xml.Header, string(out))
+	return err
+}
+
+// CurvatureColorLevel maps a total curvature score to a color level (0-511)
+// using a logarithmic scale for better visual differentiation at lower scores.
+// The algorithm matches the Curvature project's SingleColorKmlOutput.level_for_curvature.
+// Level 0 means "at or below minCurvature" (renders as green). Levels 1-511
+// represent the yellow→red→magenta gradient.
+func CurvatureColorLevel(score, minCurvature, maxCurvature float64) int {
+	if score < minCurvature {
+		return 0
+	}
+	pct := (score - minCurvature) / (maxCurvature - minCurvature)
+	if pct > 1 {
+		pct = 1
+	}
+	// Logarithmic scale: y = 1 - 1/(10^(x*2))
+	colorPct := 1 - 1/math.Pow(10, pct*2)
+	return int(math.Round(510*colorPct)) + 1
+}
+
+// GradientColor returns a KML AABBGGRR color string for the given level (0-511).
+// Level 0 returns green (same as tier 0). Levels 1-256 are yellow→red.
+// Levels 257-511 are red→magenta.
+func GradientColor(level int) string {
+	if level <= 0 {
+		return TierColors[0] // green
+	}
+	if level <= 256 {
+		// Yellow (FF,FF,00) → Red (FF,00,00)
+		// KML AABBGGRR: alpha=FF, blue=00, green=variable, red=FF
+		green := 255 - (level-1)*255/255
+		return fmt.Sprintf("FF00%02XFF", green)
+	}
+	// Red (FF,00,00) → Magenta (FF,00,FF)
+	// KML AABBGGRR: alpha=FF, blue=variable, green=00, red=FF
+	blue := (level - 257) * 255 / 254
+	return fmt.Sprintf("FF%02X00FF", blue)
+}
+
+// WriteKMLSingleColor writes road collections as a KML file where each road is
+// rendered as a single-color polyline. The color is determined by the road's
+// TotalScore using a logarithmic gradient from yellow (low score) to red to
+// magenta (high score). Roads below minScore or below MinRoadLengthM are excluded.
+// Collections are sorted by penalized score descending.
+//
+// TotalScore (not PenalizedScore) is used for the color because the visual should
+// reflect actual road geometry, while PenalizedScore is used for filtering and sort order.
+func WriteKMLSingleColor(w io.Writer, collections []RoadCollection, minScore float64) error {
+	// Filter by minScore and MinRoadLengthM
+	var filtered []RoadCollection
+	for _, c := range collections {
+		if c.PenalizedScore < minScore || c.TotalLength < MinRoadLengthM {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+
+	// Sort by penalized score descending
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].PenalizedScore > filtered[j].PenalizedScore
+	})
+
+	// Build folders — one per collection, one placemark per road
+	folders := make([]KMLSingleColorFolder, 0, len(filtered))
+	for _, col := range filtered {
+		desc := buildDescription(col)
+
+		level := CurvatureColorLevel(col.TotalScore, DefaultMinCurvature, DefaultMaxCurvature)
+		color := GradientColor(level)
+
+		placemark := KMLInlinePlacemark{
+			Style: KMLStyle{
+				LineStyle: KMLLineStyle{
+					Color: color,
+					Width: KMLLineWidth,
+				},
+			},
+			LineString: KMLLineString{Coordinates: formatCoordinates(col.Segments)},
+		}
+
+		folders = append(folders, KMLSingleColorFolder{
+			Name:        col.DisplayName(),
+			Description: desc,
+			Style:       &KMLFolderStyle{ListStyle: KMLListStyle{ListItemType: "checkHideChildren"}},
+			Placemarks:  []KMLInlinePlacemark{placemark},
+		})
+	}
+
+	doc := KMLSingleColorDocument{
+		XMLNS: "http://www.opengis.net/kml/2.2",
+		Doc: KMLSingleColorDocInner{
+			Name:    "Twisty Roads",
 			Folders: folders,
 		},
 	}

@@ -286,6 +286,7 @@ func runScore(args []string, stderr io.Writer) error {
 	verbose := fs.Bool("v", false, "Enable verbose logging to stderr")
 	outPath := fs.String("out", "", "output KML file path (required)")
 	minScore := fs.Float64("min-score", 0, "minimum penalized score to include in output")
+	multiColor := fs.Bool("multi-color", false, "Use per-segment tier coloring instead of single-color per-road")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -387,7 +388,10 @@ func runScore(args []string, stderr io.Writer) error {
 			return fmt.Errorf("creating output file: %w", err)
 		}
 		defer f.Close()
-		return quality.WriteKML(f, nil, *minScore)
+		if *multiColor {
+			return quality.WriteKML(f, nil, *minScore)
+		}
+		return quality.WriteKMLSingleColor(f, nil, *minScore)
 	}
 
 	fmt.Fprintln(stderr, "Score complete.")
@@ -412,8 +416,14 @@ func runScore(args []string, stderr io.Writer) error {
 	}
 	defer f.Close()
 
-	if err := quality.WriteKML(f, collections, *minScore); err != nil {
-		return fmt.Errorf("writing KML: %w", err)
+	if *multiColor {
+		if err := quality.WriteKML(f, collections, *minScore); err != nil {
+			return fmt.Errorf("writing KML: %w", err)
+		}
+	} else {
+		if err := quality.WriteKMLSingleColor(f, collections, *minScore); err != nil {
+			return fmt.Errorf("writing KML: %w", err)
+		}
 	}
 
 	// Count collections that pass both the min-score and min-length filters.

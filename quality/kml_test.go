@@ -341,6 +341,248 @@ func TestWriteKML_HighScoreShortLengthExcluded(t *testing.T) {
 	}
 }
 
+// TestCurvatureColorLevel verifies the logarithmic score-to-level mapping.
+func TestCurvatureColorLevel(t *testing.T) {
+	// Score 0 (== minCurvature) → level 1 (faintest yellow, not green)
+	// The spec uses score < minCurvature to return 0, so score==minCurvature proceeds
+	// through the logarithmic path and returns 1.
+	if got := CurvatureColorLevel(0, DefaultMinCurvature, DefaultMaxCurvature); got != 1 {
+		t.Errorf("CurvatureColorLevel(0) = %d, want 1", got)
+	}
+
+	// Negative score → level 0
+	if got := CurvatureColorLevel(-100, DefaultMinCurvature, DefaultMaxCurvature); got != 0 {
+		t.Errorf("CurvatureColorLevel(-100) = %d, want 0", got)
+	}
+
+	// Score well above max → pct clamped to 1, produces same value as score=4000 (~506)
+	if got := CurvatureColorLevel(1e9, DefaultMinCurvature, DefaultMaxCurvature); got != 506 {
+		t.Errorf("CurvatureColorLevel(1e9) = %d, want 506 (pct clamped to 1, log formula)", got)
+	}
+
+	// Score at max (4000) → pct=1, colorPct=1-1/10^2≈0.99, level=round(510*0.99)+1=506
+	maxLevel := CurvatureColorLevel(DefaultMaxCurvature, DefaultMinCurvature, DefaultMaxCurvature)
+	if maxLevel != 506 {
+		t.Errorf("CurvatureColorLevel(4000) = %d, want 506", maxLevel)
+	}
+
+	// Midpoint at 2000 should be well above 256 due to log scale compression
+	midLevel := CurvatureColorLevel(2000, DefaultMinCurvature, DefaultMaxCurvature)
+	if midLevel < 257 {
+		t.Errorf("CurvatureColorLevel(2000) = %d, want >= 257 (log scale should compress high values)", midLevel)
+	}
+
+	// Verify monotonically increasing and always in [0, 511]
+	prev := -1
+	for _, score := range []float64{0, 100, 500, 1000, 2000, 3000, 4000, 5000} {
+		level := CurvatureColorLevel(score, DefaultMinCurvature, DefaultMaxCurvature)
+		if level < 0 || level > 511 {
+			t.Errorf("CurvatureColorLevel(%v) = %d, out of range [0,511]", score, level)
+		}
+		if level < prev {
+			t.Errorf("CurvatureColorLevel(%v) = %d, not monotonically increasing (prev was %d)", score, level, prev)
+		}
+		prev = level
+	}
+}
+
+// TestGradientColor verifies the color gradient output.
+func TestGradientColor(t *testing.T) {
+	tests := []struct {
+		level     int
+		wantColor string
+	}{
+		{level: 0, wantColor: TierColors[0]},     // green
+		{level: 256, wantColor: "FF0000FF"},       // red (AABBGGRR: A=FF,B=00,G=00,R=FF)
+		{level: 511, wantColor: "FFFF00FF"},       // magenta (AABBGGRR: A=FF,B=FF,G=00,R=FF)
+	}
+
+	for _, tc := range tests {
+		t.Run(fmt.Sprintf("level_%d", tc.level), func(t *testing.T) {
+			got := GradientColor(tc.level)
+			if got != tc.wantColor {
+				t.Errorf("GradientColor(%d) = %q, want %q", tc.level, got, tc.wantColor)
+			}
+		})
+	}
+
+	// Level 1 should be yellow-ish: high green, full red, no blue (AABBGGRR)
+	// FF00FFFF would be full yellow (A=FF, B=00, G=FF, R=FF)
+	level1 := GradientColor(1)
+	if len(level1) != 8 {
+		t.Errorf("GradientColor(1) = %q, want 8-char AABBGGRR string", level1)
+	}
+	// Red channel (last two chars) should be FF
+	if level1[6:] != "FF" {
+		t.Errorf("GradientColor(1) red channel = %q, want FF", level1[6:])
+	}
+	// Blue channel (chars 2-3) should be 00
+	if level1[2:4] != "00" {
+		t.Errorf("GradientColor(1) blue channel = %q, want 00", level1[2:4])
+	}
+	// Green channel (chars 4-5) should be high (near FF) for level 1
+	greenStr := level1[4:6]
+	var green int
+	if _, err := fmt.Sscanf(greenStr, "%X", &green); err != nil {
+		t.Fatalf("GradientColor(1) green channel parse error: %v", err)
+	}
+	if green < 250 {
+		t.Errorf("GradientColor(1) green = %d, want near 255 (yellow)", green)
+	}
+}
+
+// TestWriteKMLSingleColor verifies basic properties of the single-color output.
+func TestWriteKMLSingleColor(t *testing.T) {
+	col1 := makeCollection("High Road", 1000.0, 10000.0, 100.0, []string{"tertiary"}, []int64{1}, simpleSegments())
+	col1.TotalScore = 1000.0
+	col2 := makeCollection("Low Road", 200.0, 8000.0, 25.0, []string{"secondary"}, []int64{2}, simpleSegments())
+	col2.TotalScore = 200.0
+	col3 := makeCollection("Filtered Out", 50.0, 5000.0, 10.0, []string{"tertiary"}, []int64{3}, simpleSegments())
+	col3.TotalScore = 50.0
+
+	var buf bytes.Buffer
+	err := WriteKMLSingleColor(&buf, []RoadCollection{col1, col2, col3}, 100.0)
+	if err != nil {
+		t.Fatalf("WriteKMLSingleColor returned error: %v", err)
+	}
+	out := buf.String()
+
+	// Must be valid XML
+	var kml KMLSingleColorDocument
+	if err := xml.Unmarshal([]byte(out[len(xml.Header):]), &kml); err != nil {
+		t.Fatalf("output is not valid XML: %v\n%s", err, out)
+	}
+
+	if kml.Doc.Name != "Twisty Roads" {
+		t.Errorf("expected document name 'Twisty Roads', got %q", kml.Doc.Name)
+	}
+
+	// col3 filtered out by minScore=100
+	if len(kml.Doc.Folders) != 2 {
+		t.Fatalf("expected 2 folders, got %d", len(kml.Doc.Folders))
+	}
+
+	// Each folder should have exactly one placemark (no tier-run splitting)
+	for _, folder := range kml.Doc.Folders {
+		if len(folder.Placemarks) != 1 {
+			t.Errorf("folder %q: expected 1 placemark, got %d", folder.Name, len(folder.Placemarks))
+		}
+	}
+
+	// Should be sorted by penalized score descending
+	if kml.Doc.Folders[0].Name != "High Road" {
+		t.Errorf("expected 'High Road' first, got %q", kml.Doc.Folders[0].Name)
+	}
+	if kml.Doc.Folders[1].Name != "Low Road" {
+		t.Errorf("expected 'Low Road' second, got %q", kml.Doc.Folders[1].Name)
+	}
+
+	// Each folder should have a style with a color
+	for _, folder := range kml.Doc.Folders {
+		pm := folder.Placemarks[0]
+		if pm.Style.LineStyle.Color == "" {
+			t.Errorf("folder %q: placemark has no color", folder.Name)
+		}
+		if pm.Style.LineStyle.Width != KMLLineWidth {
+			t.Errorf("folder %q: expected width %d, got %d", folder.Name, KMLLineWidth, pm.Style.LineStyle.Width)
+		}
+	}
+}
+
+// TestWriteKMLSingleColor_MinLengthFilter verifies the min-length filter applies.
+func TestWriteKMLSingleColor_MinLengthFilter(t *testing.T) {
+	short := makeCollection("Short Road", 1000.0, 1000.0, 200.0, []string{"tertiary"}, []int64{1}, simpleSegments())
+	short.TotalScore = 1000.0
+	long := makeCollection("Long Road", 1000.0, 10000.0, 100.0, []string{"tertiary"}, []int64{2}, simpleSegments())
+	long.TotalScore = 1000.0
+
+	var buf bytes.Buffer
+	err := WriteKMLSingleColor(&buf, []RoadCollection{short, long}, 0)
+	if err != nil {
+		t.Fatalf("WriteKMLSingleColor returned error: %v", err)
+	}
+	var kml KMLSingleColorDocument
+	if err := xml.Unmarshal([]byte(buf.String()[len(xml.Header):]), &kml); err != nil {
+		t.Fatalf("invalid XML: %v", err)
+	}
+	if len(kml.Doc.Folders) != 1 {
+		t.Fatalf("expected 1 folder (short excluded by min-length), got %d", len(kml.Doc.Folders))
+	}
+	if kml.Doc.Folders[0].Name != "Long Road" {
+		t.Errorf("expected 'Long Road', got %q", kml.Doc.Folders[0].Name)
+	}
+}
+
+// TestWriteKMLSingleColor_EmptyInput verifies valid empty output for nil input.
+func TestWriteKMLSingleColor_EmptyInput(t *testing.T) {
+	var buf bytes.Buffer
+	err := WriteKMLSingleColor(&buf, nil, 0)
+	if err != nil {
+		t.Fatalf("WriteKMLSingleColor returned error: %v", err)
+	}
+	var kml KMLSingleColorDocument
+	if err := xml.Unmarshal([]byte(buf.String()[len(xml.Header):]), &kml); err != nil {
+		t.Fatalf("invalid XML for empty input: %v\n%s", err, buf.String())
+	}
+	if kml.Doc.Name != "Twisty Roads" {
+		t.Errorf("expected 'Twisty Roads', got %q", kml.Doc.Name)
+	}
+	if len(kml.Doc.Folders) != 0 {
+		t.Errorf("expected 0 folders, got %d", len(kml.Doc.Folders))
+	}
+}
+
+// TestWriteKMLSingleColor_MatchesWriteKML_Filtering verifies that both modes
+// include and exclude the same collections when given the same inputs.
+func TestWriteKMLSingleColor_MatchesWriteKML_Filtering(t *testing.T) {
+	col1 := makeCollection("Road A", 1000.0, 10000.0, 100.0, []string{"tertiary"}, []int64{1}, simpleSegments())
+	col1.TotalScore = 1000.0
+	col2 := makeCollection("Road B", 50.0, 5000.0, 10.0, []string{"tertiary"}, []int64{2}, simpleSegments())
+	col2.TotalScore = 50.0
+	col3 := makeCollection("Road C Short", 500.0, 1000.0, 50.0, []string{"tertiary"}, []int64{3}, simpleSegments())
+	col3.TotalScore = 500.0
+
+	collections := []RoadCollection{col1, col2, col3}
+	minScore := 100.0
+
+	var bufKML, bufSC bytes.Buffer
+	if err := WriteKML(&bufKML, collections, minScore); err != nil {
+		t.Fatalf("WriteKML: %v", err)
+	}
+	if err := WriteKMLSingleColor(&bufSC, collections, minScore); err != nil {
+		t.Fatalf("WriteKMLSingleColor: %v", err)
+	}
+
+	var kmlDoc KMLDocument
+	if err := xml.Unmarshal([]byte(bufKML.String()[len(xml.Header):]), &kmlDoc); err != nil {
+		t.Fatalf("WriteKML invalid XML: %v", err)
+	}
+	var scDoc KMLSingleColorDocument
+	if err := xml.Unmarshal([]byte(bufSC.String()[len(xml.Header):]), &scDoc); err != nil {
+		t.Fatalf("WriteKMLSingleColor invalid XML: %v", err)
+	}
+
+	if len(kmlDoc.Doc.Folders) != len(scDoc.Doc.Folders) {
+		t.Errorf("folder count mismatch: WriteKML=%d, WriteKMLSingleColor=%d",
+			len(kmlDoc.Doc.Folders), len(scDoc.Doc.Folders))
+	}
+
+	// Both should contain "Road A" and exclude "Road B" (low score) and "Road C Short" (short length)
+	kmlNames := make(map[string]bool)
+	for _, f := range kmlDoc.Doc.Folders {
+		kmlNames[f.Name] = true
+	}
+	scNames := make(map[string]bool)
+	for _, f := range scDoc.Doc.Folders {
+		scNames[f.Name] = true
+	}
+	for name, inKML := range kmlNames {
+		if inSC := scNames[name]; inKML != inSC {
+			t.Errorf("road %q: in WriteKML=%v, in WriteKMLSingleColor=%v", name, inKML, inSC)
+		}
+	}
+}
+
 // TestWriteKML_LowScoreLongLengthExcludedByMinScore verifies that a long road
 // with score below minScore is still excluded — both filters are independent.
 func TestWriteKML_LowScoreLongLengthExcludedByMinScore(t *testing.T) {
