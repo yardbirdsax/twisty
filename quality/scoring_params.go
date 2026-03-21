@@ -68,7 +68,7 @@ const StraightGapSplitM = 2414.0
 // MinRoadLengthM is the minimum total length (in meters) for a road collection
 // to be included in output. Collections shorter than this are filtered out.
 // 4,828 m equals 3 miles.
-const MinRoadLengthM = 4828.0
+const MinRoadLengthM = 1609.0
 
 // Deflection filter constants are derived from the Curvature project
 // (github.com/awebre/curvature). A road section is only considered "twisty"
