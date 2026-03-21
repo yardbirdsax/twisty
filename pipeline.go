@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -41,7 +40,7 @@ func processTilesConcurrently(
 	noCache bool,
 	logger *slog.Logger,
 	progress quality.ProgressReporter,
-) (map[string][]quality.ScoredWay, *pipelineStats, error) {
+) (map[string]quality.ScoredWays, *pipelineStats, error) {
 	processor := func(tile quality.Tile) (*tileResult, error) {
 		return processSingleTile(tile, tileCache, scoreCache, noCache, logger)
 	}
@@ -56,7 +55,7 @@ func processTilesConcurrentlyWith(
 	tiles []quality.Tile,
 	processor tileProcessorFunc,
 	progress quality.ProgressReporter,
-) (map[string][]quality.ScoredWay, *pipelineStats, error) {
+) (map[string]quality.ScoredWays, *pipelineStats, error) {
 	stats := &pipelineStats{}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -127,7 +126,7 @@ func processTilesConcurrentlyWith(
 	}()
 
 	// Collect results and group by name, deduplicating by WayID per group.
-	grouped := make(map[string][]quality.ScoredWay)
+	grouped := make(map[string]quality.ScoredWays)
 	seenPerGroup := make(map[string]map[int64]bool)
 	for res := range resultCh {
 		if res.cacheHit {
@@ -137,28 +136,13 @@ func processTilesConcurrentlyWith(
 		stats.totalSegs.Add(int64(res.segCount))
 
 		for _, w := range res.ways {
-			if name := w.Tags["name"]; name != "" {
-				if seenPerGroup[name] == nil {
-					seenPerGroup[name] = make(map[int64]bool)
+			for _, key := range quality.GroupKeys(w) {
+				if seenPerGroup[key] == nil {
+					seenPerGroup[key] = make(map[int64]bool)
 				}
-				if !seenPerGroup[name][w.WayID] {
-					seenPerGroup[name][w.WayID] = true
-					grouped[name] = append(grouped[name], w)
-				}
-			}
-			if ref := w.Tags["ref"]; ref != "" {
-				for _, r := range strings.Split(ref, ";") {
-					r = strings.TrimSpace(r)
-					if r == "" {
-						continue
-					}
-					if seenPerGroup[r] == nil {
-						seenPerGroup[r] = make(map[int64]bool)
-					}
-					if !seenPerGroup[r][w.WayID] {
-						seenPerGroup[r][w.WayID] = true
-						grouped[r] = append(grouped[r], w)
-					}
+				if !seenPerGroup[key][w.WayID] {
+					seenPerGroup[key][w.WayID] = true
+					grouped[key] = append(grouped[key], w)
 				}
 			}
 		}
@@ -257,7 +241,7 @@ type nameGroupWork struct {
 // processNameGroupsConcurrently processes name groups in parallel (Phase B).
 // Each group runs connected-component analysis, ordering, splitting, and scoring.
 // Results are collected and returned as a flat []RoadCollection.
-func processNameGroupsConcurrently(ctx context.Context, groups map[string][]quality.ScoredWay) ([]quality.RoadCollection, error) {
+func processNameGroupsConcurrently(ctx context.Context, groups map[string]quality.ScoredWays) ([]quality.RoadCollection, error) {
 	if len(groups) == 0 {
 		return nil, nil
 	}
@@ -344,76 +328,9 @@ func processNameGroupsConcurrently(ctx context.Context, groups map[string][]qual
 
 // processNameGroup runs the full per-name aggregation pipeline for a single road name.
 func processNameGroup(name string, namedWays []quality.ScoredWay) ([]quality.RoadCollection, error) {
-	components := quality.FindConnectedComponents(namedWays, quality.ConnectedEndpointProximityM)
-
-	wayByID := make(map[int64]quality.ScoredWay, len(namedWays))
-	for _, w := range namedWays {
-		wayByID[w.WayID] = w
-	}
-
-	var nameCollections []quality.RoadCollection
-	for _, component := range components {
-		// Deep-copy the component's ways so that UnflattenWaySegments writes to
-		// freshly allocated segment slices, preventing data races when multiple
-		// goroutines process groups whose input ways share backing arrays.
-		componentCopy := quality.DeepCopyWays(component)
-		ordered := quality.OrderWays(componentCopy)
-		chunks := quality.SplitOrderingGaps(ordered, quality.ConnectedEndpointProximityM)
-
-		for _, chunk := range chunks {
-			// Apply deflection filter on each chunk before splitting.
-			// This gives the 2400m look-ahead window cross-way-boundary visibility.
-			flatSegs := quality.FlattenWaySegments(chunk)
-			quality.DeflectionFilterSegments(flatSegs)
-			quality.UnflattenWaySegments(chunk, flatSegs)
-
-			segGroups := quality.SplitAtStraightGaps(chunk, quality.StraightGapSplitM)
-
-			for _, segs := range segGroups {
-				rc := buildRoadCollectionFromSegs(name, wayByID, segs)
-				nameCollections = append(nameCollections, rc)
-			}
-		}
-	}
-
-	for i := range nameCollections {
-		nameCollections[i].SubIndex = i
-	}
-
-	return nameCollections, nil
+	// Deep-copy all input ways so that UnflattenWaySegments writes to freshly
+	// allocated segment slices, preventing data races when multiple goroutines
+	// process groups whose input ways share backing arrays.
+	waysCopy := quality.DeepCopyWays(namedWays)
+	return quality.AggregateNameGroup(name, waysCopy), nil
 }
-
-// buildRoadCollectionFromSegs mirrors quality.Aggregate's internal buildRoadCollection
-// logic but is accessible from the main package.
-func buildRoadCollectionFromSegs(name string, wayByID map[int64]quality.ScoredWay, segs []quality.ScoredSegment) quality.RoadCollection {
-	rc := quality.RoadCollection{
-		Name:     name,
-		Segments: segs,
-	}
-
-	seenWay := make(map[int64]bool)
-	seenHighway := make(map[string]bool)
-	for _, seg := range segs {
-		if !seenWay[seg.WayID] {
-			seenWay[seg.WayID] = true
-			rc.WayIDs = append(rc.WayIDs, seg.WayID)
-			if w, ok := wayByID[seg.WayID]; ok {
-				if hw := w.Tags["highway"]; hw != "" && !seenHighway[hw] {
-					seenHighway[hw] = true
-					rc.HighwayTypes = append(rc.HighwayTypes, hw)
-				}
-			}
-		}
-	}
-
-	for _, seg := range segs {
-		rc.TotalScore += seg.Score
-		rc.TotalLength += seg.Length
-	}
-	if rc.TotalLength > 0 {
-		rc.ScorePerKm = rc.TotalScore / (rc.TotalLength / 1000.0)
-	}
-
-	return rc
-}
-

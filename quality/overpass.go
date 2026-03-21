@@ -21,6 +21,18 @@ type Way struct {
 	Geometry []geo.Coord
 }
 
+// NewWaysFromSlice creates a new Ways map from a slice of Way structs.
+func NewWaysFromSlice(sl []Way) Ways {
+	ways := make(Ways, len(sl))
+	for _, w := range sl {
+		ways[w.ID] = w
+	}
+	return ways
+}
+
+// Ways is a map where the key is the Way ID and the value is the corresponding Way. It's a map to help make lookup faster.
+type Ways map[int64]Way
+
 // BoundingBox returns (south, west, north, east) covering all points in all routes,
 // expanded by bufferDeg on each side.
 func BoundingBox(routes [][]geo.Coord, bufferDeg float64) (south, west, north, east float64) {

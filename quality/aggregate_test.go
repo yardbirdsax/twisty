@@ -40,13 +40,13 @@ func TestRoadCollection_DisplayName(t *testing.T) {
 }
 
 func TestGroupWaysByName(t *testing.T) {
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		{WayID: 1, Tags: map[string]string{"name": "Route 1"}},
 		{WayID: 2, Tags: map[string]string{"name": "Route 1"}},
 		{WayID: 3, Tags: map[string]string{"name": "Route 2"}},
-		{WayID: 4, Tags: map[string]string{}},              // no name
-		{WayID: 5, Tags: map[string]string{"name": ""}},    // empty name
-		{WayID: 6, Tags: nil},                               // nil tags
+		{WayID: 4, Tags: map[string]string{}},           // no name
+		{WayID: 5, Tags: map[string]string{"name": ""}}, // empty name
+		{WayID: 6, Tags: nil},                           // nil tags
 	}
 
 	got := GroupWaysByName(ways)
@@ -71,7 +71,7 @@ func TestGroupWaysByName(t *testing.T) {
 }
 
 func TestGroupWaysByName_AllUnnamed(t *testing.T) {
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		{WayID: 1, Tags: map[string]string{}},
 	}
 	got := GroupWaysByName(ways)
@@ -95,7 +95,7 @@ func makeWay(id int64, start, end geo.Coord) ScoredWay {
 // each individual ref value. This is standard OSM tagging for roads with
 // multiple route designations.
 func TestGroupWays_SemicolonSeparatedRef(t *testing.T) {
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		// Way with a single ref — should appear in "PA 345" group.
 		{WayID: 1, Tags: map[string]string{"name": "Main Street", "ref": "PA 345"}},
 		// Way with a semicolon-separated ref — should appear in BOTH
@@ -158,7 +158,7 @@ func TestFindConnectedComponents_TwoClusters(t *testing.T) {
 	b1 := makeWay(3, geo.Coord{Lat: 36.0, Lon: -80.0}, geo.Coord{Lat: 36.001, Lon: -80.0})
 	b2 := makeWay(4, geo.Coord{Lat: 36.001, Lon: -80.0}, geo.Coord{Lat: 36.002, Lon: -80.0})
 
-	ways := []ScoredWay{a1, a2, b1, b2}
+	ways := ScoredWays{a1, a2, b1, b2}
 	components := FindConnectedComponents(ways, ConnectedEndpointProximityM)
 
 	if len(components) != 2 {
@@ -180,7 +180,7 @@ func TestFindConnectedComponents_OneCluster(t *testing.T) {
 	w2 := makeWay(2, geo.Coord{Lat: 44.0005, Lon: -72.0}, geo.Coord{Lat: 44.001, Lon: -72.0})
 	w3 := makeWay(3, geo.Coord{Lat: 44.001, Lon: -72.0}, geo.Coord{Lat: 44.0015, Lon: -72.0})
 
-	components := FindConnectedComponents([]ScoredWay{w1, w2, w3}, ConnectedEndpointProximityM)
+	components := FindConnectedComponents(ScoredWays{w1, w2, w3}, ConnectedEndpointProximityM)
 
 	if len(components) != 1 {
 		t.Fatalf("expected 1 component, got %d", len(components))
@@ -192,7 +192,7 @@ func TestFindConnectedComponents_OneCluster(t *testing.T) {
 
 func TestFindConnectedComponents_SingleWay(t *testing.T) {
 	w := makeWay(1, geo.Coord{Lat: 44.0, Lon: -72.0}, geo.Coord{Lat: 44.001, Lon: -72.0})
-	components := FindConnectedComponents([]ScoredWay{w}, ConnectedEndpointProximityM)
+	components := FindConnectedComponents(ScoredWays{w}, ConnectedEndpointProximityM)
 	if len(components) != 1 {
 		t.Fatalf("expected 1 component, got %d", len(components))
 	}
@@ -210,7 +210,7 @@ func TestFindConnectedComponents_WayNoSegments(t *testing.T) {
 	noSeg := ScoredWay{WayID: 1}
 	w := makeWay(2, geo.Coord{Lat: 44.0, Lon: -72.0}, geo.Coord{Lat: 44.001, Lon: -72.0})
 
-	components := FindConnectedComponents([]ScoredWay{noSeg, w}, ConnectedEndpointProximityM)
+	components := FindConnectedComponents(ScoredWays{noSeg, w}, ConnectedEndpointProximityM)
 	// They can't be connected (no-seg way has no endpoints), so expect 2 components.
 	if len(components) != 2 {
 		t.Fatalf("expected 2 components, got %d", len(components))
@@ -225,7 +225,7 @@ func TestFindConnectedComponents_AllDisconnected(t *testing.T) {
 	wEU := makeWay(2, geo.Coord{Lat: 48.8, Lon: 2.35}, geo.Coord{Lat: 48.801, Lon: 2.35})     // Paris
 	wAU := makeWay(3, geo.Coord{Lat: -33.8, Lon: 151.2}, geo.Coord{Lat: -33.801, Lon: 151.2}) // Sydney
 
-	components := FindConnectedComponents([]ScoredWay{wNA, wEU, wAU}, ConnectedEndpointProximityM)
+	components := FindConnectedComponents(ScoredWays{wNA, wEU, wAU}, ConnectedEndpointProximityM)
 
 	if len(components) != 3 {
 		t.Fatalf("expected 3 singleton components, got %d", len(components))
@@ -245,7 +245,7 @@ func TestOrderWays_Chain(t *testing.T) {
 	w3 := makeWay(3, geo.Coord{Lat: 44.0004, Lon: -72.0}, geo.Coord{Lat: 44.0006, Lon: -72.0})
 
 	// Shuffle: provide w3, w1, w2
-	shuffled := []ScoredWay{w3, w1, w2}
+	shuffled := ScoredWays{w3, w1, w2}
 	ordered := OrderWays(shuffled)
 
 	if len(ordered) != 3 {
@@ -265,7 +265,7 @@ func TestOrderWays_Chain(t *testing.T) {
 
 func TestOrderWays_SingleWay(t *testing.T) {
 	w := makeWay(1, geo.Coord{Lat: 44.0, Lon: -72.0}, geo.Coord{Lat: 44.001, Lon: -72.0})
-	ordered := OrderWays([]ScoredWay{w})
+	ordered := OrderWays(ScoredWays{w})
 	if len(ordered) != 1 {
 		t.Fatalf("expected 1 way, got %d", len(ordered))
 	}
@@ -285,7 +285,7 @@ func TestOrderWays_ReverseNeeded(t *testing.T) {
 	// w2 reversed: end is close to w1's end, start is farther.
 	w2 := makeWay(2, geo.Coord{Lat: 44.0004, Lon: -72.0}, geo.Coord{Lat: 44.0002, Lon: -72.0})
 
-	ordered := OrderWays([]ScoredWay{w1, w2})
+	ordered := OrderWays(ScoredWays{w1, w2})
 	if len(ordered) != 2 {
 		t.Fatalf("expected 2 ways, got %d", len(ordered))
 	}
@@ -389,7 +389,7 @@ func TestSplitAtStraightGaps_LongStraightInMiddle(t *testing.T) {
 	straightSeg := makeSeg(0, StraightGapSplitM+1)
 	curvySeg2 := makeSeg(2, 400.0)
 
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		makeScoredWay(1, nil, []ScoredSegment{curvySeg}),
 		makeScoredWay(2, nil, []ScoredSegment{straightSeg}),
 		makeScoredWay(3, nil, []ScoredSegment{curvySeg2}),
@@ -420,7 +420,7 @@ func TestSplitAtStraightGaps_ShortStraightKeptTogether(t *testing.T) {
 	shortStraight := makeSeg(0, StraightGapSplitM-1)
 	curvySeg2 := makeSeg(2, 400.0)
 
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		makeScoredWay(1, nil, []ScoredSegment{curvySeg, shortStraight, curvySeg2}),
 	}
 
@@ -436,7 +436,7 @@ func TestSplitAtStraightGaps_ShortStraightKeptTogether(t *testing.T) {
 
 func TestSplitAtStraightGaps_AllTierZero(t *testing.T) {
 	// All segments are tier 0 and total length > threshold: single collection with 0 segments.
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		makeScoredWay(1, nil, []ScoredSegment{makeSeg(0, StraightGapSplitM+500)}),
 	}
 
@@ -467,7 +467,7 @@ func TestAggregate_Empty(t *testing.T) {
 func TestAggregate_SingleWayRoad(t *testing.T) {
 	// A single named way with one curvy segment.
 	seg := makeSeg(2, 300.0)
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		makeScoredWay(1, map[string]string{"name": "Winding Way", "highway": "secondary"}, []ScoredSegment{seg}),
 	}
 
@@ -502,7 +502,7 @@ func TestAggregateScoreComputation(t *testing.T) {
 
 	allSegs := append(seg1Segs, seg2Segs...)
 
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		makeScoredWay(10, map[string]string{"name": "Score Road"}, allSegs),
 	}
 
@@ -535,7 +535,7 @@ func TestAggregateScoreComputation(t *testing.T) {
 
 func TestAggregateScoreComputation_ZeroLength(t *testing.T) {
 	// A way with a zero-length straight segment should not produce NaN ScorePerKm.
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		makeScoredWay(1, map[string]string{"name": "Zero Road"}, []ScoredSegment{makeSeg(0, 0.0)}),
 	}
 	collections := Aggregate(ways)
@@ -569,7 +569,7 @@ func TestAggregateSubIndexing(t *testing.T) {
 	curvy2Segs := curvySegments(1, 4, 2, 200.0, gapEnd.Lat, gapEnd.Lon)
 
 	allSegs := append(append(curvy1Segs, gapSeg), curvy2Segs...)
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		makeScoredWay(1, map[string]string{"name": "Split Road"}, allSegs),
 	}
 
@@ -612,7 +612,7 @@ func TestAggregate_TwoDisconnectedClusters(t *testing.T) {
 	wB1 := ScoredWay{WayID: 3, Tags: map[string]string{"name": "Mountain Road", "highway": "tertiary"}, Segments: []ScoredSegment{segB1}}
 	wB2 := ScoredWay{WayID: 4, Tags: map[string]string{"name": "Mountain Road", "highway": "tertiary"}, Segments: []ScoredSegment{segB2}}
 
-	collections := Aggregate([]ScoredWay{wA1, wA2, wB1, wB2})
+	collections := Aggregate(ScoredWays{wA1, wA2, wB1, wB2})
 
 	if len(collections) != 2 {
 		t.Fatalf("expected 2 collections for two disconnected clusters, got %d", len(collections))
@@ -639,7 +639,7 @@ func TestSplitOrderingGaps_NoGaps(t *testing.T) {
 	// 5 ways chained north, each ~22m apart (0.0002° lat steps).
 	baseLat := 44.0
 	step := 0.0002 // ~22m
-	ways := make([]ScoredWay, 5)
+	ways := make(ScoredWays, 5)
 	for i := range 5 {
 		lat0 := baseLat + float64(i)*step
 		lat1 := lat0 + step
@@ -662,7 +662,7 @@ func TestSplitOrderingGaps_GapInMiddle(t *testing.T) {
 	baseLat := 44.0
 	step := 0.0002 // ~22m
 
-	var ways []ScoredWay
+	var ways ScoredWays
 	// Ways 0-3: connected chain
 	for i := range 4 {
 		lat0 := baseLat + float64(i)*step
@@ -707,7 +707,7 @@ func TestSplitOrderingGaps_GapAtStart(t *testing.T) {
 	step := 0.0002 // ~22m
 
 	// Way 0: isolated far away
-	var ways []ScoredWay
+	var ways ScoredWays
 	ways = append(ways, makeWay(1, geo.Coord{Lat: 40.0, Lon: -72.0}, geo.Coord{Lat: 40.0 + step, Lon: -72.0}))
 
 	// Ways 1-5: connected chain starting at 44°N
@@ -746,7 +746,7 @@ func TestSplitOrderingGaps_GapAtStart(t *testing.T) {
 func TestSplitOrderingGaps_MultipleGaps(t *testing.T) {
 	step := 0.0002 // ~22m
 
-	var ways []ScoredWay
+	var ways ScoredWays
 	// Chunk A: 2 ways at 40°N
 	for i := range 2 {
 		lat0 := 40.0 + float64(i)*step
@@ -795,7 +795,7 @@ func TestSplitOrderingGaps_MultipleGaps(t *testing.T) {
 // TestSplitOrderingGaps_SingleWay: returns 1 chunk containing the single way.
 func TestSplitOrderingGaps_SingleWay(t *testing.T) {
 	w := makeWay(1, geo.Coord{Lat: 44.0, Lon: -72.0}, geo.Coord{Lat: 44.001, Lon: -72.0})
-	got := SplitOrderingGaps([]ScoredWay{w}, ConnectedEndpointProximityM)
+	got := SplitOrderingGaps(ScoredWays{w}, ConnectedEndpointProximityM)
 	if len(got) != 1 {
 		t.Fatalf("expected 1 chunk, got %d", len(got))
 	}
@@ -813,7 +813,7 @@ func TestSplitOrderingGaps_EmptyInput(t *testing.T) {
 	if len(got) != 0 {
 		t.Errorf("expected 0 chunks, got %d", len(got))
 	}
-	got2 := SplitOrderingGaps([]ScoredWay{}, ConnectedEndpointProximityM)
+	got2 := SplitOrderingGaps(ScoredWays{}, ConnectedEndpointProximityM)
 	if len(got2) != 0 {
 		t.Errorf("expected 0 chunks for empty slice, got %d", len(got2))
 	}
@@ -831,7 +831,7 @@ func TestSplitOrderingGaps_ValleyCreekRegression(t *testing.T) {
 	step := 0.0002 // ~22m per step at 44°N
 
 	// Build main chain: ways 1-5 progressing north.
-	var mainChain []ScoredWay
+	var mainChain ScoredWays
 	for i := range 5 {
 		lat0 := 44.0 + float64(i)*step
 		mainChain = append(mainChain, makeWay(int64(i+1),
@@ -891,7 +891,7 @@ func TestSplitOrderingGaps_ValleyCreekRegression(t *testing.T) {
 func TestSplitOrderingGaps_AllChunksPreserved(t *testing.T) {
 	step := 0.0002 // ~22m
 
-	var ways []ScoredWay
+	var ways ScoredWays
 	// Chain A: ways 1-6 at 44°N
 	for i := range 6 {
 		lat0 := 44.0 + float64(i)*step
@@ -944,7 +944,7 @@ func TestSplitOrderingGaps_AllChunksPreserved(t *testing.T) {
 
 func TestAggregate_UnnamedWaysExcluded(t *testing.T) {
 	// Ways without a name tag should produce no collections.
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		makeScoredWay(1, map[string]string{"highway": "tertiary"}, []ScoredSegment{makeSeg(1, 500.0)}),
 	}
 	collections := Aggregate(ways)

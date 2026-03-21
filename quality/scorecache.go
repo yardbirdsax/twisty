@@ -34,8 +34,8 @@ type coordJSON struct {
 }
 
 type scoredWayJSON struct {
-	WayID    int64              `json:"way_id"`
-	Tags     map[string]string  `json:"tags"`
+	WayID    int64               `json:"way_id"`
+	Tags     map[string]string   `json:"tags"`
 	Segments []scoredSegmentJSON `json:"segments"`
 }
 
@@ -49,9 +49,9 @@ type scoreCacheEntryJSON struct {
 
 // ScoreCacheEntry is the on-disk format for a cached tile's scored segments.
 type ScoreCacheEntry struct {
-	RawTileHash string      `json:"raw_tile_hash"`
-	ParamsHash  string      `json:"params_hash"`
-	Ways        []ScoredWay `json:"ways"`
+	RawTileHash string     `json:"raw_tile_hash"`
+	ParamsHash  string     `json:"params_hash"`
+	Ways        ScoredWays `json:"ways"`
 }
 
 // ScoreCache manages cached scoring results per tile.
@@ -86,7 +86,7 @@ func (c *ScoreCache) ClearAll() error {
 
 // Read loads a cache entry and validates both hashes. Returns the cached
 // scored ways and true if valid, or nil and false if the cache misses.
-func (c *ScoreCache) Read(t Tile, rawTileData []byte) ([]ScoredWay, bool) {
+func (c *ScoreCache) Read(t Tile, rawTileData []byte) (ScoredWays, bool) {
 	if !c.Has(t) {
 		return nil, false
 	}
@@ -115,7 +115,7 @@ func (c *ScoreCache) Read(t Tile, rawTileData []byte) ([]ScoredWay, bool) {
 // Write stores scored ways along with the current raw tile hash and params hash.
 // Deflection filtering is applied post-aggregation (after assembly), so raw
 // scored ways are stored here without deflection applied.
-func (c *ScoreCache) Write(t Tile, rawTileData []byte, ways []ScoredWay) error {
+func (c *ScoreCache) Write(t Tile, rawTileData []byte, ways ScoredWays) error {
 	if err := c.EnsureDir(); err != nil {
 		return fmt.Errorf("ensure dir: %w", err)
 	}
@@ -170,7 +170,7 @@ func hashBytes(data []byte) string {
 
 // scoredWaysToJSON converts a ScoredWay slice to the JSON-safe representation,
 // encoding +Inf radius as the sentinel value -1.
-func scoredWaysToJSON(ways []ScoredWay) []scoredWayJSON {
+func scoredWaysToJSON(ways ScoredWays) []scoredWayJSON {
 	result := make([]scoredWayJSON, len(ways))
 	for i, w := range ways {
 		segs := make([]scoredSegmentJSON, len(w.Segments))
@@ -196,8 +196,8 @@ func scoredWaysToJSON(ways []ScoredWay) []scoredWayJSON {
 
 // scoredWaysFromJSON converts the JSON-safe representation back to a ScoredWay slice,
 // restoring the sentinel value -1 to +Inf radius.
-func scoredWaysFromJSON(ways []scoredWayJSON) []ScoredWay {
-	result := make([]ScoredWay, len(ways))
+func scoredWaysFromJSON(ways []scoredWayJSON) ScoredWays {
+	result := make(ScoredWays, len(ways))
 	for i, w := range ways {
 		segs := make([]ScoredSegment, len(w.Segments))
 		for j, seg := range w.Segments {

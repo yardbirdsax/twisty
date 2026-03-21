@@ -95,7 +95,7 @@ func totalScore(sw ScoredWay) float64 {
 }
 
 // findScoredWay returns the ScoredWay for the given way ID, or nil if not found.
-func findScoredWay(ways []ScoredWay, id int64) *ScoredWay {
+func findScoredWay(ways ScoredWays, id int64) *ScoredWay {
 	for i := range ways {
 		if ways[i].WayID == id {
 			return &ways[i]
@@ -314,7 +314,7 @@ func TestScoreIntegration_ScoreCacheParamsHashInvalidation(t *testing.T) {
 	rawData := []byte(`{"elements":[]}`)
 
 	// Write a valid entry.
-	if err := scoreCache.Write(tile, rawData, []ScoredWay{}); err != nil {
+	if err := scoreCache.Write(tile, rawData, ScoredWays{}); err != nil {
 		t.Fatalf("ScoreCache.Write: %v", err)
 	}
 

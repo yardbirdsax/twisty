@@ -41,8 +41,8 @@ func (r RoadCollection) DisplayName() string {
 
 // GroupWaysByName groups scored ways by their "name" tag.
 // Ways without a name tag are excluded.
-func GroupWaysByName(ways []ScoredWay) map[string][]ScoredWay {
-	result := make(map[string][]ScoredWay)
+func GroupWaysByName(ways ScoredWays) map[string]ScoredWays {
+	result := make(map[string]ScoredWays)
 	for _, w := range ways {
 		name := w.Tags["name"]
 		if name == "" {
@@ -61,8 +61,8 @@ func GroupWaysByName(ways []ScoredWay) map[string][]ScoredWay {
 // Semicolon-separated ref values (standard OSM tagging for roads with multiple
 // route designations, e.g. "US 209;PA 901") are split so the way appears in
 // each individual ref group.
-func GroupWays(ways []ScoredWay) map[string][]ScoredWay {
-	result := make(map[string][]ScoredWay)
+func GroupWays(ways ScoredWays) map[string]ScoredWays {
+	result := make(map[string]ScoredWays)
 	for _, w := range ways {
 		if name := w.Tags["name"]; name != "" {
 			result[name] = append(result[name], w)
@@ -97,7 +97,7 @@ func WayEndpointsPublic(w ScoredWay) (start, end geo.Coord, ok bool) {
 // FindConnectedComponents groups ways by endpoint proximity.
 // Two ways are connected if any endpoint of one is within proximityM meters
 // of any endpoint of the other.
-func FindConnectedComponents(ways []ScoredWay, proximityM float64) [][]ScoredWay {
+func FindConnectedComponents(ways ScoredWays, proximityM float64) []ScoredWays {
 	n := len(ways)
 	if n == 0 {
 		return nil
@@ -157,13 +157,13 @@ func FindConnectedComponents(ways []ScoredWay, proximityM float64) [][]ScoredWay
 	}
 
 	// Collect into components indexed by root.
-	compMap := make(map[int][]ScoredWay)
+	compMap := make(map[int]ScoredWays)
 	for i, w := range ways {
 		root := find(i)
 		compMap[root] = append(compMap[root], w)
 	}
 
-	components := make([][]ScoredWay, 0, len(compMap))
+	components := make([]ScoredWays, 0, len(compMap))
 	for _, comp := range compMap {
 		components = append(components, comp)
 	}
@@ -172,7 +172,7 @@ func FindConnectedComponents(ways []ScoredWay, proximityM float64) [][]ScoredWay
 
 // OrderWays arranges ways in a connected component into a continuous path
 // by chaining endpoints.
-func OrderWays(ways []ScoredWay) []ScoredWay {
+func OrderWays(ways ScoredWays) ScoredWays {
 	if len(ways) == 0 {
 		return nil
 	}
@@ -180,11 +180,11 @@ func OrderWays(ways []ScoredWay) []ScoredWay {
 		return ways
 	}
 
-	remaining := make([]ScoredWay, len(ways))
+	remaining := make(ScoredWays, len(ways))
 	copy(remaining, ways)
 
 	// Start with the first way.
-	ordered := make([]ScoredWay, 0, len(ways))
+	ordered := make(ScoredWays, 0, len(ways))
 	ordered = append(ordered, remaining[0])
 	remaining = remaining[1:]
 
@@ -250,14 +250,14 @@ func OrderWays(ways []ScoredWay) []ScoredWay {
 // ways that retrace already-covered ground). All chunks are returned so that
 // no legitimate road segments are discarded.
 //
-// Returns nil for nil/empty input; returns [][]ScoredWay{ordered} when there
+// Returns nil for nil/empty input; returns []ScoredWays{ordered} when there
 // are no gaps.
-func SplitOrderingGaps(ordered []ScoredWay, maxGapM float64) [][]ScoredWay {
+func SplitOrderingGaps(ordered ScoredWays, maxGapM float64) []ScoredWays {
 	if len(ordered) == 0 {
 		return nil
 	}
 	if len(ordered) == 1 {
-		return [][]ScoredWay{ordered}
+		return []ScoredWays{ordered}
 	}
 
 	// Find gap positions
@@ -282,7 +282,7 @@ func SplitOrderingGaps(ordered []ScoredWay, maxGapM float64) [][]ScoredWay {
 	chunks = append(chunks, chunk{start: chunkStart, end: len(ordered) - 1})
 
 	// Return all chunks
-	result := make([][]ScoredWay, len(chunks))
+	result := make([]ScoredWays, len(chunks))
 	for i, c := range chunks {
 		result[i] = ordered[c.start : c.end+1]
 	}
@@ -294,7 +294,7 @@ func SplitOrderingGaps(ordered []ScoredWay, maxGapM float64) [][]ScoredWay {
 // Returns one or more sub-slices of segments, each representing a
 // contiguous section of the road. Straight segments that form the gap are
 // excluded from both groups (dropped at the split point).
-func SplitAtStraightGaps(ways []ScoredWay, thresholdM float64) [][]ScoredSegment {
+func SplitAtStraightGaps(ways ScoredWays, thresholdM float64) [][]ScoredSegment {
 	// Flatten all segments from all ways in order, ensuring each segment
 	// carries its parent way's ID (segments created outside ScoreWay, such as
 	// in tests, may have WayID == 0).
@@ -358,9 +358,75 @@ func SplitAtStraightGaps(ways []ScoredWay, thresholdM float64) [][]ScoredSegment
 	return groups
 }
 
+// GroupKeys returns the grouping keys (name and/or ref) for a scored way.
+// Semicolon-separated ref values are split into individual keys.
+func GroupKeys(w ScoredWay) []string {
+	var keys []string
+	if name := w.Tags["name"]; name != "" {
+		keys = append(keys, name)
+	}
+	if ref := w.Tags["ref"]; ref != "" {
+		for _, r := range strings.Split(ref, ";") {
+			r = strings.TrimSpace(r)
+			if r != "" {
+				keys = append(keys, r)
+			}
+		}
+	}
+	return keys
+}
+
+// AggregateNameGroup runs the full per-name aggregation pipeline for a single
+// road name group: connected-component analysis, ordering, gap splitting,
+// deflection filtering, straight-gap splitting, and collection building.
+func AggregateNameGroup(name string, namedWays ScoredWays) []RoadCollection {
+	components := FindConnectedComponents(namedWays, ConnectedEndpointProximityM)
+
+	var nameCollections []RoadCollection
+
+	// Build a way-ID → ScoredWay lookup for tag resolution.
+	wayByID := make(map[int64]ScoredWay, len(namedWays))
+	for _, w := range namedWays {
+		wayByID[w.WayID] = w
+	}
+
+	for _, component := range components {
+		ordered := OrderWays(component)
+		chunks := SplitOrderingGaps(ordered, ConnectedEndpointProximityM)
+
+		for _, chunk := range chunks {
+			// Apply deflection filter on each chunk before splitting.
+			// This gives the 2400m look-ahead window cross-way-boundary visibility.
+			flatSegs := FlattenWaySegments(chunk)
+			DeflectionFilterSegments(flatSegs)
+			UnflattenWaySegments(chunk, flatSegs)
+
+			segGroups := SplitAtStraightGaps(chunk, StraightGapSplitM)
+
+			for _, segs := range segGroups {
+				rc := buildRoadCollection(name, wayByID, segs)
+				nameCollections = append(nameCollections, rc)
+			}
+		}
+	}
+
+	// Assign sub-indices.
+	for i := range nameCollections {
+		nameCollections[i].SubIndex = i
+	}
+
+	return nameCollections
+}
+
+// BuildRoadCollection constructs a RoadCollection from a name, a way lookup
+// map, and a segment group.
+func BuildRoadCollection(name string, wayByID map[int64]ScoredWay, segs []ScoredSegment) RoadCollection {
+	return buildRoadCollection(name, wayByID, segs)
+}
+
 // Aggregate processes all scored ways into road collections.
 // This is the main entry point for stage 5.
-func Aggregate(ways []ScoredWay) []RoadCollection {
+func Aggregate(ways ScoredWays) []RoadCollection {
 	if len(ways) == 0 {
 		return nil
 	}
@@ -370,41 +436,7 @@ func Aggregate(ways []ScoredWay) []RoadCollection {
 	var collections []RoadCollection
 
 	for name, namedWays := range nameGroups {
-		components := FindConnectedComponents(namedWays, ConnectedEndpointProximityM)
-
-		var nameCollections []RoadCollection
-
-		// Build a way-ID → ScoredWay lookup for tag resolution.
-		wayByID := make(map[int64]ScoredWay, len(namedWays))
-		for _, w := range namedWays {
-			wayByID[w.WayID] = w
-		}
-
-		for _, component := range components {
-			ordered := OrderWays(component)
-			chunks := SplitOrderingGaps(ordered, ConnectedEndpointProximityM)
-
-			for _, chunk := range chunks {
-				// Apply deflection filter on each chunk before splitting.
-				// This gives the 2400m look-ahead window cross-way-boundary visibility.
-				flatSegs := FlattenWaySegments(chunk)
-				DeflectionFilterSegments(flatSegs)
-				UnflattenWaySegments(chunk, flatSegs)
-
-				segGroups := SplitAtStraightGaps(chunk, StraightGapSplitM)
-
-				for _, segs := range segGroups {
-					rc := buildRoadCollection(name, wayByID, segs)
-					nameCollections = append(nameCollections, rc)
-				}
-			}
-		}
-
-		// Assign sub-indices.
-		for i := range nameCollections {
-			nameCollections[i].SubIndex = i
-		}
-
+		nameCollections := AggregateNameGroup(name, namedWays)
 		collections = append(collections, nameCollections...)
 	}
 
@@ -453,8 +485,8 @@ func buildRoadCollection(name string, wayByID map[int64]ScoredWay, segs []Scored
 // slice freshly allocated. This prevents races when multiple goroutines process
 // groups whose ways share segment slice backing arrays (e.g. when the same
 // input map is passed to concurrent processNameGroup calls in tests).
-func DeepCopyWays(ways []ScoredWay) []ScoredWay {
-	result := make([]ScoredWay, len(ways))
+func DeepCopyWays(ways ScoredWays) ScoredWays {
+	result := make(ScoredWays, len(ways))
 	for i, w := range ways {
 		segs := make([]ScoredSegment, len(w.Segments))
 		copy(segs, w.Segments)
@@ -469,7 +501,7 @@ func DeepCopyWays(ways []ScoredWay) []ScoredWay {
 
 // FlattenWaySegments returns all segments from ordered ways as a single slice.
 // Each segment's WayID is set from its parent way if not already set.
-func FlattenWaySegments(ways []ScoredWay) []ScoredSegment {
+func FlattenWaySegments(ways ScoredWays) []ScoredSegment {
 	var all []ScoredSegment
 	for _, w := range ways {
 		for _, seg := range w.Segments {
@@ -484,7 +516,7 @@ func FlattenWaySegments(ways []ScoredWay) []ScoredSegment {
 
 // UnflattenWaySegments writes a flat segment slice back into the ordered ways,
 // preserving the original segment count per way.
-func UnflattenWaySegments(ways []ScoredWay, flat []ScoredSegment) {
+func UnflattenWaySegments(ways ScoredWays, flat []ScoredSegment) {
 	idx := 0
 	for i := range ways {
 		for j := range ways[i].Segments {

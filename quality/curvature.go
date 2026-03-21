@@ -99,11 +99,21 @@ func ScoreWay(w Way) ScoredWay {
 	}
 }
 
+type ScoredWays []ScoredWay
+
 // ScoreWays scores all ways and returns scored results.
-func ScoreWays(ways []Way) []ScoredWay {
-	result := make([]ScoredWay, len(ways))
+func ScoreWays(ways []Way) ScoredWays {
+	result := make(ScoredWays, len(ways))
 	for i, w := range ways {
 		result[i] = ScoreWay(w)
 	}
 	return result
+}
+
+func (sw ScoredWays) ToWays(ways Ways) []Way {
+	waysSlice := make([]Way, len(sw))
+	for i, w := range sw {
+		waysSlice[i] = ways[w.WayID]
+	}
+	return waysSlice
 }

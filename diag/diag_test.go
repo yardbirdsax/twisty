@@ -935,8 +935,8 @@ func TestCheckMissingPA901WaysInTiles(t *testing.T) {
 		610336494, 610336495, // West Market Street / PMH
 		236007106,            // Pottsville Minersville Highway
 		371984167, 371984183, // Pottsville Minersville Highway
-		15017733, 371984172,  // Pottsville Minersville Highway
-		236007098,            // Pottsville Minersville Highway
+		15017733, 371984172, // Pottsville Minersville Highway
+		236007098, // Pottsville Minersville Highway
 	}
 
 	// Minersville 15km tile set.

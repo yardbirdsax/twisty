@@ -38,7 +38,7 @@ func curvyWayGeometry(origin geo.Coord) []geo.Coord {
 	// Zigzag section: 6 nodes with tight turns (~20 m), all non-zero scores.
 	zigzag := []geo.Coord{
 		origin,
-		{Lat: origin.Lat + latStep, Lon: origin.Lon},              // N
+		{Lat: origin.Lat + latStep, Lon: origin.Lon},               // N
 		{Lat: origin.Lat + latStep, Lon: origin.Lon + lonStep},     // E
 		{Lat: origin.Lat + 2*latStep, Lon: origin.Lon + 2*lonStep}, // NE
 		{Lat: origin.Lat + 2*latStep, Lon: origin.Lon + 3*lonStep}, // E

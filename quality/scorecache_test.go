@@ -16,8 +16,8 @@ func newTestScoreCache(t *testing.T) *ScoreCache {
 	return &ScoreCache{Dir: dir, Precision: 3}
 }
 
-func sampleScoredWays() []ScoredWay {
-	return []ScoredWay{
+func sampleScoredWays() ScoredWays {
+	return ScoredWays{
 		{
 			WayID: 12345,
 			Tags:  map[string]string{"highway": "secondary", "name": "Test Road"},
@@ -320,7 +320,7 @@ func TestHashBytes(t *testing.T) {
 }
 
 func TestScoreCache_JSONRoundTrip(t *testing.T) {
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		{
 			WayID: 99,
 			Tags:  map[string]string{"highway": "primary", "name": "Main St"},

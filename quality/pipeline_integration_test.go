@@ -49,13 +49,13 @@ func radiusForTier(tier int) float64 {
 // (startLat, startLon) and advancing in an alternating NE/NW zigzag pattern.
 // Each way gets one segment of the specified tier with the given length.
 // The zigzag ensures cumulative bearing change > 20° so segments survive the deflection filter.
-func fixtureConnectedWays(startID int64, name, highway string, startLat, startLon, stepLat float64, count int, tier int, segLength float64) []ScoredWay {
+func fixtureConnectedWays(startID int64, name, highway string, startLat, startLon, stepLat float64, count int, tier int, segLength float64) ScoredWays {
 	const (
 		latPerM = 1.0 / 111000.0
 		lonPerM = 1.0 / 78500.0
 	)
 	_, weight := AssignTier(float64(radiusForTier(tier)))
-	ways := make([]ScoredWay, count)
+	ways := make(ScoredWays, count)
 	lat := startLat
 	lon := startLon
 	for i := range count {
@@ -82,8 +82,8 @@ func fixtureConnectedWays(startID int64, name, highway string, startLat, startLo
 			End:    geo.Coord{Lat: endLat, Lon: endLon},
 		}
 		ways[i] = ScoredWay{
-			WayID: startID + int64(i),
-			Tags:  map[string]string{"name": name, "highway": highway},
+			WayID:    startID + int64(i),
+			Tags:     map[string]string{"name": name, "highway": highway},
 			Segments: []ScoredSegment{seg},
 		}
 		lat = endLat
@@ -96,7 +96,7 @@ func fixtureConnectedWays(startID int64, name, highway string, startLat, startLo
 // mixed tier 2-4 segments, highway type "secondary".
 // Each segment is 300 m so total length = 5,400 m > MinRoadLengthM (4,828 m).
 // Uses a zigzag path so the deflection filter retains scored segments.
-func fixtureTwistyMountainPass() []ScoredWay {
+func fixtureTwistyMountainPass() ScoredWays {
 	const (
 		name     = "Mountain Pass Rd"
 		highway  = "secondary"
@@ -106,7 +106,7 @@ func fixtureTwistyMountainPass() []ScoredWay {
 		latPerM  = 1.0 / 111000.0
 		lonPerM  = 1.0 / 78500.0
 	)
-	var ways []ScoredWay
+	var ways ScoredWays
 	tiers := []int{2, 3, 4, 2, 3, 4, 2, 3, 2, 3, 4, 3, 2, 4, 3, 2, 3, 4}
 	lat := startLat
 	lon := startLon
@@ -133,8 +133,8 @@ func fixtureTwistyMountainPass() []ScoredWay {
 			End:    geo.Coord{Lat: endLat, Lon: endLon},
 		}
 		ways = append(ways, ScoredWay{
-			WayID: int64(100 + i),
-			Tags:  map[string]string{"name": name, "highway": highway},
+			WayID:    int64(100 + i),
+			Tags:     map[string]string{"name": name, "highway": highway},
 			Segments: []ScoredSegment{seg},
 		})
 		lat = endLat
@@ -147,7 +147,7 @@ func fixtureTwistyMountainPass() []ScoredWay {
 // with a few tier 2-3 segments representing on-ramps, highway type "motorway".
 // Each segment is 500 m so total length = 5,000 m > MinRoadLengthM (4,828 m).
 // Uses a zigzag path so the scored (non-zero-tier) segments survive the deflection filter.
-func fixtureInterstate() []ScoredWay {
+func fixtureInterstate() ScoredWays {
 	const (
 		name     = "Interstate 90"
 		highway  = "motorway"
@@ -158,7 +158,7 @@ func fixtureInterstate() []ScoredWay {
 		lonPerM  = 1.0 / 78500.0
 	)
 	tiers := []int{0, 0, 2, 3, 0, 0, 0, 2, 0, 0}
-	var ways []ScoredWay
+	var ways ScoredWays
 	lat := startLat
 	lon := startLon
 	for i, tier := range tiers {
@@ -184,8 +184,8 @@ func fixtureInterstate() []ScoredWay {
 			End:    geo.Coord{Lat: endLat, Lon: endLon},
 		}
 		ways = append(ways, ScoredWay{
-			WayID: int64(200 + i),
-			Tags:  map[string]string{"name": name, "highway": highway},
+			WayID:    int64(200 + i),
+			Tags:     map[string]string{"name": name, "highway": highway},
 			Segments: []ScoredSegment{seg},
 		})
 		lat = endLat
@@ -199,7 +199,7 @@ func fixtureInterstate() []ScoredWay {
 // The gap is represented by a single tier-0 segment of 2600 m.
 // Each cluster has 5 ways × 1,000 m = 5,000 m > MinRoadLengthM (4,828 m).
 // Uses a zigzag path so the scored segments survive the deflection filter.
-func fixtureRoute100() []ScoredWay {
+func fixtureRoute100() ScoredWays {
 	const (
 		name     = "Route 100"
 		highway  = "tertiary"
@@ -210,7 +210,7 @@ func fixtureRoute100() []ScoredWay {
 		lonPerM  = 1.0 / 78500.0
 	)
 
-	var ways []ScoredWay
+	var ways ScoredWays
 	lat := startLat
 	lon := startLon
 
@@ -240,8 +240,8 @@ func fixtureRoute100() []ScoredWay {
 			End:    geo.Coord{Lat: endLat, Lon: endLon},
 		}
 		ways = append(ways, ScoredWay{
-			WayID: int64(300 + i),
-			Tags:  map[string]string{"name": name, "highway": highway},
+			WayID:    int64(300 + i),
+			Tags:     map[string]string{"name": name, "highway": highway},
 			Segments: []ScoredSegment{seg},
 		})
 		lat = endLat
@@ -291,8 +291,8 @@ func fixtureRoute100() []ScoredWay {
 			End:    geo.Coord{Lat: endLat, Lon: endLon},
 		}
 		ways = append(ways, ScoredWay{
-			WayID: int64(306 + i),
-			Tags:  map[string]string{"name": name, "highway": highway},
+			WayID:    int64(306 + i),
+			Tags:     map[string]string{"name": name, "highway": highway},
 			Segments: []ScoredSegment{seg},
 		})
 		lat = endLat
@@ -305,7 +305,7 @@ func fixtureRoute100() []ScoredWay {
 // fixtureMainStreet builds two geographically disconnected clusters both named
 // "Main Street". Cluster A is in Vermont, cluster B is in North Carolina.
 // Each cluster has 4 ways × 1,250 m = 5,000 m > MinRoadLengthM (4,828 m).
-func fixtureMainStreet() []ScoredWay {
+func fixtureMainStreet() ScoredWays {
 	const name = "Main Street"
 
 	// Cluster A: 4 ways in Vermont area, each 1,250 m (total 5,000 m > MinRoadLengthM)
@@ -318,8 +318,8 @@ func fixtureMainStreet() []ScoredWay {
 }
 
 // fixtureUnnamedRoad builds ways with no "name" tag.
-func fixtureUnnamedRoad() []ScoredWay {
-	return []ScoredWay{
+func fixtureUnnamedRoad() ScoredWays {
+	return ScoredWays{
 		{
 			WayID: 500,
 			Tags:  map[string]string{"highway": "tertiary"}, // no "name"
@@ -333,7 +333,7 @@ func fixtureUnnamedRoad() []ScoredWay {
 // fixtureSpecialCharsRoad builds a road with special characters in its name.
 // Uses multiple short segments with zigzag bearing changes to survive the deflection filter.
 // Total length ≈ 5,600 m > MinRoadLengthM (4,828 m).
-func fixtureSpecialCharsRoad() []ScoredWay {
+func fixtureSpecialCharsRoad() ScoredWays {
 	const (
 		latPerM = 1.0 / 111000.0
 		lonPerM = 1.0 / 78500.0
@@ -376,7 +376,7 @@ func fixtureSpecialCharsRoad() []ScoredWay {
 		lon = endLon
 	}
 
-	return []ScoredWay{
+	return ScoredWays{
 		{
 			WayID:    600,
 			Tags:     map[string]string{"name": "Route 9 & 20", "highway": "secondary"},
@@ -387,8 +387,8 @@ func fixtureSpecialCharsRoad() []ScoredWay {
 
 // fixtureAllTierZeroRoad builds a road whose all segments are tier 0.
 // Length = 5,000 m > MinRoadLengthM (4,828 m) so it passes the length filter.
-func fixtureAllTierZeroRoad() []ScoredWay {
-	return []ScoredWay{
+func fixtureAllTierZeroRoad() ScoredWays {
+	return ScoredWays{
 		{
 			WayID: 700,
 			Tags:  map[string]string{"name": "Flat Street", "highway": "residential"},
@@ -402,8 +402,8 @@ func fixtureAllTierZeroRoad() []ScoredWay {
 }
 
 // allFixtures returns all fixture ways combined.
-func allFixtures() []ScoredWay {
-	var all []ScoredWay
+func allFixtures() ScoredWays {
+	var all ScoredWays
 	all = append(all, fixtureTwistyMountainPass()...)
 	all = append(all, fixtureInterstate()...)
 	all = append(all, fixtureRoute100()...)
@@ -880,7 +880,7 @@ func TestPipelineIntegration_SingleWayRoad(t *testing.T) {
 		lon = endLon
 	}
 
-	ways := []ScoredWay{
+	ways := ScoredWays{
 		{
 			WayID:    800,
 			Tags:     map[string]string{"name": "Lone Way", "highway": "tertiary"},

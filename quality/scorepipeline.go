@@ -3,7 +3,7 @@ package quality
 // ScorePipelineResult holds the output of the scoring pipeline along with
 // summary statistics.
 type ScorePipelineResult struct {
-	ScoredWays    []ScoredWay
+	ScoredWays    ScoredWays
 	InputWays     int // total ways before filtering
 	FilteredWays  int // ways that passed the hard filter
 	TotalSegments int // total segments (zero and non-zero) across scored ways

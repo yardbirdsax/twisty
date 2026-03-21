@@ -6,6 +6,7 @@ package diag
 import (
 	"encoding/xml"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -305,7 +306,7 @@ func SimulatePipeline(tiles []quality.Tile, cfg CacheConfig) (PipelineResult, er
 		}
 
 		for _, w := range scoredWays {
-			for _, key := range groupKeys(w) {
+			for _, key := range quality.GroupKeys(w) {
 				if seenPerGroup[key] == nil {
 					seenPerGroup[key] = make(map[int64]bool)
 				}
@@ -320,7 +321,7 @@ func SimulatePipeline(tiles []quality.Tile, cfg CacheConfig) (PipelineResult, er
 	// Phase B: aggregate each name group into road collections.
 	var collections []quality.RoadCollection
 	for name, ways := range grouped {
-		cols := aggregateNameGroup(name, ways)
+		cols := quality.AggregateNameGroup(name, ways)
 		collections = append(collections, cols...)
 	}
 
@@ -330,87 +331,6 @@ func SimulatePipeline(tiles []quality.Tile, cfg CacheConfig) (PipelineResult, er
 		Grouped:     grouped,
 		Collections: collections,
 	}, nil
-}
-
-// groupKeys returns the grouping keys (name and/or ref) for a scored way.
-// Semicolon-separated ref values are split into individual keys.
-func groupKeys(w quality.ScoredWay) []string {
-	var keys []string
-	if name := w.Tags["name"]; name != "" {
-		keys = append(keys, name)
-	}
-	if ref := w.Tags["ref"]; ref != "" {
-		for _, r := range strings.Split(ref, ";") {
-			r = strings.TrimSpace(r)
-			if r != "" {
-				keys = append(keys, r)
-			}
-		}
-	}
-	return keys
-}
-
-// aggregateNameGroup runs connected-component analysis, ordering, deflection
-// filtering, and gap splitting for a single name group.
-func aggregateNameGroup(name string, ways []quality.ScoredWay) []quality.RoadCollection {
-	components := quality.FindConnectedComponents(ways, quality.ConnectedEndpointProximityM)
-
-	wayByID := make(map[int64]quality.ScoredWay, len(ways))
-	for _, w := range ways {
-		wayByID[w.WayID] = w
-	}
-
-	var nameCollections []quality.RoadCollection
-	for _, comp := range components {
-		compCopy := quality.DeepCopyWays(comp)
-		ordered := quality.OrderWays(compCopy)
-		chunks := quality.SplitOrderingGaps(ordered, quality.ConnectedEndpointProximityM)
-
-		for _, chunk := range chunks {
-			flatSegs := quality.FlattenWaySegments(chunk)
-			quality.DeflectionFilterSegments(flatSegs)
-			quality.UnflattenWaySegments(chunk, flatSegs)
-
-			segGroups := quality.SplitAtStraightGaps(chunk, quality.StraightGapSplitM)
-			for _, segs := range segGroups {
-				rc := buildCollection(name, wayByID, segs)
-				nameCollections = append(nameCollections, rc)
-			}
-		}
-	}
-	for i := range nameCollections {
-		nameCollections[i].SubIndex = i
-	}
-	return nameCollections
-}
-
-// buildCollection constructs a RoadCollection from a segment group. It mirrors
-// the logic in pipeline.go's buildRoadCollectionFromSegs.
-func buildCollection(name string, wayByID map[int64]quality.ScoredWay, segs []quality.ScoredSegment) quality.RoadCollection {
-	rc := quality.RoadCollection{Name: name, Segments: segs}
-
-	seenWay := make(map[int64]bool)
-	seenHighway := make(map[string]bool)
-	for _, seg := range segs {
-		if !seenWay[seg.WayID] {
-			seenWay[seg.WayID] = true
-			rc.WayIDs = append(rc.WayIDs, seg.WayID)
-			if w, ok := wayByID[seg.WayID]; ok {
-				if hw := w.Tags["highway"]; hw != "" && !seenHighway[hw] {
-					seenHighway[hw] = true
-					rc.HighwayTypes = append(rc.HighwayTypes, hw)
-				}
-			}
-		}
-	}
-	for _, seg := range segs {
-		rc.TotalScore += seg.Score
-		rc.TotalLength += seg.Length
-	}
-	if rc.TotalLength > 0 {
-		rc.ScorePerKm = rc.TotalScore / (rc.TotalLength / 1000.0)
-	}
-	return rc
 }
 
 // TraceStep records what happened at a single pipeline stage.
@@ -792,7 +712,7 @@ func TraceRoad(name string, tiles []quality.Tile, cfg CacheConfig) (TraceResult,
 
 	var prepenaltyCollections []quality.RoadCollection
 	for _, segs := range allSegGroups {
-		rc := buildCollection(name, wayByID, segs)
+		rc := quality.BuildRoadCollection(name, wayByID, segs)
 		prepenaltyCollections = append(prepenaltyCollections, rc)
 	}
 	for i := range prepenaltyCollections {
@@ -950,14 +870,14 @@ type WayGap struct {
 // ContinuityResult holds the analysis of whether a set of ways forms a
 // contiguous path.
 type ContinuityResult struct {
-	TotalWays       int
-	TotalNodes      int
-	Components      int          // number of connected components
-	ComponentSizes  []int        // way count per component
-	Gaps            []WayGap     // gaps between closest unconnected endpoints
-	IsContiguous    bool         // true if all ways form a single connected chain
-	OverallBBox     BBox         // bounding box of all ways
-	TotalLengthM    float64      // sum of haversine distances across all way geometry
+	TotalWays      int
+	TotalNodes     int
+	Components     int      // number of connected components
+	ComponentSizes []int    // way count per component
+	Gaps           []WayGap // gaps between closest unconnected endpoints
+	IsContiguous   bool     // true if all ways form a single connected chain
+	OverallBBox    BBox     // bounding box of all ways
+	TotalLengthM   float64  // sum of haversine distances across all way geometry
 }
 
 // AnalyzeWayContinuity checks whether a set of ways form a contiguous path.
@@ -1114,7 +1034,7 @@ type GroupAggregationDetail struct {
 	InputWays []quality.ScoredWay
 
 	// Components is the result of FindConnectedComponents.
-	Components [][]quality.ScoredWay
+	Components []quality.ScoredWays
 
 	// PerComponent holds the per-component processing details.
 	PerComponent []ComponentDetail
@@ -1201,7 +1121,7 @@ func SimulatePipelineFull(tiles []quality.Tile, cfg CacheConfig, opts SimulatePi
 		}
 
 		for _, w := range scoredWays {
-			for _, key := range groupKeys(w) {
+			for _, key := range quality.GroupKeys(w) {
 				if seenPerGroup[key] == nil {
 					seenPerGroup[key] = make(map[int64]bool)
 				}
@@ -1229,7 +1149,7 @@ func SimulatePipelineFull(tiles []quality.Tile, cfg CacheConfig, opts SimulatePi
 			details[name] = detail
 			collections = append(collections, detail.Collections...)
 		} else {
-			cols := aggregateNameGroup(name, ways)
+			cols := quality.AggregateNameGroup(name, ways)
 			collections = append(collections, cols...)
 		}
 	}
@@ -1263,7 +1183,7 @@ func SimulatePipelineFull(tiles []quality.Tile, cfg CacheConfig, opts SimulatePi
 
 // aggregateNameGroupDetailed is like aggregateNameGroup but captures
 // intermediate state at each processing step for diagnostic inspection.
-func aggregateNameGroupDetailed(name string, ways []quality.ScoredWay) *GroupAggregationDetail {
+func aggregateNameGroupDetailed(name string, ways quality.ScoredWays) *GroupAggregationDetail {
 	detail := &GroupAggregationDetail{
 		Name:      name,
 		InputWays: ways,
@@ -1312,7 +1232,7 @@ func aggregateNameGroupDetailed(name string, ways []quality.ScoredWay) *GroupAgg
 			cd.SegmentGroups = append(cd.SegmentGroups, segGroups...)
 
 			for _, segs := range segGroups {
-				rc := buildCollection(name, wayByID, segs)
+				rc := quality.BuildRoadCollection(name, wayByID, segs)
 				nameCollections = append(nameCollections, rc)
 			}
 		}
@@ -1711,4 +1631,118 @@ func AnalyzeCollectionSpacing(entries []KMLRoadEntry) []CollectionGap {
 		return gaps[i].DistanceM < gaps[j].DistanceM
 	})
 	return gaps
+}
+
+// ---------------------------------------------------------------------------
+// Raw way KML rendering
+// ---------------------------------------------------------------------------
+
+// A palette of distinct colors in KML AABBGGRR format for labelling
+// individual ways visually.
+var wayColors = []string{
+	"FF0000FF", // red
+	"FFFF0000", // blue
+	"FF00FF00", // green
+	"FF00FFFF", // yellow
+	"FFFF00FF", // magenta
+	"FFFFFF00", // cyan
+	"FF0080FF", // orange
+	"FF800080", // purple
+	"FF008080", // teal
+	"FF80FF00", // spring green
+	"FF0000A0", // dark red
+	"FFA00000", // dark blue
+}
+
+// WriteRawWaysKML writes a KML file that renders each Way as a separate
+// labeled polyline. Ways are colored in rotation from a palette so overlapping
+// or adjacent ways are visually distinguishable. Each way is a KML Folder
+// with the way's OSM ID, name, and ref in the folder name and description.
+//
+// This is intended for diagnostic visualization — it ignores scoring,
+// filtering, and aggregation entirely.
+func WriteRawWaysKML(w io.Writer, ways []quality.Way) error {
+	type kmlLineString struct {
+		XMLName     xml.Name `xml:"LineString"`
+		Coordinates string   `xml:"coordinates"`
+	}
+	type kmlStyle struct {
+		XMLName   xml.Name `xml:"Style"`
+		LineStyle struct {
+			XMLName xml.Name `xml:"LineStyle"`
+			Color   string   `xml:"color"`
+			Width   int      `xml:"width"`
+		}
+	}
+	type kmlPlacemark struct {
+		XMLName    xml.Name `xml:"Placemark"`
+		Name       string   `xml:"name"`
+		Style      kmlStyle
+		LineString kmlLineString
+	}
+	type kmlFolder struct {
+		XMLName     xml.Name       `xml:"Folder"`
+		Name        string         `xml:"name"`
+		Description string         `xml:"description"`
+		Placemarks  []kmlPlacemark `xml:"Placemark"`
+	}
+	type kmlDoc struct {
+		XMLName xml.Name    `xml:"Document"`
+		Name    string      `xml:"name"`
+		Folders []kmlFolder `xml:"Folder"`
+	}
+	type kmlRoot struct {
+		XMLName xml.Name `xml:"kml"`
+		XMLNS   string   `xml:"xmlns,attr"`
+		Doc     kmlDoc   `xml:"Document"`
+	}
+
+	var folders []kmlFolder
+	for i, way := range ways {
+		if len(way.Geometry) < 2 {
+			continue
+		}
+
+		// Build coordinate string.
+		var coords []string
+		for _, c := range way.Geometry {
+			coords = append(coords, fmt.Sprintf("%f,%f,0", c.Lon, c.Lat))
+		}
+
+		color := wayColors[i%len(wayColors)]
+		name := fmt.Sprintf("Way %d", way.ID)
+		desc := fmt.Sprintf("name=%s | ref=%s | highway=%s | nodes=%d",
+			way.Tags["name"], way.Tags["ref"], way.Tags["highway"], len(way.Geometry))
+
+		pm := kmlPlacemark{
+			Name: name,
+			LineString: kmlLineString{
+				Coordinates: strings.Join(coords, " "),
+			},
+		}
+		pm.Style.LineStyle.Color = color
+		pm.Style.LineStyle.Width = 4
+
+		folders = append(folders, kmlFolder{
+			Name:        name,
+			Description: desc,
+			Placemarks:  []kmlPlacemark{pm},
+		})
+	}
+
+	root := kmlRoot{
+		XMLNS: "http://www.opengis.net/kml/2.2",
+		Doc: kmlDoc{
+			Name:    "Raw Ways",
+			Folders: folders,
+		},
+	}
+
+	out, err := xml.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	_, err = fmt.Fprintf(w, "%s%s", xml.Header, string(out))
+	return err
 }
