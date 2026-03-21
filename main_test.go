@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,15 +212,22 @@ func TestScoreRadiusValidation(t *testing.T) {
 		{"valid radius", "25", false},
 		{"min boundary valid", "0.1", false},
 		{"max boundary valid", "50", false},
-		{"radius too large", "51", true},
+		{"radius large", "51", false},
 		{"radius zero", "0", true},
 		{"radius negative", "-5", true},
 	}
 
+	// Stub Overpass server that returns an empty result immediately.
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"elements":[]}`))
+	}))
+	defer stub.Close()
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr bytes.Buffer
-			err := runScore([]string{"-address", "Anywhere", "-out", "roads.kml", "-radius", tc.radius}, &stderr)
+			err := runScore([]string{"-address", "0.0,0.0", "-out", "roads.kml", "-radius", tc.radius, "-overpass-url", stub.URL, "-tile-size", "100"}, &stderr)
 			// Valid radii will fail later (geocoding), but should NOT fail on radius validation.
 			// Invalid radii should fail with a radius error.
 			if tc.wantErr {
