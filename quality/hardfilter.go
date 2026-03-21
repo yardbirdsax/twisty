@@ -24,12 +24,13 @@ func isHardFiltered(tags map[string]string) bool {
 	}
 
 	nonMotorVehicleHighways := map[string]bool{
-		"track":     true,
-		"path":      true,
-		"footway":   true,
-		"cycleway":  true,
-		"bridleway": true,
-		"steps":     true,
+		"track":       true,
+		"path":        true,
+		"footway":     true,
+		"cycleway":    true,
+		"bridleway":   true,
+		"steps":       true,
+		"residential": true,
 	}
 	if nonMotorVehicleHighways[tags["highway"]] {
 		return true
