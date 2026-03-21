@@ -225,7 +225,7 @@ func fetchTileRaw(ctx context.Context, endpoint string, t Tile) ([]byte, error) 
 
 // TileFetchConfig holds configuration for the FetchTiledWays orchestrator.
 type TileFetchConfig struct {
-	Endpoint       string           // Overpass API base URL (default: overpassBaseURL)
+	Endpoint       string           // Overpass API base URL (default: OverpassBaseURL)
 	TileSize       float64          // tile edge length in degrees (default: 0.05)
 	Cache          *TileCache
 	NoCache        bool             // skip cache reads, still write
@@ -240,7 +240,7 @@ type TileFetchConfig struct {
 // with retry/backoff, and returns the merged, deduplicated set of Ways.
 func FetchTiledWays(ctx context.Context, centerLat, centerLon, radiusKm float64, cfg TileFetchConfig) ([]Way, error) {
 	if cfg.Endpoint == "" {
-		cfg.Endpoint = overpassBaseURL
+		cfg.Endpoint = OverpassBaseURL
 	}
 	if cfg.TileSize == 0 {
 		cfg.TileSize = 0.05

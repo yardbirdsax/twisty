@@ -73,7 +73,7 @@ type overpassGeomPoint struct {
 
 var overpassHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-const overpassBaseURL = "https://overpass-api.de/api/interpreter"
+const OverpassBaseURL = "https://overpass-api.de/api/interpreter"
 
 // HighwayFilter is an Overpass regex filter that restricts results to motor-vehicle-relevant
 // highway types. This excludes pedestrian and cycle infrastructure (footway, cycleway, path,
@@ -141,9 +141,10 @@ func elementsToWays(elements []overpassElement) []Way {
 }
 
 // FetchWays queries Overpass for all highway ways within the bounding box.
+// endpoint is the Overpass API base URL (use OverpassBaseURL for the public instance).
 // Returns (ways, nil) on success, or (nil, error) on any failure.
-func FetchWays(south, west, north, east float64) ([]Way, error) {
-	return fetchWaysFromURL(overpassBaseURL, south, west, north, east)
+func FetchWays(endpoint string, south, west, north, east float64) ([]Way, error) {
+	return fetchWaysFromURL(endpoint, south, west, north, east)
 }
 
 // HighwayTypePenalty returns a penalty factor in [0, 1] based on road classification.

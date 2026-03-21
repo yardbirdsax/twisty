@@ -51,6 +51,7 @@ func runRoute(args []string) {
 	out := fs.String("out", "route.gpx", "Output file path")
 	showAll := fs.Bool("show-all", false, "Print candidate comparison table")
 	verbose := fs.Bool("v", false, "Enable verbose timing logs to stderr")
+	overpassURL := fs.String("overpass-url", quality.OverpassBaseURL, "Overpass API endpoint URL")
 	fs.Parse(args)
 
 	var logger *slog.Logger
@@ -123,7 +124,7 @@ func runRoute(args []string) {
 	allPoints := collectAllPoints(routes)
 	south, west, north, east := quality.BoundingBox(allPoints, 0.01)
 	done = stageTimer(logger, "fetch-ways")
-	ways, err := quality.FetchWays(south, west, north, east)
+	ways, err := quality.FetchWays(*overpassURL, south, west, north, east)
 	wayCount := len(ways)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "WARNING: Overpass API unavailable; road quality filtering skipped: %v\n", err)
@@ -170,6 +171,7 @@ func runFetch(args []string) {
 	clearCache := fs.Bool("clear-cache", false, "Delete all cached tiles before fetching")
 	purgeOlderThan := fs.String("purge-older-than", "", "Purge cache files older than duration (e.g., 90d, 6m where m=months not minutes)")
 	verbose := fs.Bool("v", false, "Enable verbose timing logs to stderr")
+	overpassURL := fs.String("overpass-url", quality.OverpassBaseURL, "Overpass API endpoint URL")
 	fs.Parse(args)
 
 	var logger *slog.Logger
@@ -189,8 +191,8 @@ func runFetch(args []string) {
 		os.Exit(1)
 	}
 
-	if *radius <= 0 || *radius > 50 {
-		fmt.Fprintln(os.Stderr, "Error: --radius must be between 0 and 50 km")
+	if *radius <= 0 {
+		fmt.Fprintln(os.Stderr, "Error: --radius must be greater than 0")
 		os.Exit(1)
 	}
 
@@ -255,6 +257,7 @@ func runFetch(args []string) {
 	}
 
 	cfg := quality.TileFetchConfig{
+		Endpoint: *overpassURL,
 		TileSize: *tileSize,
 		Cache:    cache,
 		NoCache:  *noCache,
@@ -287,6 +290,7 @@ func runScore(args []string, stderr io.Writer) error {
 	outPath := fs.String("out", "", "output KML file path (required)")
 	minScore := fs.Float64("min-score", 0, "minimum penalized score to include in output")
 	multiColor := fs.Bool("multi-color", false, "Use per-segment tier coloring instead of single-color per-road")
+	overpassURL := fs.String("overpass-url", quality.OverpassBaseURL, "Overpass API endpoint URL")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -311,8 +315,8 @@ func runScore(args []string, stderr io.Writer) error {
 		return fmt.Errorf("Error: -out is required")
 	}
 
-	if *radius <= 0 || *radius > 50 {
-		return fmt.Errorf("Error: -radius must be between 0 and 50 km")
+	if *radius <= 0 {
+		return fmt.Errorf("Error: -radius must be > 0 km")
 	}
 
 	if *tileSize <= 0 {
@@ -363,6 +367,7 @@ func runScore(args []string, stderr io.Writer) error {
 		fetchProgress = &termProgressBar{w: os.Stderr, label: "Fetching tiles:"}
 	}
 	fetchCfg := quality.TileFetchConfig{
+		Endpoint: *overpassURL,
 		TileSize: *tileSize,
 		Cache:    tileCache,
 		Logger:   logger,
