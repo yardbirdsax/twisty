@@ -125,8 +125,9 @@ func processTilesConcurrentlyWith(
 		close(resultCh)
 	}()
 
-	// Collect results and group by name.
+	// Collect results and group by name, deduplicating by WayID per group.
 	grouped := make(map[string][]quality.ScoredWay)
+	seenPerGroup := make(map[string]map[int64]bool)
 	for res := range resultCh {
 		if res.cacheHit {
 			stats.cacheHits.Add(1)
@@ -136,10 +137,22 @@ func processTilesConcurrentlyWith(
 
 		for _, w := range res.ways {
 			if name := w.Tags["name"]; name != "" {
-				grouped[name] = append(grouped[name], w)
+				if seenPerGroup[name] == nil {
+					seenPerGroup[name] = make(map[int64]bool)
+				}
+				if !seenPerGroup[name][w.WayID] {
+					seenPerGroup[name][w.WayID] = true
+					grouped[name] = append(grouped[name], w)
+				}
 			}
 			if ref := w.Tags["ref"]; ref != "" {
-				grouped[ref] = append(grouped[ref], w)
+				if seenPerGroup[ref] == nil {
+					seenPerGroup[ref] = make(map[int64]bool)
+				}
+				if !seenPerGroup[ref][w.WayID] {
+					seenPerGroup[ref][w.WayID] = true
+					grouped[ref] = append(grouped[ref], w)
+				}
 			}
 		}
 
