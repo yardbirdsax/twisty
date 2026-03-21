@@ -357,6 +357,21 @@ func runScore(args []string, stderr io.Writer) error {
 	}
 	logger.Debug("geocoded address", "display_name", centerResult.DisplayName)
 
+	// Fetch any missing tiles before scoring.
+	var fetchProgress quality.ProgressReporter = quality.NoopProgressReporter{}
+	if !*verbose && isTerminal(os.Stderr) {
+		fetchProgress = &termProgressBar{w: os.Stderr, label: "Fetching tiles:"}
+	}
+	fetchCfg := quality.TileFetchConfig{
+		TileSize: *tileSize,
+		Cache:    tileCache,
+		Logger:   logger,
+		Progress: fetchProgress,
+	}
+	if _, err := quality.FetchTiledWays(context.Background(), centerResult.Lat, centerResult.Lon, *radius, fetchCfg); err != nil {
+		return fmt.Errorf("fetching tiles: %w", err)
+	}
+
 	// Compute tiles.
 	tiles := quality.ComputeTiles(centerResult.Lat, centerResult.Lon, *radius, *tileSize)
 	logger.Debug("computed tiles", "count", len(tiles))
@@ -382,7 +397,7 @@ func runScore(args []string, stderr io.Writer) error {
 	}
 
 	if len(grouped) == 0 {
-		fmt.Fprintln(stderr, "WARNING: No cached tile data found. Run 'twisty fetch -address \"...\"' first. Writing empty KML.")
+		fmt.Fprintln(stderr, "WARNING: No road data found for this area. Writing empty KML.")
 		f, err := os.Create(*outPath)
 		if err != nil {
 			return fmt.Errorf("creating output file: %w", err)
