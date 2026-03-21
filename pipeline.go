@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -146,12 +147,18 @@ func processTilesConcurrentlyWith(
 				}
 			}
 			if ref := w.Tags["ref"]; ref != "" {
-				if seenPerGroup[ref] == nil {
-					seenPerGroup[ref] = make(map[int64]bool)
-				}
-				if !seenPerGroup[ref][w.WayID] {
-					seenPerGroup[ref][w.WayID] = true
-					grouped[ref] = append(grouped[ref], w)
+				for _, r := range strings.Split(ref, ";") {
+					r = strings.TrimSpace(r)
+					if r == "" {
+						continue
+					}
+					if seenPerGroup[r] == nil {
+						seenPerGroup[r] = make(map[int64]bool)
+					}
+					if !seenPerGroup[r][w.WayID] {
+						seenPerGroup[r][w.WayID] = true
+						grouped[r] = append(grouped[r], w)
+					}
 				}
 			}
 		}
@@ -351,19 +358,21 @@ func processNameGroup(name string, namedWays []quality.ScoredWay) ([]quality.Roa
 		// goroutines process groups whose input ways share backing arrays.
 		componentCopy := quality.DeepCopyWays(component)
 		ordered := quality.OrderWays(componentCopy)
-		ordered = quality.SplitOrderingGaps(ordered, quality.ConnectedEndpointProximityM)
+		chunks := quality.SplitOrderingGaps(ordered, quality.ConnectedEndpointProximityM)
 
-		// Apply deflection filter on the full assembled chain before splitting.
-		// This gives the 2400m look-ahead window cross-way-boundary visibility.
-		flatSegs := quality.FlattenWaySegments(ordered)
-		quality.DeflectionFilterSegments(flatSegs)
-		quality.UnflattenWaySegments(ordered, flatSegs)
+		for _, chunk := range chunks {
+			// Apply deflection filter on each chunk before splitting.
+			// This gives the 2400m look-ahead window cross-way-boundary visibility.
+			flatSegs := quality.FlattenWaySegments(chunk)
+			quality.DeflectionFilterSegments(flatSegs)
+			quality.UnflattenWaySegments(chunk, flatSegs)
 
-		segGroups := quality.SplitAtStraightGaps(ordered, quality.StraightGapSplitM)
+			segGroups := quality.SplitAtStraightGaps(chunk, quality.StraightGapSplitM)
 
-		for _, segs := range segGroups {
-			rc := buildRoadCollectionFromSegs(name, wayByID, segs)
-			nameCollections = append(nameCollections, rc)
+			for _, segs := range segGroups {
+				rc := buildRoadCollectionFromSegs(name, wayByID, segs)
+				nameCollections = append(nameCollections, rc)
+			}
 		}
 	}
 

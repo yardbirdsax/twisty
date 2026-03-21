@@ -2,6 +2,7 @@ package quality
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/yardbirdsax/twisty/geo"
 )
@@ -56,6 +57,10 @@ func GroupWaysByName(ways []ScoredWay) map[string][]ScoredWay {
 // A way with both tags appears in both groups. Ways with neither tag are excluded.
 // This enables roads like "PA 345" (which changes name along its length) to be
 // treated as a single road via the ref grouping.
+//
+// Semicolon-separated ref values (standard OSM tagging for roads with multiple
+// route designations, e.g. "US 209;PA 901") are split so the way appears in
+// each individual ref group.
 func GroupWays(ways []ScoredWay) map[string][]ScoredWay {
 	result := make(map[string][]ScoredWay)
 	for _, w := range ways {
@@ -63,7 +68,12 @@ func GroupWays(ways []ScoredWay) map[string][]ScoredWay {
 			result[name] = append(result[name], w)
 		}
 		if ref := w.Tags["ref"]; ref != "" {
-			result[ref] = append(result[ref], w)
+			for _, r := range strings.Split(ref, ";") {
+				r = strings.TrimSpace(r)
+				if r != "" {
+					result[r] = append(result[r], w)
+				}
+			}
 		}
 	}
 	return result
@@ -76,6 +86,12 @@ func wayEndpoints(w ScoredWay) (start, end geo.Coord, ok bool) {
 		return geo.Coord{}, geo.Coord{}, false
 	}
 	return w.Segments[0].Start, w.Segments[len(w.Segments)-1].End, true
+}
+
+// WayEndpointsPublic is the exported version of wayEndpoints. It extracts the
+// start and end coordinates of a ScoredWay from its first and last segments.
+func WayEndpointsPublic(w ScoredWay) (start, end geo.Coord, ok bool) {
+	return wayEndpoints(w)
 }
 
 // FindConnectedComponents groups ways by endpoint proximity.
@@ -225,15 +241,23 @@ func OrderWays(ways []ScoredWay) []ScoredWay {
 }
 
 // SplitOrderingGaps detects large gaps in an ordered way chain and returns
-// only the longest contiguous sub-chain. A gap is defined as a distance
-// between consecutive ways' shared endpoints exceeding maxGapM meters.
+// all contiguous sub-chains as a slice of slices. A gap is defined as a
+// distance between consecutive ways' shared endpoints exceeding maxGapM
+// meters.
 //
 // This handles cases where OrderWays' greedy nearest-neighbor algorithm
 // appends a way that jumps far from the chain end (e.g., overlapping OSM
-// ways that retrace already-covered ground).
-func SplitOrderingGaps(ordered []ScoredWay, maxGapM float64) []ScoredWay {
-	if len(ordered) <= 1 {
-		return ordered
+// ways that retrace already-covered ground). All chunks are returned so that
+// no legitimate road segments are discarded.
+//
+// Returns nil for nil/empty input; returns [][]ScoredWay{ordered} when there
+// are no gaps.
+func SplitOrderingGaps(ordered []ScoredWay, maxGapM float64) [][]ScoredWay {
+	if len(ordered) == 0 {
+		return nil
+	}
+	if len(ordered) == 1 {
+		return [][]ScoredWay{ordered}
 	}
 
 	// Find gap positions
@@ -257,18 +281,12 @@ func SplitOrderingGaps(ordered []ScoredWay, maxGapM float64) []ScoredWay {
 	}
 	chunks = append(chunks, chunk{start: chunkStart, end: len(ordered) - 1})
 
-	// Return the longest chunk
-	best := chunks[0]
-	bestLen := best.end - best.start + 1
-	for _, c := range chunks[1:] {
-		l := c.end - c.start + 1
-		if l > bestLen {
-			best = c
-			bestLen = l
-		}
+	// Return all chunks
+	result := make([][]ScoredWay, len(chunks))
+	for i, c := range chunks {
+		result[i] = ordered[c.start : c.end+1]
 	}
-
-	return ordered[best.start : best.end+1]
+	return result
 }
 
 // SplitAtStraightGaps splits an ordered slice of ways at contiguous runs
@@ -364,19 +382,21 @@ func Aggregate(ways []ScoredWay) []RoadCollection {
 
 		for _, component := range components {
 			ordered := OrderWays(component)
-			ordered = SplitOrderingGaps(ordered, ConnectedEndpointProximityM)
+			chunks := SplitOrderingGaps(ordered, ConnectedEndpointProximityM)
 
-			// Apply deflection filter on the full assembled chain before splitting.
-			// This gives the 2400m look-ahead window cross-way-boundary visibility.
-			flatSegs := FlattenWaySegments(ordered)
-			DeflectionFilterSegments(flatSegs)
-			UnflattenWaySegments(ordered, flatSegs)
+			for _, chunk := range chunks {
+				// Apply deflection filter on each chunk before splitting.
+				// This gives the 2400m look-ahead window cross-way-boundary visibility.
+				flatSegs := FlattenWaySegments(chunk)
+				DeflectionFilterSegments(flatSegs)
+				UnflattenWaySegments(chunk, flatSegs)
 
-			segGroups := SplitAtStraightGaps(ordered, StraightGapSplitM)
+				segGroups := SplitAtStraightGaps(chunk, StraightGapSplitM)
 
-			for _, segs := range segGroups {
-				rc := buildRoadCollection(name, wayByID, segs)
-				nameCollections = append(nameCollections, rc)
+				for _, segs := range segGroups {
+					rc := buildRoadCollection(name, wayByID, segs)
+					nameCollections = append(nameCollections, rc)
+				}
 			}
 		}
 

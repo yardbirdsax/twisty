@@ -90,6 +90,65 @@ func makeWay(id int64, start, end geo.Coord) ScoredWay {
 	}
 }
 
+// TestGroupWays_SemicolonSeparatedRef verifies that a way with a
+// semicolon-separated ref tag (e.g. "US 209;PA 901") appears in groups for
+// each individual ref value. This is standard OSM tagging for roads with
+// multiple route designations.
+func TestGroupWays_SemicolonSeparatedRef(t *testing.T) {
+	ways := []ScoredWay{
+		// Way with a single ref — should appear in "PA 345" group.
+		{WayID: 1, Tags: map[string]string{"name": "Main Street", "ref": "PA 345"}},
+		// Way with a semicolon-separated ref — should appear in BOTH
+		// "US 209" and "PA 901" groups.
+		{WayID: 2, Tags: map[string]string{"name": "Pottsville Minersville Highway", "ref": "US 209;PA 901"}},
+		// Way with only "PA 901" ref — should appear in "PA 901" group.
+		{WayID: 3, Tags: map[string]string{"name": "Sunbury Road", "ref": "PA 901"}},
+	}
+
+	groups := GroupWays(ways)
+
+	// "PA 345" group should have way 1.
+	if g := groups["PA 345"]; len(g) != 1 || g[0].WayID != 1 {
+		t.Errorf("PA 345 group: got %d ways, want 1 (way 1)", len(g))
+	}
+
+	// "PA 901" group should have BOTH way 2 (from "US 209;PA 901") and way 3.
+	pa901 := groups["PA 901"]
+	if len(pa901) != 2 {
+		t.Errorf("PA 901 group: got %d ways, want 2 (ways 2 and 3)", len(pa901))
+	} else {
+		ids := map[int64]bool{}
+		for _, w := range pa901 {
+			ids[w.WayID] = true
+		}
+		if !ids[2] {
+			t.Error("PA 901 group: missing way 2 (ref='US 209;PA 901')")
+		}
+		if !ids[3] {
+			t.Error("PA 901 group: missing way 3 (ref='PA 901')")
+		}
+	}
+
+	// "US 209" group should have way 2.
+	us209 := groups["US 209"]
+	if len(us209) != 1 || us209[0].WayID != 2 {
+		t.Errorf("US 209 group: got %d ways, want 1 (way 2)", len(us209))
+	}
+
+	// Way 2 should NOT appear under the unsplit key "US 209;PA 901".
+	if g := groups["US 209;PA 901"]; len(g) != 0 {
+		t.Errorf("'US 209;PA 901' group should not exist as a literal key, got %d ways", len(g))
+	}
+
+	// Name groups should still work normally.
+	if g := groups["Pottsville Minersville Highway"]; len(g) != 1 || g[0].WayID != 2 {
+		t.Errorf("Pottsville Minersville Highway group: got %d ways, want 1", len(g))
+	}
+	if g := groups["Sunbury Road"]; len(g) != 1 || g[0].WayID != 3 {
+		t.Errorf("Sunbury Road group: got %d ways, want 1", len(g))
+	}
+}
+
 func TestFindConnectedComponents_TwoClusters(t *testing.T) {
 	// Cluster A: two nearby ways in Vermont (~44°N, -72°W)
 	a1 := makeWay(1, geo.Coord{Lat: 44.0, Lon: -72.0}, geo.Coord{Lat: 44.001, Lon: -72.0})
@@ -575,6 +634,7 @@ func TestAggregate_TwoDisconnectedClusters(t *testing.T) {
 }
 
 // TestSplitOrderingGaps_NoGaps: chain of 5 ways with endpoints < 100m apart.
+// Expect 1 chunk with all 5 ways.
 func TestSplitOrderingGaps_NoGaps(t *testing.T) {
 	// 5 ways chained north, each ~22m apart (0.0002° lat steps).
 	baseLat := 44.0
@@ -588,13 +648,16 @@ func TestSplitOrderingGaps_NoGaps(t *testing.T) {
 
 	got := SplitOrderingGaps(ways, ConnectedEndpointProximityM)
 
-	if len(got) != 5 {
-		t.Fatalf("expected 5 ways, got %d", len(got))
+	if len(got) != 1 {
+		t.Fatalf("expected 1 chunk, got %d", len(got))
+	}
+	if len(got[0]) != 5 {
+		t.Fatalf("expected 5 ways in chunk 0, got %d", len(got[0]))
 	}
 }
 
 // TestSplitOrderingGaps_GapInMiddle: ways 0-3 connected, 2km gap, ways 4-5 connected.
-// Should return ways 0-3 (longer chunk).
+// Expect 2 chunks: one with 4 ways (IDs 1-4) and one with 2 ways (IDs 5-6).
 func TestSplitOrderingGaps_GapInMiddle(t *testing.T) {
 	baseLat := 44.0
 	step := 0.0002 // ~22m
@@ -614,17 +677,32 @@ func TestSplitOrderingGaps_GapInMiddle(t *testing.T) {
 
 	got := SplitOrderingGaps(ways, ConnectedEndpointProximityM)
 
-	if len(got) != 4 {
-		t.Fatalf("expected 4 ways (longest chunk 0-3), got %d", len(got))
+	if len(got) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(got))
 	}
-	for i, w := range got {
+	// Chunk 0: ways 1-4
+	if len(got[0]) != 4 {
+		t.Fatalf("chunk 0: expected 4 ways, got %d", len(got[0]))
+	}
+	for i, w := range got[0] {
 		if w.WayID != int64(i+1) {
-			t.Errorf("way[%d].WayID = %d, want %d", i, w.WayID, i+1)
+			t.Errorf("chunk 0 way[%d].WayID = %d, want %d", i, w.WayID, i+1)
 		}
+	}
+	// Chunk 1: ways 5-6
+	if len(got[1]) != 2 {
+		t.Fatalf("chunk 1: expected 2 ways, got %d", len(got[1]))
+	}
+	if got[1][0].WayID != 5 {
+		t.Errorf("chunk 1 way[0].WayID = %d, want 5", got[1][0].WayID)
+	}
+	if got[1][1].WayID != 6 {
+		t.Errorf("chunk 1 way[1].WayID = %d, want 6", got[1][1].WayID)
 	}
 }
 
-// TestSplitOrderingGaps_GapAtStart: first way is far from the rest. Returns ways 1-5.
+// TestSplitOrderingGaps_GapAtStart: first way is far from the rest.
+// Expect 2 chunks: one with 1 way (ID 1) and one with 5 ways (IDs 2-6).
 func TestSplitOrderingGaps_GapAtStart(t *testing.T) {
 	step := 0.0002 // ~22m
 
@@ -642,18 +720,29 @@ func TestSplitOrderingGaps_GapAtStart(t *testing.T) {
 
 	got := SplitOrderingGaps(ways, ConnectedEndpointProximityM)
 
-	if len(got) != 5 {
-		t.Fatalf("expected 5 ways (longer chunk 1-5), got %d", len(got))
+	if len(got) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(got))
 	}
-	// WayIDs should be 2-6
-	for i, w := range got {
+	// Chunk 0: way 1 (the isolated stray)
+	if len(got[0]) != 1 {
+		t.Fatalf("chunk 0: expected 1 way, got %d", len(got[0]))
+	}
+	if got[0][0].WayID != 1 {
+		t.Errorf("chunk 0 way[0].WayID = %d, want 1", got[0][0].WayID)
+	}
+	// Chunk 1: ways 2-6
+	if len(got[1]) != 5 {
+		t.Fatalf("chunk 1: expected 5 ways, got %d", len(got[1]))
+	}
+	for i, w := range got[1] {
 		if w.WayID != int64(i+2) {
-			t.Errorf("way[%d].WayID = %d, want %d", i, w.WayID, i+2)
+			t.Errorf("chunk 1 way[%d].WayID = %d, want %d", i, w.WayID, i+2)
 		}
 	}
 }
 
-// TestSplitOrderingGaps_MultipleGaps: three chunks separated by gaps. Returns the longest.
+// TestSplitOrderingGaps_MultipleGaps: three chunks separated by gaps.
+// Expect 3 chunks: 2 ways, 4 ways, 1 way.
 func TestSplitOrderingGaps_MultipleGaps(t *testing.T) {
 	step := 0.0002 // ~22m
 
@@ -673,26 +762,48 @@ func TestSplitOrderingGaps_MultipleGaps(t *testing.T) {
 
 	got := SplitOrderingGaps(ways, ConnectedEndpointProximityM)
 
-	if len(got) != 4 {
-		t.Fatalf("expected 4 ways (longest chunk B), got %d", len(got))
+	if len(got) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(got))
 	}
-	// Chunk B starts at index 2 → WayIDs 3,4,5,6
-	for i, w := range got {
-		if w.WayID != int64(i+3) {
-			t.Errorf("way[%d].WayID = %d, want %d", i, w.WayID, i+3)
+	// Chunk A: 2 ways (IDs 1, 2)
+	if len(got[0]) != 2 {
+		t.Fatalf("chunk 0: expected 2 ways, got %d", len(got[0]))
+	}
+	for i, w := range got[0] {
+		if w.WayID != int64(i+1) {
+			t.Errorf("chunk 0 way[%d].WayID = %d, want %d", i, w.WayID, i+1)
 		}
+	}
+	// Chunk B: 4 ways (IDs 3, 4, 5, 6)
+	if len(got[1]) != 4 {
+		t.Fatalf("chunk 1: expected 4 ways, got %d", len(got[1]))
+	}
+	for i, w := range got[1] {
+		if w.WayID != int64(i+3) {
+			t.Errorf("chunk 1 way[%d].WayID = %d, want %d", i, w.WayID, i+3)
+		}
+	}
+	// Chunk C: 1 way (ID 7)
+	if len(got[2]) != 1 {
+		t.Fatalf("chunk 2: expected 1 way, got %d", len(got[2]))
+	}
+	if got[2][0].WayID != 7 {
+		t.Errorf("chunk 2 way[0].WayID = %d, want 7", got[2][0].WayID)
 	}
 }
 
-// TestSplitOrderingGaps_SingleWay: returns the single way unchanged.
+// TestSplitOrderingGaps_SingleWay: returns 1 chunk containing the single way.
 func TestSplitOrderingGaps_SingleWay(t *testing.T) {
 	w := makeWay(1, geo.Coord{Lat: 44.0, Lon: -72.0}, geo.Coord{Lat: 44.001, Lon: -72.0})
 	got := SplitOrderingGaps([]ScoredWay{w}, ConnectedEndpointProximityM)
 	if len(got) != 1 {
-		t.Fatalf("expected 1 way, got %d", len(got))
+		t.Fatalf("expected 1 chunk, got %d", len(got))
 	}
-	if got[0].WayID != 1 {
-		t.Errorf("WayID = %d, want 1", got[0].WayID)
+	if len(got[0]) != 1 {
+		t.Fatalf("expected 1 way in chunk 0, got %d", len(got[0]))
+	}
+	if got[0][0].WayID != 1 {
+		t.Errorf("WayID = %d, want 1", got[0][0].WayID)
 	}
 }
 
@@ -700,11 +811,11 @@ func TestSplitOrderingGaps_SingleWay(t *testing.T) {
 func TestSplitOrderingGaps_EmptyInput(t *testing.T) {
 	got := SplitOrderingGaps(nil, ConnectedEndpointProximityM)
 	if len(got) != 0 {
-		t.Errorf("expected 0 ways, got %d", len(got))
+		t.Errorf("expected 0 chunks, got %d", len(got))
 	}
 	got2 := SplitOrderingGaps([]ScoredWay{}, ConnectedEndpointProximityM)
 	if len(got2) != 0 {
-		t.Errorf("expected 0 ways for empty slice, got %d", len(got2))
+		t.Errorf("expected 0 chunks for empty slice, got %d", len(got2))
 	}
 }
 
@@ -714,7 +825,8 @@ func TestSplitOrderingGaps_EmptyInput(t *testing.T) {
 //   - 1 way that overlaps the middle (its nearest endpoint is close to chain
 //     end after greedy ordering, but it creates a >100m jump back into the chain)
 //
-// After SplitOrderingGaps the output chain should have no large gaps.
+// After SplitOrderingGaps, the main chain (5 ways) and the stray (1 way) are
+// returned as separate chunks. The main chain chunk must have no internal gaps.
 func TestSplitOrderingGaps_ValleyCreekRegression(t *testing.T) {
 	step := 0.0002 // ~22m per step at 44°N
 
@@ -738,18 +850,95 @@ func TestSplitOrderingGaps_ValleyCreekRegression(t *testing.T) {
 
 	result := SplitOrderingGaps(orderedWithStray, ConnectedEndpointProximityM)
 
-	if len(result) != 5 {
-		t.Fatalf("expected 5 ways (main chain only), got %d", len(result))
+	// Expect 2 chunks: the main chain (5 ways) and the stray (1 way).
+	if len(result) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(result))
 	}
 
-	// Verify no large gaps in result.
-	for i := 0; i < len(result)-1; i++ {
-		_, end, _ := wayEndpoints(result[i])
-		start, _, _ := wayEndpoints(result[i+1])
+	mainChunkIdx := -1
+	for i, chunk := range result {
+		if len(chunk) == 5 {
+			mainChunkIdx = i
+			break
+		}
+	}
+	if mainChunkIdx == -1 {
+		t.Fatalf("no chunk with 5 ways found; chunk sizes: %v", func() []int {
+			sizes := make([]int, len(result))
+			for i, c := range result {
+				sizes[i] = len(c)
+			}
+			return sizes
+		}())
+	}
+
+	// Verify no large gaps in the main chain chunk.
+	mainResult := result[mainChunkIdx]
+	for i := 0; i < len(mainResult)-1; i++ {
+		_, end, _ := wayEndpoints(mainResult[i])
+		start, _, _ := wayEndpoints(mainResult[i+1])
 		d := geo.Haversine(end, start)
 		if d > ConnectedEndpointProximityM {
 			t.Errorf("gap between ways %d and %d: %.1f m (want <= %.1f m)", i, i+1, d, ConnectedEndpointProximityM)
 		}
+	}
+}
+
+// TestSplitOrderingGaps_AllChunksPreserved verifies that no ways are lost when
+// there is a large gap (PA 901 scenario): ways 1-6 connected, 2km gap, ways 7-10
+// connected. Both chunks must be returned and the total way count must equal the
+// input count.
+func TestSplitOrderingGaps_AllChunksPreserved(t *testing.T) {
+	step := 0.0002 // ~22m
+
+	var ways []ScoredWay
+	// Chain A: ways 1-6 at 44°N
+	for i := range 6 {
+		lat0 := 44.0 + float64(i)*step
+		ways = append(ways, makeWay(int64(i+1), geo.Coord{Lat: lat0, Lon: -72.0}, geo.Coord{Lat: lat0 + step, Lon: -72.0}))
+	}
+	// 2km gap
+	gapLat := 44.0 + float64(6)*step + 2000.0/111000.0
+	// Chain B: ways 7-10
+	for i := range 4 {
+		lat0 := gapLat + float64(i)*step
+		ways = append(ways, makeWay(int64(i+7), geo.Coord{Lat: lat0, Lon: -72.0}, geo.Coord{Lat: lat0 + step, Lon: -72.0}))
+	}
+
+	got := SplitOrderingGaps(ways, ConnectedEndpointProximityM)
+
+	// Must return exactly 2 chunks.
+	if len(got) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(got))
+	}
+
+	// Chunk 0: 6 ways (IDs 1-6).
+	if len(got[0]) != 6 {
+		t.Fatalf("chunk 0: expected 6 ways, got %d", len(got[0]))
+	}
+	for i, w := range got[0] {
+		if w.WayID != int64(i+1) {
+			t.Errorf("chunk 0 way[%d].WayID = %d, want %d", i, w.WayID, i+1)
+		}
+	}
+
+	// Chunk 1: 4 ways (IDs 7-10).
+	if len(got[1]) != 4 {
+		t.Fatalf("chunk 1: expected 4 ways, got %d", len(got[1]))
+	}
+	for i, w := range got[1] {
+		if w.WayID != int64(i+7) {
+			t.Errorf("chunk 1 way[%d].WayID = %d, want %d", i, w.WayID, i+7)
+		}
+	}
+
+	// Total way count must equal input count — no data lost.
+	total := 0
+	for _, chunk := range got {
+		total += len(chunk)
+	}
+	if total != len(ways) {
+		t.Errorf("total ways across all chunks = %d, want %d (no data lost)", total, len(ways))
 	}
 }
 

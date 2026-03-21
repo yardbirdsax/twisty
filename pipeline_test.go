@@ -469,6 +469,156 @@ func TestProcessNameGroupsConcurrently_NoDataRace(t *testing.T) {
 	wg.Wait()
 }
 
+// syntheticTileJSONWithRef builds a minimal valid Overpass JSON payload with
+// the given way ID, name, ref, and geometry.
+func syntheticTileJSONWithRef(t *testing.T, wayID int64, wayName, wayRef string, coords []map[string]float64) []byte {
+	t.Helper()
+	tags := map[string]string{
+		"highway": "secondary",
+	}
+	if wayName != "" {
+		tags["name"] = wayName
+	}
+	if wayRef != "" {
+		tags["ref"] = wayRef
+	}
+	syntheticWay := map[string]any{
+		"id":       wayID,
+		"tags":     tags,
+		"geometry": coords,
+	}
+	payload := map[string]any{
+		"elements": []any{syntheticWay},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal synthetic tile: %v", err)
+	}
+	return raw
+}
+
+// TestProcessTilesConcurrently_SemicolonRefSplit verifies that the tile
+// collector loop splits semicolon-separated ref tags so a way with
+// ref="US 209;PA 901" appears in both the "US 209" and "PA 901" groups, not
+// in a single "US 209;PA 901" group.
+func TestProcessTilesConcurrently_SemicolonRefSplit(t *testing.T) {
+	const (
+		centerLat = 35.0
+		centerLon = -82.0
+		radius    = 0.5
+		tileSize  = 0.05
+	)
+
+	tiles := quality.ComputeTiles(centerLat, centerLon, radius, tileSize)
+	if len(tiles) == 0 {
+		t.Fatal("no tiles computed")
+	}
+
+	curvedCoords := []map[string]float64{
+		{"lat": centerLat, "lon": centerLon},
+		{"lat": centerLat + 0.0002, "lon": centerLon + 0.0001},
+		{"lat": centerLat + 0.0003, "lon": centerLon - 0.0001},
+		{"lat": centerLat + 0.0005, "lon": centerLon + 0.0001},
+	}
+
+	// Way 1: single ref
+	way1JSON := syntheticTileJSONWithRef(t, 100, "Main Street", "PA 345", curvedCoords)
+	// Way 2: semicolon-separated ref
+	way2JSON := syntheticTileJSONWithRef(t, 200, "Market Street", "US 209;PA 901", curvedCoords)
+	// Way 3: single ref matching one part of way 2's compound ref
+	way3JSON := syntheticTileJSONWithRef(t, 300, "Sunbury Road", "PA 901", curvedCoords)
+
+	// Combine all three ways into one tile payload.
+	var p1, p2, p3 map[string]any
+	json.Unmarshal(way1JSON, &p1)
+	json.Unmarshal(way2JSON, &p2)
+	json.Unmarshal(way3JSON, &p3)
+	combined := map[string]any{
+		"elements": append(append(p1["elements"].([]any), p2["elements"].([]any)...), p3["elements"].([]any)...),
+	}
+	combinedJSON, err := json.Marshal(combined)
+	if err != nil {
+		t.Fatalf("marshal combined: %v", err)
+	}
+
+	cacheDir := t.TempDir()
+	tileCache := &quality.TileCache{Dir: cacheDir, Precision: 3}
+	_ = tileCache.EnsureDir()
+	// Write to first tile only — enough to test grouping.
+	if err := tileCache.Write(tiles[0], combinedJSON); err != nil {
+		t.Fatalf("TileCache.Write: %v", err)
+	}
+
+	scoreCacheDir := t.TempDir()
+	scoreCache := &quality.ScoreCache{Dir: scoreCacheDir, Precision: 3}
+	_ = scoreCache.EnsureDir()
+
+	grouped, _, err := processTilesConcurrently(
+		context.Background(),
+		tiles[:1], // only the tile we wrote
+		tileCache,
+		scoreCache,
+		true, // noCache
+		noopLogger(),
+		quality.NoopProgressReporter{},
+	)
+	if err != nil {
+		t.Fatalf("processTilesConcurrently: %v", err)
+	}
+
+	// "PA 345" should have way 100.
+	if g, ok := grouped["PA 345"]; !ok {
+		t.Error("expected 'PA 345' group")
+	} else if len(g) != 1 || g[0].WayID != 100 {
+		t.Errorf("PA 345: got %d ways, want 1 (way 100)", len(g))
+	}
+
+	// "PA 901" should have BOTH way 200 (from "US 209;PA 901") and way 300.
+	pa901, ok := grouped["PA 901"]
+	if !ok {
+		t.Fatal("expected 'PA 901' group")
+	}
+	if len(pa901) != 2 {
+		t.Errorf("PA 901: got %d ways, want 2", len(pa901))
+	} else {
+		ids := map[int64]bool{}
+		for _, w := range pa901 {
+			ids[w.WayID] = true
+		}
+		if !ids[200] {
+			t.Error("PA 901: missing way 200 (ref='US 209;PA 901')")
+		}
+		if !ids[300] {
+			t.Error("PA 901: missing way 300 (ref='PA 901')")
+		}
+	}
+
+	// "US 209" should have way 200.
+	us209, ok := grouped["US 209"]
+	if !ok {
+		t.Fatal("expected 'US 209' group")
+	}
+	if len(us209) != 1 || us209[0].WayID != 200 {
+		t.Errorf("US 209: got %d ways, want 1 (way 200)", len(us209))
+	}
+
+	// The literal "US 209;PA 901" key should NOT exist.
+	if g, ok := grouped["US 209;PA 901"]; ok {
+		t.Errorf("'US 209;PA 901' should not exist as a literal key, got %d ways", len(g))
+	}
+
+	// Name groups should still work.
+	if _, ok := grouped["Main Street"]; !ok {
+		t.Error("expected 'Main Street' name group")
+	}
+	if _, ok := grouped["Market Street"]; !ok {
+		t.Error("expected 'Market Street' name group")
+	}
+	if _, ok := grouped["Sunbury Road"]; !ok {
+		t.Error("expected 'Sunbury Road' name group")
+	}
+}
+
 // noopLogger returns a logger that discards all output.
 func noopLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))

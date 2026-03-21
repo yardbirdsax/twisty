@@ -295,13 +295,17 @@ func TestWriteKML_MinLengthFilter(t *testing.T) {
 		t.Fatalf("invalid XML: %v", err)
 	}
 
-	// Only collections >= MinRoadLengthM (4,828 m) should appear.
-	if len(kml.Doc.Folders) != 2 {
-		t.Fatalf("expected 2 folders (collections >= MinRoadLengthM), got %d", len(kml.Doc.Folders))
+	// Only collections >= MinRoadLengthM (1,609 m = 1 mile) should appear.
+	// "Short 1km" (1000m) is below the threshold; the other three are above.
+	if len(kml.Doc.Folders) != 3 {
+		t.Fatalf("expected 3 folders (collections >= MinRoadLengthM), got %d", len(kml.Doc.Folders))
 	}
 	names := make(map[string]bool)
 	for _, f := range kml.Doc.Folders {
 		names[f.Name] = true
+	}
+	if !names["Short 3km"] {
+		t.Error("expected 'Short 3km' in output (3000m >= 1609m)")
 	}
 	if !names["Above 5km"] {
 		t.Error("expected 'Above 5km' in output")
@@ -311,9 +315,6 @@ func TestWriteKML_MinLengthFilter(t *testing.T) {
 	}
 	if names["Short 1km"] {
 		t.Error("'Short 1km' should be excluded (length < MinRoadLengthM)")
-	}
-	if names["Short 3km"] {
-		t.Error("'Short 3km' should be excluded (length < MinRoadLengthM)")
 	}
 }
 
