@@ -170,71 +170,170 @@ func FindConnectedComponents(ways ScoredWays, proximityM float64) []ScoredWays {
 	return components
 }
 
-// OrderWays arranges ways in a connected component into a continuous path
-// by chaining endpoints.
-func OrderWays(ways ScoredWays) ScoredWays {
-	if len(ways) == 0 {
-		return nil
+// isOneway returns true if the way has a "oneway" tag set to "yes".
+func isOneway(w ScoredWay) bool {
+	return w.Tags["oneway"] == "yes"
+}
+
+// wayEnd identifies a way's presence at a coordinate.
+type wayEnd struct {
+	index   int  // index into the ways slice
+	isStart bool // true if this is the way's start endpoint
+}
+
+// buildAdjacency builds a map from each endpoint coordinate to the ways that touch it.
+func buildAdjacency(ways ScoredWays) map[geo.Coord][]wayEnd {
+	adj := make(map[geo.Coord][]wayEnd)
+	for i, w := range ways {
+		start, end, ok := wayEndpoints(w)
+		if !ok {
+			continue
+		}
+		adj[start] = append(adj[start], wayEnd{index: i, isStart: true})
+		adj[end] = append(adj[end], wayEnd{index: i, isStart: false})
 	}
-	if len(ways) == 1 {
+	return adj
+}
+
+// findStartIndex picks a way at a degree-1 node (route terminus) to begin traversal.
+// Returns the way index and whether to start from its end (true) or start (false).
+// Falls back to index 0, starting from start, if no degree-1 node is found.
+//
+// When a degree-1 node is at a way's start, we can begin traversal forward
+// (startFromEnd=false). When it's at a way's end, we need to reverse the way
+// to start from there — but only if the way is not oneway. Oneway degree-1
+// ends are the route terminus (where we finish), not where we start, so they
+// are skipped when looking for a start point.
+func findStartIndex(ways ScoredWays, adj map[geo.Coord][]wayEnd) (index int, startFromEnd bool) {
+	// First pass: prefer degree-1 nodes at a way's start (natural forward traversal)
+	// or at the end of a non-oneway way (can be reversed to become a start).
+	for _, ends := range adj {
+		if len(ends) != 1 {
+			continue
+		}
+		we := ends[0]
+		w := ways[we.index]
+		if we.isStart {
+			// Degree-1 node is the way's start: begin traversal naturally.
+			return we.index, false
+		}
+		// Degree-1 node is the way's end.
+		if !isOneway(w) {
+			// Can reverse to start from this terminus.
+			return we.index, true
+		}
+		// Oneway end — this is the route terminus, not a valid start. Skip.
+	}
+	return 0, false
+}
+
+// wayExitBearing returns the bearing of the last segment of a way.
+// Returns 0 if the way has no segments or only zero-length segments.
+func wayExitBearing(w ScoredWay) float64 {
+	if len(w.Segments) == 0 {
+		return 0
+	}
+	last := w.Segments[len(w.Segments)-1]
+	return geo.Bearing(last.Start, last.End)
+}
+
+// wayEntryBearing returns the bearing of the first segment of a way.
+// Returns 0 if the way has no segments.
+func wayEntryBearing(w ScoredWay) float64 {
+	if len(w.Segments) == 0 {
+		return 0
+	}
+	first := w.Segments[0]
+	return geo.Bearing(first.Start, first.End)
+}
+
+// OrderWays arranges ways in a connected component into a continuous path
+// using a directed-graph endpoint matching approach that respects oneway
+// tags and uses bearing disambiguation to avoid U-turns.
+func OrderWays(ways ScoredWays) ScoredWays {
+	if len(ways) <= 1 {
+		if len(ways) == 0 {
+			return nil
+		}
 		return ways
 	}
 
-	remaining := make(ScoredWays, len(ways))
-	copy(remaining, ways)
+	adj := buildAdjacency(ways)
+	startIdx, startFromEnd := findStartIndex(ways, adj)
 
-	// Start with the first way.
+	visited := make([]bool, len(ways))
 	ordered := make(ScoredWays, 0, len(ways))
-	ordered = append(ordered, remaining[0])
-	remaining = remaining[1:]
 
-	for len(remaining) > 0 {
-		// Current chain end.
+	// Prepare the first way
+	first := ways[startIdx]
+	if startFromEnd && !isOneway(first) {
+		first = reverseWay(first)
+	}
+	ordered = append(ordered, first)
+	visited[startIdx] = true
+
+	// Traverse the graph
+	for len(ordered) < len(ways) {
 		cur := ordered[len(ordered)-1]
 		_, chainEnd, ok := wayEndpoints(cur)
 		if !ok {
-			// Can't extend from a zero-segment way; just append remaining in order.
-			ordered = append(ordered, remaining...)
 			break
 		}
 
+		// Look up candidates at the chain end coordinate
+		candidates := adj[chainEnd]
 		bestIdx := -1
-		bestDist := -1.0
 		bestReverse := false
+		bestAngle := 360.0
 
-		for i, w := range remaining {
-			s, e, wok := wayEndpoints(w)
-			if !wok {
+		// Compute incoming bearing (bearing of current way's last segment)
+		incomingBearing := wayExitBearing(cur)
+
+		for _, cand := range candidates {
+			if visited[cand.index] {
 				continue
 			}
-			distStart := geo.Haversine(chainEnd, s)
-			distEnd := geo.Haversine(chainEnd, e)
-			d := distStart
-			rev := false
-			if distEnd < distStart {
-				d = distEnd
-				rev = true
+			w := ways[cand.index]
+
+			// Determine if we need to reverse and if it's allowed
+			needsReverse := !cand.isStart // if chainEnd matches way's end, we need to reverse
+			if needsReverse && isOneway(w) {
+				continue // can't reverse a oneway
 			}
-			if bestIdx == -1 || d < bestDist {
-				bestIdx = i
-				bestDist = d
-				bestReverse = rev
+
+			// Compute the bearing of this candidate
+			candidate := w
+			if needsReverse {
+				candidate = reverseWay(candidate)
+			}
+			candBearing := wayEntryBearing(candidate)
+
+			angleDiff := geo.AngleDiff(incomingBearing, candBearing)
+			if bestIdx == -1 || angleDiff < bestAngle {
+				bestIdx = cand.index
+				bestReverse = needsReverse
+				bestAngle = angleDiff
 			}
 		}
 
 		if bestIdx == -1 {
-			// No valid way found (all remaining have zero segments); append rest.
-			ordered = append(ordered, remaining...)
+			// No connected unvisited way found — break and append remaining
 			break
 		}
 
-		next := remaining[bestIdx]
-		remaining = append(remaining[:bestIdx], remaining[bestIdx+1:]...)
-
+		next := ways[bestIdx]
 		if bestReverse {
 			next = reverseWay(next)
 		}
 		ordered = append(ordered, next)
+		visited[bestIdx] = true
+	}
+
+	// Append any unvisited ways (disconnected subgraph fallback)
+	for i, w := range ways {
+		if !visited[i] {
+			ordered = append(ordered, w)
+		}
 	}
 
 	return ordered

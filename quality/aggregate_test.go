@@ -952,3 +952,311 @@ func TestAggregate_UnnamedWaysExcluded(t *testing.T) {
 		t.Errorf("expected 0 collections for unnamed ways, got %d", len(collections))
 	}
 }
+
+// TestOrderWays_ExactCoordMatch verifies that three ways with exact coordinate
+// matches at endpoints are chained correctly when given in shuffled order.
+func TestOrderWays_ExactCoordMatch(t *testing.T) {
+	p1 := geo.Coord{Lat: 44.000, Lon: -72.0}
+	p2 := geo.Coord{Lat: 44.001, Lon: -72.0}
+	p3 := geo.Coord{Lat: 44.002, Lon: -72.0}
+	p4 := geo.Coord{Lat: 44.003, Lon: -72.0}
+
+	w1 := makeWay(1, p1, p2)
+	w2 := makeWay(2, p2, p3)
+	w3 := makeWay(3, p3, p4)
+
+	// Shuffled input
+	ordered := OrderWays(ScoredWays{w2, w3, w1})
+
+	if len(ordered) != 3 {
+		t.Fatalf("expected 3 ways, got %d", len(ordered))
+	}
+
+	// Verify chain via exact geo.Coord equality (end[i] == start[i+1])
+	for i := 0; i < len(ordered)-1; i++ {
+		_, end, _ := wayEndpoints(ordered[i])
+		start, _, _ := wayEndpoints(ordered[i+1])
+		if end != start {
+			t.Errorf("way[%d].end %v != way[%d].start %v", i, end, i+1, start)
+		}
+	}
+}
+
+// TestOrderWays_OnewayRespected_NoReverse verifies that oneway=yes ways are
+// not reversed even when given in reverse order.
+func TestOrderWays_OnewayRespected_NoReverse(t *testing.T) {
+	p1 := geo.Coord{Lat: 44.000, Lon: -72.0}
+	p2 := geo.Coord{Lat: 44.001, Lon: -72.0}
+	p3 := geo.Coord{Lat: 44.002, Lon: -72.0}
+
+	onewayTags := map[string]string{"oneway": "yes"}
+
+	// Way A: p1 -> p2 (oneway)
+	wayA := makeScoredWay(1, onewayTags, []ScoredSegment{{Start: p1, End: p2}})
+	// Way B: p2 -> p3 (oneway)
+	wayB := makeScoredWay(2, onewayTags, []ScoredSegment{{Start: p2, End: p3}})
+
+	// Input in reverse order: [B, A]
+	ordered := OrderWays(ScoredWays{wayB, wayA})
+
+	if len(ordered) != 2 {
+		t.Fatalf("expected 2 ways, got %d", len(ordered))
+	}
+
+	// The output should be [A, B] — A's end == B's start
+	if ordered[0].WayID != 1 {
+		t.Errorf("expected ordered[0].WayID=1 (way A), got %d", ordered[0].WayID)
+	}
+	if ordered[1].WayID != 2 {
+		t.Errorf("expected ordered[1].WayID=2 (way B), got %d", ordered[1].WayID)
+	}
+
+	// A's segments must NOT be reversed: start should be p1
+	startA, _, _ := wayEndpoints(ordered[0])
+	if startA != p1 {
+		t.Errorf("way A start = %v, want %v (must not be reversed)", startA, p1)
+	}
+}
+
+// TestOrderWays_DualCarriageway_NoUTurn tests that the algorithm follows the
+// northbound path (1->2->4) through a divided highway and does not U-turn by
+// chaining the southbound carriageway (way 3) between ways 2 and 4.
+func TestOrderWays_DualCarriageway_NoUTurn(t *testing.T) {
+	// Approach from south (bidirectional)
+	pS := geo.Coord{Lat: 40.000, Lon: -75.0}
+	pDiv := geo.Coord{Lat: 40.001, Lon: -75.0} // diverge point
+	pN := geo.Coord{Lat: 40.002, Lon: -75.0}   // merge point north
+	pEnd := geo.Coord{Lat: 40.003, Lon: -75.0} // continuation north
+
+	onewayTags := map[string]string{"oneway": "yes"}
+
+	// Way 1: approach (bidirectional): pS -> pDiv
+	way1 := makeScoredWay(1, nil, []ScoredSegment{{Start: pS, End: pDiv}})
+	// Way 2: NB carriageway (oneway): pDiv -> pN
+	way2 := makeScoredWay(2, onewayTags, []ScoredSegment{{Start: pDiv, End: pN}})
+	// Way 3: SB carriageway (oneway): pN -> pDiv (reversed geographic direction)
+	way3 := makeScoredWay(3, onewayTags, []ScoredSegment{{Start: pN, End: pDiv}})
+	// Way 4: continuation north (bidirectional): pN -> pEnd
+	way4 := makeScoredWay(4, nil, []ScoredSegment{{Start: pN, End: pEnd}})
+
+	// Shuffled input
+	ordered := OrderWays(ScoredWays{way3, way1, way4, way2})
+
+	if len(ordered) != 4 {
+		t.Fatalf("expected 4 ways in output, got %d", len(ordered))
+	}
+
+	// All 4 way IDs must be present
+	ids := make(map[int64]bool)
+	for _, w := range ordered {
+		ids[w.WayID] = true
+	}
+	for _, id := range []int64{1, 2, 3, 4} {
+		if !ids[id] {
+			t.Errorf("way %d missing from output", id)
+		}
+	}
+
+	// Find the positions of ways 1, 2, 4 in the output
+	pos := make(map[int64]int)
+	for i, w := range ordered {
+		pos[w.WayID] = i
+	}
+
+	// Ways 1, 2, 4 must be consecutive in that order (northbound path)
+	if pos[1] >= pos[2] {
+		t.Errorf("way 1 (pos %d) must come before way 2 (pos %d)", pos[1], pos[2])
+	}
+	if pos[2] >= pos[4] {
+		t.Errorf("way 2 (pos %d) must come before way 4 (pos %d)", pos[2], pos[4])
+	}
+	if pos[4]-pos[2] != 1 {
+		t.Errorf("way 4 must immediately follow way 2: pos[2]=%d pos[4]=%d", pos[2], pos[4])
+	}
+
+	// No adjacent pair within the connected northbound chain (1->2->4) should
+	// have a bearing reversal > 150 degrees. Way 3 may be appended as a
+	// disconnected fallback so we only check the three connected ways.
+	nbChainIDs := []int64{1, 2, 4}
+	for i := 0; i < len(nbChainIDs)-1; i++ {
+		fromID := nbChainIDs[i]
+		toID := nbChainIDs[i+1]
+		var fromWay, toWay ScoredWay
+		for _, w := range ordered {
+			if w.WayID == fromID {
+				fromWay = w
+			}
+			if w.WayID == toID {
+				toWay = w
+			}
+		}
+		exitB := wayExitBearing(fromWay)
+		entryB := wayEntryBearing(toWay)
+		diff := geo.AngleDiff(exitB, entryB)
+		if diff > 150 {
+			t.Errorf("bearing reversal of %.1f° between way %d and way %d (want <= 150°)",
+				diff, fromID, toID)
+		}
+	}
+}
+
+// TestOrderWays_SameTypeEndpoints_Reversal tests that when two non-oneway ways
+// share a first-first endpoint, one gets reversed to form a continuous chain.
+func TestOrderWays_SameTypeEndpoints_Reversal(t *testing.T) {
+	pCommon := geo.Coord{Lat: 44.000, Lon: -72.0}
+	pNorth := geo.Coord{Lat: 44.001, Lon: -72.0}
+	pSouth := geo.Coord{Lat: 43.999, Lon: -72.0}
+
+	// Way A: pCommon -> pNorth (heading north)
+	wayA := makeWay(1, pCommon, pNorth)
+	// Way B: pCommon -> pSouth (heading south, starts at same point as A)
+	wayB := makeWay(2, pCommon, pSouth)
+
+	// Input: [A, B]
+	ordered := OrderWays(ScoredWays{wayA, wayB})
+
+	if len(ordered) != 2 {
+		t.Fatalf("expected 2 ways, got %d", len(ordered))
+	}
+
+	// The output must form a continuous chain: end[0] == start[1]
+	_, end0, _ := wayEndpoints(ordered[0])
+	start1, _, _ := wayEndpoints(ordered[1])
+	if end0 != start1 {
+		t.Errorf("chain broken: ordered[0].end %v != ordered[1].start %v", end0, start1)
+	}
+}
+
+// TestOrderWays_DegreeOneStart verifies that the algorithm starts from a
+// degree-1 node (route terminus) when one exists.
+func TestOrderWays_DegreeOneStart(t *testing.T) {
+	// Five ways forming a linear chain: 1->2, 2->3, 3->4, 4->5, 5->6
+	c1 := geo.Coord{Lat: 44.000, Lon: -72.0}
+	c2 := geo.Coord{Lat: 44.001, Lon: -72.0}
+	c3 := geo.Coord{Lat: 44.002, Lon: -72.0}
+	c4 := geo.Coord{Lat: 44.003, Lon: -72.0}
+	c5 := geo.Coord{Lat: 44.004, Lon: -72.0}
+	c6 := geo.Coord{Lat: 44.005, Lon: -72.0}
+
+	w1 := makeWay(1, c1, c2)
+	w2 := makeWay(2, c2, c3)
+	w3 := makeWay(3, c3, c4)
+	w4 := makeWay(4, c4, c5)
+	w5 := makeWay(5, c5, c6)
+
+	// Shuffled input: [way3, way5, way1, way4, way2]
+	ordered := OrderWays(ScoredWays{w3, w5, w1, w4, w2})
+
+	if len(ordered) != 5 {
+		t.Fatalf("expected 5 ways, got %d", len(ordered))
+	}
+
+	// The first way's start or the last way's end must be a terminus (c1 or c6)
+	firstStart, _, _ := wayEndpoints(ordered[0])
+	_, lastEnd, _ := wayEndpoints(ordered[len(ordered)-1])
+
+	isTerminus := firstStart == c1 || firstStart == c6 || lastEnd == c1 || lastEnd == c6
+	if !isTerminus {
+		t.Errorf("output does not start or end at a terminus: firstStart=%v lastEnd=%v", firstStart, lastEnd)
+	}
+
+	// Verify the chain is fully connected
+	for i := 0; i < len(ordered)-1; i++ {
+		_, end, _ := wayEndpoints(ordered[i])
+		start, _, _ := wayEndpoints(ordered[i+1])
+		if end != start {
+			t.Errorf("chain broken between way[%d] and way[%d]: end=%v start=%v", i, i+1, end, start)
+		}
+	}
+}
+
+// TestOrderWays_BearingDisambiguation verifies that at a junction with one
+// way continuing north and one heading south, the algorithm picks the
+// northward continuation rather than the U-turn.
+func TestOrderWays_BearingDisambiguation(t *testing.T) {
+	pA := geo.Coord{Lat: 44.000, Lon: -72.0}
+	pJunction := geo.Coord{Lat: 44.001, Lon: -72.0}
+	pB := geo.Coord{Lat: 44.002, Lon: -72.0}
+	pC := geo.Coord{Lat: 44.0005, Lon: -72.0} // between pA and pJunction
+
+	// Way A: pA -> pJunction (heading north to junction)
+	wayA := makeWay(1, pA, pJunction)
+	// Way B: pJunction -> pB (continuing north from junction)
+	wayB := makeWay(2, pJunction, pB)
+	// Way C: pJunction -> pC (heading south from junction — a U-turn from A)
+	wayC := makeWay(3, pJunction, pC)
+
+	// Input shuffled: [A, C, B]
+	ordered := OrderWays(ScoredWays{wayA, wayC, wayB})
+
+	if len(ordered) != 3 {
+		t.Fatalf("expected 3 ways, got %d", len(ordered))
+	}
+
+	// Way A and Way B must be adjacent in the output: when the algorithm
+	// traverses through the junction (pJunction) from A's direction, it should
+	// pick B (continuing north) over C (U-turn south). The start way depends
+	// on which degree-1 node findStartIndex picks (map iteration order), so we
+	// check adjacency rather than absolute position.
+	aIdx := -1
+	for i, w := range ordered {
+		if w.WayID == 1 {
+			aIdx = i
+			break
+		}
+	}
+	if aIdx == -1 {
+		t.Fatal("way A (WayID=1) not found in output")
+	}
+
+	// Check that B is adjacent to A (either A→B or B→A depending on traversal direction)
+	foundAdjacentB := false
+	if aIdx+1 < len(ordered) && ordered[aIdx+1].WayID == 2 {
+		foundAdjacentB = true
+	}
+	if aIdx-1 >= 0 && ordered[aIdx-1].WayID == 2 {
+		foundAdjacentB = true
+	}
+	if !foundAdjacentB {
+		ids := make([]int64, len(ordered))
+		for i, w := range ordered {
+			ids[i] = w.WayID
+		}
+		t.Errorf("way B (WayID=2) should be adjacent to way A (WayID=1) but ordering is %v", ids)
+	}
+}
+
+// TestOrderWays_DisconnectedSubgraph verifies that a disconnected way is
+// appended at the end and all ways are present in the output.
+func TestOrderWays_DisconnectedSubgraph(t *testing.T) {
+	// Three connected ways
+	p1 := geo.Coord{Lat: 44.000, Lon: -72.0}
+	p2 := geo.Coord{Lat: 44.001, Lon: -72.0}
+	p3 := geo.Coord{Lat: 44.002, Lon: -72.0}
+	p4 := geo.Coord{Lat: 44.003, Lon: -72.0}
+
+	wayA := makeWay(1, p1, p2)
+	wayB := makeWay(2, p2, p3)
+	wayC := makeWay(3, p3, p4)
+
+	// Way D is far away, disconnected
+	wayD := makeWay(4, geo.Coord{Lat: 36.0, Lon: -80.0}, geo.Coord{Lat: 36.001, Lon: -80.0})
+
+	// Input shuffled: [B, D, A, C]
+	ordered := OrderWays(ScoredWays{wayB, wayD, wayA, wayC})
+
+	if len(ordered) != 4 {
+		t.Fatalf("expected 4 ways in output, got %d", len(ordered))
+	}
+
+	// All way IDs must be present
+	ids := make(map[int64]bool)
+	for _, w := range ordered {
+		ids[w.WayID] = true
+	}
+	for _, id := range []int64{1, 2, 3, 4} {
+		if !ids[id] {
+			t.Errorf("way %d missing from output", id)
+		}
+	}
+}
