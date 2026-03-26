@@ -33,3 +33,6 @@ go.work.sum
 
 twisty
 *.kml
+
+# Local Overpass API data
+.overpass/

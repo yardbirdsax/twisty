@@ -10,3 +10,23 @@ test-integration:
 
 lint:
 	go vet ./...
+
+# --- Local Overpass API ---
+OVERPASS_ARGS ?=
+
+.PHONY: overpass-start overpass-stop overpass-status overpass-clean overpass-logs
+
+overpass-start:
+	go run . overpass start $(OVERPASS_ARGS)
+
+overpass-stop:
+	go run . overpass stop
+
+overpass-status:
+	go run . overpass status
+
+overpass-clean:
+	go run . overpass clean
+
+overpass-logs:
+	go run . overpass logs
