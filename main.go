@@ -26,7 +26,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: twisty <route|fetch|score|random> [flags]")
+		fmt.Fprintln(os.Stderr, "Usage: twisty <route|fetch|score|random|overpass> [flags]")
 		os.Exit(1)
 	}
 	switch os.Args[1] {
@@ -41,6 +41,8 @@ func main() {
 		}
 	case "random":
 		runRandom(os.Args[2:])
+	case "overpass":
+		runOverpass(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", os.Args[1])
 		os.Exit(1)
