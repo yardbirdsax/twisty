@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -17,9 +18,11 @@ import (
 )
 
 const (
-	overpassContainerName = "twisty-overpass"
-	overpassImage = "wiktorn/overpass-api"
-	geofabrikBaseURL      = "https://download.geofabrik.de"
+	overpassContainerName  = "twisty-overpass"
+	overpassImage          = "wiktorn/overpass-api"
+	overpassRepoURL        = "https://github.com/wiktorn/Overpass-API.git"
+	overpassVersion        = "0.7.62.4"
+	geofabrikBaseURL       = "https://download.geofabrik.de"
 	defaultOverpassDataDir = ".overpass"
 	defaultOverpassPort    = 8080
 )
@@ -40,6 +43,8 @@ func runOverpass(args []string) {
 		runOverpassClean(args[1:])
 	case "logs":
 		runOverpassLogs(args[1:])
+	case "build":
+		runOverpassBuild(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown overpass subcommand %q\n", args[0])
 		os.Exit(1)
@@ -170,6 +175,11 @@ func runOverpassStart(args []string) {
 	if isContainerRunning(overpassContainerName) {
 		fmt.Fprintf(os.Stderr, "Overpass API already running: http://localhost:%d/api/interpreter\n", *port)
 		return
+	}
+
+	// Ensure the Overpass image is built for the current architecture.
+	if err := ensureOverpassImage(*dataDir); err != nil {
+		log.Fatalf("ensuring overpass image: %v", err)
 	}
 
 	// Remove any pre-existing stopped container.
@@ -323,6 +333,103 @@ func runOverpassLogs(_ []string) {
 	if err := syscall.Exec(dockerPath, argv, os.Environ()); err != nil {
 		log.Fatalf("exec docker logs: %v", err)
 	}
+}
+
+func runOverpassBuild(args []string) {
+	fs := flag.NewFlagSet("overpass build", flag.ExitOnError)
+	dataDir := fs.String("data-dir", defaultOverpassDataDir, "Directory for Overpass data files")
+	fs.Parse(args)
+
+	if err := buildOverpassImage(*dataDir); err != nil {
+		log.Fatalf("building overpass image: %v", err)
+	}
+	fmt.Fprintln(os.Stderr, "Overpass image built successfully.")
+}
+
+// ensureOverpassImage checks if the Overpass image exists for the current
+// architecture and builds it if not.
+func ensureOverpassImage(dataDir string) error {
+	arch, err := imageArch(overpassImage)
+	if err == nil && arch == runtime.GOARCH {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "Overpass image not found for %s; building from source...\n", runtime.GOARCH)
+	return buildOverpassImage(dataDir)
+}
+
+// imageArch returns the architecture of a local Docker image.
+func imageArch(image string) (string, error) {
+	out, err := dockerCmd("image", "inspect", image, "--format", "{{.Architecture}}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// buildOverpassImage clones the Overpass-API repo, generates a Dockerfile from
+// the template with the pinned version, and builds the Docker image.
+func buildOverpassImage(dataDir string) error {
+	srcDir := filepath.Join(dataDir, "overpass-src")
+
+	// Clone or update the repo.
+	if _, err := os.Stat(filepath.Join(srcDir, ".git")); os.IsNotExist(err) {
+		fmt.Fprintln(os.Stderr, "Cloning Overpass-API repository...")
+		if err := os.MkdirAll(filepath.Dir(srcDir), 0o755); err != nil {
+			return fmt.Errorf("creating source dir: %w", err)
+		}
+		if err := dockerCmdStreaming("git", "clone", "--depth=1", overpassRepoURL, srcDir); err != nil {
+			return fmt.Errorf("cloning repo: %w", err)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "Updating Overpass-API repository...")
+		if err := dockerCmdStreaming("git", "-C", srcDir, "pull", "--ff-only"); err != nil {
+			return fmt.Errorf("updating repo: %w", err)
+		}
+	}
+
+	// Generate Dockerfile from template by substituting the version.
+	templatePath := filepath.Join(srcDir, "Dockerfile.template")
+	tmpl, err := os.ReadFile(templatePath)
+	if err != nil {
+		return fmt.Errorf("reading Dockerfile template: %w", err)
+	}
+	dockerfile := strings.ReplaceAll(string(tmpl), "{version}", overpassVersion)
+	// The template uses Python str.format() syntax where {{ and }} are literal braces.
+	dockerfile = strings.ReplaceAll(dockerfile, "{{", "{")
+	dockerfile = strings.ReplaceAll(dockerfile, "}}", "}")
+	dockerfilePath := filepath.Join(srcDir, "Dockerfile")
+	if err := os.WriteFile(dockerfilePath, []byte(dockerfile), 0o644); err != nil {
+		return fmt.Errorf("writing Dockerfile: %w", err)
+	}
+
+	// Patch requirements.txt: upstream pins osmium~=3.7.0 which has no ARM64 wheel.
+	reqPath := filepath.Join(srcDir, "requirements.txt")
+	reqData, err := os.ReadFile(reqPath)
+	if err != nil {
+		return fmt.Errorf("reading requirements.txt: %w", err)
+	}
+	patched := strings.ReplaceAll(string(reqData), "osmium~=3.7.0", "osmium>=3.7.0")
+	if err := os.WriteFile(reqPath, []byte(patched), 0o644); err != nil {
+		return fmt.Errorf("writing requirements.txt: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Building Overpass image (v%s)...\n", overpassVersion)
+	buildArgs := overpassImageBuildArgs(srcDir)
+	if err := dockerCmdStreaming("docker", buildArgs...); err != nil {
+		return fmt.Errorf("docker build: %w", err)
+	}
+	return nil
+}
+
+// overpassImageBuildArgs returns the docker build arguments for building the
+// Overpass image. Extracted for testability.
+func overpassImageBuildArgs(buildContext string) []string {
+	args := []string{"build"}
+	if runtime.GOARCH == "arm64" {
+		args = append(args, "--platform", "linux/arm64")
+	}
+	args = append(args, "-t", overpassImage, buildContext)
+	return args
 }
 
 // downloadPBF downloads the file at url to destPath atomically via a temp file,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -21,6 +22,28 @@ func TestDockerCmdStreaming_Failure(t *testing.T) {
 	err := dockerCmdStreaming("false")
 	if err == nil {
 		t.Fatal("dockerCmdStreaming should return error for failing command")
+	}
+}
+
+func TestOverpassImageBuildArgs(t *testing.T) {
+	args := overpassImageBuildArgs("/tmp/overpass-src")
+
+	// Must include -t to tag the image.
+	if !slices.Contains(args, overpassImage) {
+		t.Errorf("args missing image tag %q\ngot: %v", overpassImage, args)
+	}
+
+	// Must include the build context directory.
+	lastArg := args[len(args)-1]
+	if lastArg != "/tmp/overpass-src" {
+		t.Errorf("expected build context %q as last arg, got %q", "/tmp/overpass-src", lastArg)
+	}
+
+	// On ARM64, must include --platform linux/arm64.
+	if runtime.GOARCH == "arm64" {
+		if !slices.Contains(args, "linux/arm64") {
+			t.Errorf("on arm64 host, args should include platform linux/arm64\ngot: %v", args)
+		}
 	}
 }
 
