@@ -36,3 +36,6 @@ twisty
 
 # Local Overpass API data
 .overpass/
+
+# Benchmark data
+.benchmark-data/
