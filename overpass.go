@@ -15,6 +15,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/dsnet/compress/bzip2"
+	"github.com/yardbirdsax/twisty/osmconv"
 )
 
 const (
@@ -76,7 +79,6 @@ func runOverpassStart(args []string) {
 
 	pbfDir := filepath.Join(*dataDir, "pbf")
 	dbDir := filepath.Join(*dataDir, "db")
-	mergedPBF := filepath.Join(*dataDir, "merged.osm.pbf")
 	mergedBZ2 := filepath.Join(*dataDir, "merged.osm.bz2")
 	stampFile := filepath.Join(*dataDir, ".regions")
 
@@ -114,9 +116,6 @@ func runOverpassStart(args []string) {
 		if err := os.MkdirAll(dbDir, 0o755); err != nil {
 			log.Fatalf("recreating db dir: %v", err)
 		}
-		if err := os.Remove(mergedPBF); err != nil && !os.IsNotExist(err) {
-			log.Fatalf("removing merged PBF: %v", err)
-		}
 		if err := os.Remove(mergedBZ2); err != nil && !os.IsNotExist(err) {
 			log.Fatalf("removing merged BZ2: %v", err)
 		}
@@ -137,29 +136,15 @@ func runOverpassStart(args []string) {
 		}
 	}
 
-	// Merge (or copy) PBF files if merged output is missing.
-	if _, err := os.Stat(mergedPBF); os.IsNotExist(err) {
-		if len(allRegions) == 1 {
-			filename := strings.ReplaceAll(allRegions[0], "/", "_") + "-latest.osm.pbf"
-			srcPath := filepath.Join(pbfDir, filename)
-			fmt.Fprintf(os.Stderr, "Single region: copying %s -> %s\n", srcPath, mergedPBF)
-			if err := copyFile(srcPath, mergedPBF); err != nil {
-				log.Fatalf("copying PBF: %v", err)
-			}
-		} else {
-			fmt.Fprintf(os.Stderr, "Merging %d PBF files with osmium...\n", len(allRegions))
-			if err := mergeWithOsmium(pbfDir, mergedPBF, overpassImage); err != nil {
-				log.Fatalf("merging PBF files: %v", err)
-			}
-		}
-	} else {
-		fmt.Fprintf(os.Stderr, "Merged PBF already exists: %s\n", mergedPBF)
-	}
-
-	// Convert PBF to BZ2 for the Overpass container (expects bzip2-compressed OSM XML).
+	// Convert PBF files directly to BZ2 (merge + convert in one pass).
 	if _, err := os.Stat(mergedBZ2); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "Converting PBF to BZ2 with osmium...\n")
-		if err := convertPBFtoBZ2(mergedPBF, mergedBZ2, overpassImage); err != nil {
+		var pbfPaths []string
+		for _, region := range allRegions {
+			filename := strings.ReplaceAll(region, "/", "_") + "-latest.osm.pbf"
+			pbfPaths = append(pbfPaths, filepath.Join(pbfDir, filename))
+		}
+		fmt.Fprintf(os.Stderr, "Converting %d PBF file(s) to BZ2...\n", len(pbfPaths))
+		if err := convertPBFsToBZ2(pbfPaths, mergedBZ2, os.Stderr); err != nil {
 			log.Fatalf("converting PBF to BZ2: %v", err)
 		}
 	} else {
@@ -527,93 +512,56 @@ func isContainerRunning(name string) bool {
 	return strings.Contains(out, "true")
 }
 
-// mergeWithOsmium merges all *-latest.osm.pbf files in pbfDir into outputPath
-// using the osmium Docker image.
-func mergeWithOsmium(pbfDir, outputPath, osmiumImg string) error {
-	absPBFDir, err := filepath.Abs(pbfDir)
-	if err != nil {
-		return fmt.Errorf("resolving pbf dir: %w", err)
-	}
-	absOutputDir, err := filepath.Abs(filepath.Dir(outputPath))
-	if err != nil {
-		return fmt.Errorf("resolving output dir: %w", err)
-	}
-	outputFilename := filepath.Base(outputPath)
-
-	entries, err := os.ReadDir(absPBFDir)
-	if err != nil {
-		return fmt.Errorf("reading pbf dir: %w", err)
-	}
-
-	var inputFiles []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), "-latest.osm.pbf") {
-			inputFiles = append(inputFiles, "/pbf/"+e.Name())
+// convertPBFsToBZ2 reads one or more PBF files, merges them in sorted order,
+// and writes bzip2-compressed OSM XML.
+func convertPBFsToBZ2(pbfPaths []string, bz2Path string, progress io.Writer) error {
+	scanners := make([]osmconv.ObjectScanner, len(pbfPaths))
+	closers := make([]io.Closer, len(pbfPaths))
+	for i, p := range pbfPaths {
+		f, err := os.Open(p)
+		if err != nil {
+			// Close any already-opened files
+			for j := 0; j < i; j++ {
+				closers[j].Close()
+			}
+			return fmt.Errorf("opening %s: %w", p, err)
 		}
+		closers[i] = f
+		scanners[i] = osmconv.NewPBFScanner(f)
 	}
-	if len(inputFiles) == 0 {
-		return fmt.Errorf("no *-latest.osm.pbf files found in %s", absPBFDir)
+	defer func() {
+		for _, c := range closers {
+			if c != nil {
+				c.Close()
+			}
+		}
+	}()
+
+	outFile, err := os.Create(bz2Path)
+	if err != nil {
+		return fmt.Errorf("creating %s: %w", bz2Path, err)
+	}
+	defer outFile.Close()
+
+	bz2w, err := bzip2.NewWriter(outFile, nil)
+	if err != nil {
+		return fmt.Errorf("creating bzip2 writer: %w", err)
 	}
 
-	cmdArgs := []string{
-		"run", "--rm",
-		"-v", absPBFDir + ":/pbf",
-		"-v", absOutputDir + ":/out",
-		osmiumImg,
-		"osmium", "merge", "--progress",
-	}
-	cmdArgs = append(cmdArgs, inputFiles...)
-	cmdArgs = append(cmdArgs, "-o", "/out/"+outputFilename, "--overwrite")
+	xmlw := osmconv.NewXMLWriter(bz2w)
 
-	if err := dockerCmdStreaming("docker", cmdArgs...); err != nil {
-		return fmt.Errorf("osmium merge: %w", err)
+	if err := osmconv.Convert(osmconv.ConvertOptions{
+		Scanners: scanners,
+		Writer:   xmlw,
+		Progress: progress,
+	}); err != nil {
+		bz2w.Close()
+		return err
 	}
-	return nil
+
+	if err := bz2w.Close(); err != nil {
+		return fmt.Errorf("closing bzip2 writer: %w", err)
+	}
+	return outFile.Close()
 }
 
-// convertPBFtoBZ2 converts a PBF file to bzip2-compressed OSM XML using the
-// osmium Docker image.
-func convertPBFtoBZ2(pbfPath, bz2Path, osmiumImg string) error {
-	absPBF, err := filepath.Abs(pbfPath)
-	if err != nil {
-		return fmt.Errorf("resolving PBF path: %w", err)
-	}
-	absBZ2Dir, err := filepath.Abs(filepath.Dir(bz2Path))
-	if err != nil {
-		return fmt.Errorf("resolving BZ2 dir: %w", err)
-	}
-	bz2Filename := filepath.Base(bz2Path)
-
-	cmdArgs := []string{
-		"run", "--rm",
-		"-v", absPBF + ":/data/input.osm.pbf:ro",
-		"-v", absBZ2Dir + ":/out",
-		osmiumImg,
-		"osmium", "cat", "--progress", "/data/input.osm.pbf", "-o", "/out/" + bz2Filename, "--overwrite",
-	}
-
-	if err := dockerCmdStreaming("docker", cmdArgs...); err != nil {
-		return fmt.Errorf("osmium convert: %w", err)
-	}
-	return nil
-}
-
-// copyFile copies the file at src to dst using io.Copy.
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("opening source: %w", err)
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("creating destination: %w", err)
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return fmt.Errorf("copying data: %w", err)
-	}
-	return out.Close()
-}
