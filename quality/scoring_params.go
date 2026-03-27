@@ -132,8 +132,8 @@ var HighwayPenalty = map[string]float64{
 	"tertiary":       1.0,
 	"tertiary_link":  1.0,
 	"unclassified":   1.0,
-	"residential":    1.0,
-	"service":        1.0,
+	"residential":    0.5,
+	"service":        0.3,
 }
 
 // DefaultHighwayPenalty is used for highway types not in the HighwayPenalty map.

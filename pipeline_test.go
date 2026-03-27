@@ -619,6 +619,118 @@ func TestProcessTilesConcurrently_SemicolonRefSplit(t *testing.T) {
 	}
 }
 
+// TestScoreAndAggregateTiles_SameResultAsDirectCalls verifies that scoreAndAggregateTiles
+// produces the same RoadCollections and stats as calling the three phases directly.
+func TestScoreAndAggregateTiles_SameResultAsDirectCalls(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	const (
+		centerLat = 35.0
+		centerLon = -82.0
+		radius    = 0.5
+		tileSize  = 0.05
+	)
+
+	tiles := quality.ComputeTiles(centerLat, centerLon, radius, tileSize)
+	if len(tiles) == 0 {
+		t.Fatal("no tiles computed")
+	}
+
+	curvedCoords := []map[string]float64{
+		{"lat": centerLat, "lon": centerLon},
+		{"lat": centerLat + 0.0002, "lon": centerLon + 0.0001},
+		{"lat": centerLat + 0.0003, "lon": centerLon - 0.0001},
+		{"lat": centerLat + 0.0005, "lon": centerLon + 0.0001},
+	}
+	rawJSON := syntheticTileJSON(t, 99, "Helper Road", curvedCoords)
+
+	// Build a tile cache shared between the "direct" and "helper" runs.
+	// Each run gets its own score cache (to avoid cross-contamination).
+	setupTileCache := func(t *testing.T) *quality.TileCache {
+		t.Helper()
+		tc := &quality.TileCache{Dir: t.TempDir(), Precision: 3}
+		if err := tc.EnsureDir(); err != nil {
+			t.Fatalf("EnsureDir: %v", err)
+		}
+		for _, tile := range tiles {
+			if err := tc.Write(tile, rawJSON); err != nil {
+				t.Fatalf("TileCache.Write: %v", err)
+			}
+		}
+		return tc
+	}
+
+	setupScoreCache := func(t *testing.T) *quality.ScoreCache {
+		t.Helper()
+		sc := &quality.ScoreCache{Dir: t.TempDir(), Precision: 3}
+		if err := sc.EnsureDir(); err != nil {
+			t.Fatalf("score EnsureDir: %v", err)
+		}
+		return sc
+	}
+
+	ctx := context.Background()
+
+	// Direct path: processTilesConcurrently → processNameGroupsConcurrently → ApplyPenalties.
+	directTC := setupTileCache(t)
+	directSC := setupScoreCache(t)
+	grouped, directStats, err := processTilesConcurrently(ctx, tiles, directTC, directSC, true, noopLogger(), quality.NoopProgressReporter{})
+	if err != nil {
+		t.Fatalf("processTilesConcurrently: %v", err)
+	}
+	directCollections, err := processNameGroupsConcurrently(ctx, grouped)
+	if err != nil {
+		t.Fatalf("processNameGroupsConcurrently: %v", err)
+	}
+	quality.ApplyPenalties(directCollections)
+
+	// Helper path: scoreAndAggregateTiles.
+	helperTC := setupTileCache(t)
+	helperSC := setupScoreCache(t)
+	helperCollections, helperStats, err := scoreAndAggregateTiles(ctx, tiles, helperTC, helperSC, true, noopLogger(), quality.NoopProgressReporter{})
+	if err != nil {
+		t.Fatalf("scoreAndAggregateTiles: %v", err)
+	}
+
+	// Stats should be equal.
+	if directStats.totalWays.Load() != helperStats.totalWays.Load() {
+		t.Errorf("totalWays: direct=%d helper=%d", directStats.totalWays.Load(), helperStats.totalWays.Load())
+	}
+	if directStats.totalSegs.Load() != helperStats.totalSegs.Load() {
+		t.Errorf("totalSegs: direct=%d helper=%d", directStats.totalSegs.Load(), helperStats.totalSegs.Load())
+	}
+
+	// Collections should be equal (after sorting for determinism).
+	sortCollections := func(cs []quality.RoadCollection) {
+		sort.Slice(cs, func(i, j int) bool {
+			if cs[i].Name != cs[j].Name {
+				return cs[i].Name < cs[j].Name
+			}
+			return cs[i].SubIndex < cs[j].SubIndex
+		})
+	}
+	sortCollections(directCollections)
+	sortCollections(helperCollections)
+
+	if len(directCollections) != len(helperCollections) {
+		t.Fatalf("collection count: direct=%d helper=%d", len(directCollections), len(helperCollections))
+	}
+	for i, d := range directCollections {
+		h := helperCollections[i]
+		if d.Name != h.Name {
+			t.Errorf("[%d] Name: direct=%q helper=%q", i, d.Name, h.Name)
+		}
+		if d.TotalScore != h.TotalScore {
+			t.Errorf("[%d] TotalScore: direct=%v helper=%v", i, d.TotalScore, h.TotalScore)
+		}
+		if d.PenalizedScore != h.PenalizedScore {
+			t.Errorf("[%d] PenalizedScore: direct=%v helper=%v", i, d.PenalizedScore, h.PenalizedScore)
+		}
+	}
+}
+
 // noopLogger returns a logger that discards all output.
 func noopLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))

@@ -46,7 +46,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error parsing -center: %v\n", parseErr)
 			os.Exit(1)
 		}
-		coverage := diag.TileCoverage(lat, lon, *radius, 0.05, cfg)
+		coverage := diag.TileCoverage(lat, lon, *radius, 0.1, cfg)
 		tiles = coverage.Present
 		fmt.Fprintf(os.Stderr, "Using %d tiles (%.0f km radius from %.4f, %.4f)\n",
 			len(tiles), *radius, lat, lon)

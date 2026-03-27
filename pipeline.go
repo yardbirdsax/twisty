@@ -326,6 +326,30 @@ func processNameGroupsConcurrently(ctx context.Context, groups map[string]qualit
 	return all, nil
 }
 
+// scoreAndAggregateTiles scores a set of pre-fetched tiles, aggregates by name group,
+// and applies penalties. It is the common Phase A+B pipeline used by both runScore
+// and runRandom.
+func scoreAndAggregateTiles(
+	ctx context.Context,
+	tiles []quality.Tile,
+	tileCache *quality.TileCache,
+	scoreCache *quality.ScoreCache,
+	noCache bool,
+	logger *slog.Logger,
+	progress quality.ProgressReporter,
+) ([]quality.RoadCollection, *pipelineStats, error) {
+	grouped, stats, err := processTilesConcurrently(ctx, tiles, tileCache, scoreCache, noCache, logger, progress)
+	if err != nil {
+		return nil, stats, err
+	}
+	collections, err := processNameGroupsConcurrently(ctx, grouped)
+	if err != nil {
+		return nil, stats, err
+	}
+	quality.ApplyPenalties(collections)
+	return collections, stats, nil
+}
+
 // processNameGroup runs the full per-name aggregation pipeline for a single road name.
 func processNameGroup(name string, namedWays []quality.ScoredWay) ([]quality.RoadCollection, error) {
 	// Deep-copy all input ways so that UnflattenWaySegments writes to freshly

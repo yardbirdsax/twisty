@@ -11,10 +11,10 @@ func TestAssignTier(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		radius         float64
-		wantTier       int
-		wantWeight     float64
+		name       string
+		radius     float64
+		wantTier   int
+		wantWeight float64
 	}{
 		{name: "tier4_below_threshold", radius: 29.9, wantTier: 4, wantWeight: quality.TierWeight4},
 		{name: "tier3_at_tier4_boundary", radius: 30.0, wantTier: 3, wantWeight: quality.TierWeight3},

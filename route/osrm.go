@@ -9,12 +9,22 @@ import (
 	"github.com/yardbirdsax/twisty/geo"
 )
 
+// Maneuver represents a single turn-by-turn instruction from the routing engine.
+type Maneuver struct {
+	Instruction string
+	StreetNames []string
+	TimeSec     float64
+	LengthKm    float64
+	Location    geo.Coord // derived from begin_shape_index into decoded points
+}
+
 // Route represents a driving route with decoded geometry and metadata.
 type Route struct {
-	Points   []geo.Coord
-	Duration float64        // seconds
-	Distance float64        // meters
-	Stats    CurvatureStats // filled in Task 006
+	Points    []geo.Coord
+	Duration  float64        // seconds
+	Distance  float64        // meters
+	Stats     CurvatureStats // filled in Task 006
+	Maneuvers []Maneuver
 }
 
 // osrmResponse is the top-level JSON shape returned by the OSRM API.
@@ -74,4 +84,3 @@ func parseOSRMResponse(resp *http.Response) ([]Route, error) {
 
 	return routes, nil
 }
-

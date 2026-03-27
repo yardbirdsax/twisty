@@ -518,9 +518,9 @@ func TestFetchTiledWaysPartialFailure(t *testing.T) {
 // spyProgressReporter records all calls made to it so tests can assert on
 // the exact sequence of SetTotal, Tick, and Done invocations.
 type spyProgressReporter struct {
-	mu       sync.Mutex
-	total    int
-	ticks    []bool // one entry per Tick call; value = cached argument
+	mu        sync.Mutex
+	total     int
+	ticks     []bool // one entry per Tick call; value = cached argument
 	doneCalls int
 }
 
@@ -1028,4 +1028,3 @@ func TestFetchTiledWaysRateLimit(t *testing.T) {
 		}
 	}
 }
-

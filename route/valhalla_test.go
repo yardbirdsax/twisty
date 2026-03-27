@@ -144,9 +144,8 @@ func TestFetchRoutesValhalla_Unit_Non200Status(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-200 HTTP status, got nil")
 	}
-	wantMsg := "unexpected HTTP status: 500"
-	if err.Error() != wantMsg {
-		t.Errorf("error = %q, want %q", err.Error(), wantMsg)
+	if !strings.Contains(err.Error(), "valhalla route") || !strings.Contains(err.Error(), "500") {
+		t.Errorf("error = %q, want it to mention 'valhalla route' and status 500", err.Error())
 	}
 }
 

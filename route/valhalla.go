@@ -61,8 +61,19 @@ type valhallaSummary struct {
 	Length float64 `json:"length"` // kilometers
 }
 
+type valhallaManeuver struct {
+	Instruction     string   `json:"instruction"`
+	StreetNames     []string `json:"street_names"`
+	Time            float64  `json:"time"`             // seconds
+	Length          float64  `json:"length"`            // km (matches Units in request)
+	BeginShapeIndex int      `json:"begin_shape_index"`
+	Type            int      `json:"type"`
+}
+
 type valhallaLeg struct {
-	Shape string `json:"shape"` // polyline6 encoded
+	Shape     string             `json:"shape"` // polyline6 encoded
+	Summary   valhallaSummary    `json:"summary"`
+	Maneuvers []valhallaManeuver `json:"maneuvers"`
 }
 
 // tripToRoute converts a valhallaTrip into a Route.
@@ -122,7 +133,8 @@ func fetchRoutesFromURL(baseURL string, origin, dest geo.Coord) ([]Route, error)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected HTTP status: %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("valhalla route: unexpected HTTP status %d: %s", resp.StatusCode, body)
 	}
 
 	body, err := io.ReadAll(resp.Body)

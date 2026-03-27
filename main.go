@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,11 +21,12 @@ import (
 	"github.com/yardbirdsax/twisty/gpx"
 	"github.com/yardbirdsax/twisty/quality"
 	"github.com/yardbirdsax/twisty/route"
+	"github.com/yardbirdsax/twisty/waypoint"
 )
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: twisty <route|fetch|score> [flags]")
+		fmt.Fprintln(os.Stderr, "Usage: twisty <route|fetch|score|random> [flags]")
 		os.Exit(1)
 	}
 	switch os.Args[1] {
@@ -37,6 +39,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
+	case "random":
+		runRandom(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand %q\n", os.Args[1])
 		os.Exit(1)
@@ -165,7 +169,7 @@ func runFetch(args []string) {
 	fs := flag.NewFlagSet("fetch", flag.ExitOnError)
 	address := fs.String("address", "", "Address for curvature pipeline center point")
 	radius := fs.Float64("radius", 25.0, "Search radius in km (max 50)")
-	tileSize := fs.Float64("tile-size", 0.05, "Tile size in degrees")
+	tileSize := fs.Float64("tile-size", 0.1, "Tile size in degrees")
 	cacheDir := fs.String("cache-dir", "", "Overpass tile cache directory (default: ~/.twisty/cache/overpass/)")
 	noCache := fs.Bool("no-cache", false, "Bypass cache reads (still writes)")
 	clearCache := fs.Bool("clear-cache", false, "Delete all cached tiles before fetching")
@@ -282,7 +286,7 @@ func runScore(args []string, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	address := fs.String("address", "", "Location center address")
 	radius := fs.Float64("radius", 25.0, "Search radius in km (max 50)")
-	tileSize := fs.Float64("tile-size", 0.05, "Tile size in degrees")
+	tileSize := fs.Float64("tile-size", 0.1, "Tile size in degrees")
 	cacheDir := fs.String("cache-dir", "", "Overpass tile cache directory (default: ~/.twisty/cache/overpass/)")
 	noCache := fs.Bool("no-cache", false, "Skip score cache reads (still writes)")
 	clearScoreCache := fs.Bool("clear-score-cache", false, "Delete all score cache entries before running")
@@ -383,12 +387,12 @@ func runScore(args []string, stderr io.Writer) error {
 
 	totalTiles := len(tiles)
 
-	// Phase A: Concurrent tile processing.
+	// Phase A + B: concurrent tile scoring, name-group aggregation, and penalties.
 	var scoreProgress quality.ProgressReporter = quality.NoopProgressReporter{}
 	if !*verbose && isTerminal(os.Stderr) {
 		scoreProgress = &termProgressBar{w: os.Stderr, label: "Scoring tiles:"}
 	}
-	grouped, stats, err := processTilesConcurrently(
+	collections, stats, err := scoreAndAggregateTiles(
 		context.Background(),
 		tiles,
 		tileCache,
@@ -401,7 +405,7 @@ func runScore(args []string, stderr io.Writer) error {
 		return fmt.Errorf("processing tiles: %w", err)
 	}
 
-	if len(grouped) == 0 {
+	if len(collections) == 0 {
 		fmt.Fprintln(stderr, "WARNING: No road data found for this area. Writing empty KML.")
 		f, err := os.Create(*outPath)
 		if err != nil {
@@ -419,15 +423,6 @@ func runScore(args []string, stderr io.Writer) error {
 	fmt.Fprintf(stderr, "  Cache hits:       %d\n", stats.cacheHits.Load())
 	fmt.Fprintf(stderr, "  Ways scored:      %d\n", stats.totalWays.Load())
 	fmt.Fprintf(stderr, "  Segments scored:  %d\n", stats.totalSegs.Load())
-
-	// Phase B: Concurrent per-name-group processing.
-	collections, err := processNameGroupsConcurrently(context.Background(), grouped)
-	if err != nil {
-		return fmt.Errorf("processing name groups: %w", err)
-	}
-
-	// Penalties applied after aggregation.
-	quality.ApplyPenalties(collections)
 
 	// Stage 7: KML Output
 	f, err := os.Create(*outPath)
@@ -635,6 +630,307 @@ func stageTimer(logger *slog.Logger, stage string, fields ...any) func(...any) {
 		args := append([]any{"stage", stage, "elapsed_ms", time.Since(start).Milliseconds()}, extra...)
 		logger.Debug("stage done", args...)
 	}
+}
+
+// formatDuration formats seconds as "XhYm" or "Ym" if under one hour.
+func formatDuration(secs float64) string {
+	total := int(secs)
+	h := total / 3600
+	m := (total % 3600) / 60
+	if h > 0 {
+		return fmt.Sprintf("%dh%dm", h, m)
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
+// randomAttempt runs waypoint selection and FetchLoopRouteFromURL for a single attempt.
+// collections is the full scored set; effectiveRadius constrains the selector.
+func randomAttempt(
+	collections []quality.RoadCollection,
+	nWaypoints int,
+	start geo.Coord,
+	effectiveRadius float64,
+	selector waypoint.WaypointSelector,
+	valhallaURL string,
+) (route.Route, []geo.Coord, error) {
+	wps := selector.Select(collections, nWaypoints, start, effectiveRadius)
+	r, err := route.FetchLoopRouteFromURL(valhallaURL, start, wps)
+	return r, wps, err
+}
+
+// tileSetDifference returns tiles in expanded that are not in existing.
+func tileSetDifference(expanded, existing []quality.Tile) []quality.Tile {
+	seen := make(map[string]bool, len(existing))
+	for _, t := range existing {
+		seen[tileKey(t)] = true
+	}
+	var result []quality.Tile
+	for _, t := range expanded {
+		if !seen[tileKey(t)] {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
+func tileKey(t quality.Tile) string {
+	return fmt.Sprintf("%.6f,%.6f", t.South, t.West)
+}
+
+func runRandom(args []string) {
+	fs := flag.NewFlagSet("random", flag.ExitOnError)
+
+	start := fs.String("start", "", "start/end address or lat,lon (required)")
+	timeDur := fs.Duration("time", 0, "target ride duration, e.g. 2h (required)")
+	avgSpeed := fs.Float64("avg-speed", waypoint.DefaultAvgSpeedMPH, "average speed in mph")
+	nWaypoints := fs.Int("waypoints", 5, "number of intermediate waypoints")
+	minUnder := fs.Int("min-under", 15, "acceptable shortfall in minutes")
+	maxOver := fs.Int("max-over", 5, "acceptable overage in minutes")
+	radiusStep := fs.Float64("radius-step", 0.25, "radius adjustment factor per retry (0 < x < 1)")
+	maxAttempts := fs.Int("max-attempts", 3, "maximum Valhalla calls before accepting best result")
+	out := fs.String("out", "random_loop.gpx", "output GPX file path")
+	verbose := fs.Bool("v", false, "verbose output")
+	overpassURL := fs.String("overpass-url", quality.OverpassBaseURL, "Overpass API URL")
+	cacheDir := fs.String("cache-dir", "", "tile cache directory (default: ~/.twisty/cache/overpass/)")
+	tileSize := fs.Float64("tile-size", 0.1, "tile size in degrees")
+	noCache := fs.Bool("no-cache", false, "disable tile and score cache reads")
+	valhallaURL := fs.String("valhalla-url", "https://valhalla1.openstreetmap.de", "Valhalla routing API URL")
+
+	fs.Parse(args)
+
+	if *start == "" || *timeDur == 0 {
+		fs.Usage()
+		fmt.Fprintln(os.Stderr, "Error: -start and -time are required")
+		os.Exit(1)
+	}
+
+	var logger *slog.Logger
+	if *verbose {
+		handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})
+		logger = slog.New(handler)
+	} else {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	if *cacheDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			log.Fatalf("cannot determine home directory: %v", err)
+		}
+		*cacheDir = filepath.Join(home, ".twisty", "cache", "overpass")
+	}
+	scoreCacheDir := filepath.Join(filepath.Dir(*cacheDir), "scores")
+
+	tileCache := &quality.TileCache{Dir: *cacheDir, Precision: 3}
+	scoreCache := &quality.ScoreCache{Dir: scoreCacheDir, Precision: 3}
+	if err := scoreCache.EnsureDir(); err != nil {
+		log.Fatalf("create score cache dir: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Geocode the start point.
+	startResult, err := geocode.Resolve(*start, "Start")
+	if err != nil {
+		log.Fatalf("geocode: %v", err)
+	}
+	startCoord := startResult.ToCoord()
+
+	// Derive the search radius.
+	timeHours := timeDur.Hours()
+	radiusKm := waypoint.DeriveRadius(timeHours, *avgSpeed)
+	if *verbose {
+		fmt.Fprintf(os.Stderr, "Derived radius: %.1f km\n", radiusKm)
+	}
+
+	// Fetch tiles for the initial radius, then score and aggregate.
+	var fetchProgress quality.ProgressReporter = quality.NoopProgressReporter{}
+	if !*verbose && isTerminal(os.Stderr) {
+		fetchProgress = &termProgressBar{w: os.Stderr, label: "Fetching tiles:"}
+	}
+	cfg := quality.TileFetchConfig{
+		Endpoint: *overpassURL,
+		TileSize: *tileSize,
+		Cache:    tileCache,
+		NoCache:  *noCache,
+		Logger:   logger,
+		Progress: fetchProgress,
+	}
+
+	if _, err := quality.FetchTiledWays(ctx, startCoord.Lat, startCoord.Lon, radiusKm, cfg); err != nil {
+		log.Fatalf("fetch: %v", err)
+	}
+	tiles := quality.ComputeTiles(startCoord.Lat, startCoord.Lon, radiusKm, *tileSize)
+	var scoreProgress quality.ProgressReporter = quality.NoopProgressReporter{}
+	if !*verbose && isTerminal(os.Stderr) {
+		scoreProgress = &termProgressBar{w: os.Stderr, label: "Scoring tiles:"}
+	}
+	collections, _, err := scoreAndAggregateTiles(ctx, tiles, tileCache, scoreCache, *noCache, logger, scoreProgress)
+	if err != nil {
+		log.Fatalf("score: %v", err)
+	}
+
+	// Compute tolerance window.
+	targetSec := timeDur.Seconds()
+	minSec := targetSec - float64(*minUnder)*60
+	maxSec := targetSec + float64(*maxOver)*60
+
+	// Initialize retry state.
+	type attemptResult struct {
+		r         route.Route
+		waypoints []geo.Coord
+		radius    float64
+	}
+
+	selector := &waypoint.ChainSelector{
+		Start:         startCoord,
+		ArcWidth:      120.0,
+		AvgSpeedMPH:   *avgSpeed,
+		TimeBudgetSec: targetSec,
+	}
+
+	currentRadius := radiusKm
+	scoredCollections := collections
+	fetchedTiles := quality.ComputeTiles(startCoord.Lat, startCoord.Lon, radiusKm, *tileSize)
+	var bestResult *attemptResult
+	lastDirection := ""
+
+	for attempt := 1; attempt <= *maxAttempts; attempt++ {
+		r, wps, err := randomAttempt(scoredCollections, *nWaypoints, startCoord, currentRadius, selector, *valhallaURL)
+		if err != nil {
+			log.Fatalf("attempt %d: %v", attempt, err)
+		}
+
+		// Track best result.
+		if bestResult == nil || math.Abs(r.Duration-targetSec) < math.Abs(bestResult.r.Duration-targetSec) {
+			bestResult = &attemptResult{r: r, waypoints: wps, radius: currentRadius}
+		}
+
+		// Check tolerance window.
+		if r.Duration >= minSec && r.Duration <= maxSec {
+			bestResult = &attemptResult{r: r, waypoints: wps, radius: currentRadius}
+			break
+		}
+
+		if attempt == *maxAttempts {
+			fmt.Fprintf(os.Stderr,
+				"Warning: max attempts (%d) reached; using closest result (actual %s)\n",
+				*maxAttempts, formatDuration(bestResult.r.Duration))
+			break
+		}
+
+		// Determine adjustment direction.
+		var direction string
+		if r.Duration < minSec {
+			direction = "expand"
+		} else {
+			direction = "contract"
+		}
+
+		// Oscillation detection.
+		if lastDirection != "" && direction != lastDirection {
+			fmt.Fprintf(os.Stderr, "Oscillation detected; accepting best result (%s)\n",
+				formatDuration(bestResult.r.Duration))
+			break
+		}
+		lastDirection = direction
+
+		if direction == "expand" {
+			newRadius := currentRadius * (1 + *radiusStep)
+			fmt.Fprintf(os.Stderr,
+				"Attempt %d: route too short (%s), expanding radius to %.1fkm…\n",
+				attempt+1, formatDuration(r.Duration), newRadius)
+
+			// Fetch only the new outer annular ring.
+			newTiles := quality.ComputeTiles(startCoord.Lat, startCoord.Lon, newRadius, *tileSize)
+			outerTiles := tileSetDifference(newTiles, fetchedTiles)
+
+			if len(outerTiles) > 0 {
+				var expandFetchProgress quality.ProgressReporter = quality.NoopProgressReporter{}
+				if !*verbose && isTerminal(os.Stderr) {
+					expandFetchProgress = &termProgressBar{w: os.Stderr, label: "Expanding fetch:"}
+				}
+				outerCfg := quality.TileFetchConfig{
+					Endpoint: *overpassURL,
+					TileSize: *tileSize,
+					Cache:    tileCache,
+					NoCache:  *noCache,
+					Logger:   logger,
+					Progress: expandFetchProgress,
+				}
+				if _, err := quality.FetchTiledWaysForTiles(ctx, outerTiles, outerCfg); err != nil {
+					log.Fatalf("expand fetch: %v", err)
+				}
+				var expandScoreProgress quality.ProgressReporter = quality.NoopProgressReporter{}
+				if !*verbose && isTerminal(os.Stderr) {
+					expandScoreProgress = &termProgressBar{w: os.Stderr, label: "Expanding score:"}
+				}
+				outerCollections, _, err := scoreAndAggregateTiles(ctx, outerTiles, tileCache, scoreCache, *noCache, logger, expandScoreProgress)
+				if err != nil {
+					log.Fatalf("expand score: %v", err)
+				}
+				scoredCollections = append(scoredCollections, outerCollections...)
+			}
+
+			fetchedTiles = newTiles
+			currentRadius = newRadius
+
+		} else { // contract
+			newRadius := currentRadius * (1 - *radiusStep)
+			fmt.Fprintf(os.Stderr,
+				"Attempt %d: route too long (%s), contracting radius to %.1fkm…\n",
+				attempt+1, formatDuration(r.Duration), newRadius)
+			// No tile work needed. Just tighten the effective radius.
+			currentRadius = newRadius
+		}
+	}
+
+	// Write GPX and print summary using best result.
+	gpxWaypoints := make([]gpx.Waypoint, 0, len(bestResult.r.Maneuvers))
+	for _, m := range bestResult.r.Maneuvers {
+		name := m.Instruction
+		if len(name) > 40 {
+			name = name[:40]
+		}
+		desc := m.Instruction + " — " + formatDuration(m.TimeSec) + ", " + fmt.Sprintf("%.2fkm", m.LengthKm)
+		gpxWaypoints = append(gpxWaypoints, gpx.Waypoint{
+			Lat:  m.Location.Lat,
+			Lon:  m.Location.Lon,
+			Name: name,
+			Desc: desc,
+		})
+	}
+	if err := gpx.WriteGPXWithWaypoints(*out, bestResult.r.Points, gpxWaypoints, "twisty random"); err != nil {
+		log.Fatalf("write GPX: %v", err)
+	}
+
+	// Write waypoints GPX showing what we sent to Valhalla.
+	if len(bestResult.waypoints) > 0 {
+		wpGPX := make([]gpx.Waypoint, len(bestResult.waypoints))
+		for i, wp := range bestResult.waypoints {
+			wpGPX[i] = gpx.Waypoint{
+				Lat:  wp.Lat,
+				Lon:  wp.Lon,
+				Name: fmt.Sprintf("WP%d", i+1),
+			}
+		}
+		if err := gpx.WriteGPXWithWaypoints("random_waypoints.gpx", bestResult.waypoints, wpGPX, "waypoints"); err != nil {
+			log.Fatalf("write waypoints GPX: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "Waypoints GPX written to random_waypoints.gpx (%d waypoints)\n", len(bestResult.waypoints))
+	}
+
+	distKm := bestResult.r.Distance / 1000
+	fmt.Printf("Route: distance=%.1fkm  duration=%s  angular=%.1f/km  score=%.1f  points=%d\n",
+		distKm,
+		formatDuration(bestResult.r.Duration),
+		bestResult.r.Stats.AngularDensity,
+		bestResult.r.Stats.AdjustedScore,
+		len(bestResult.r.Points),
+	)
+	fmt.Printf("GPX written to %s\n", *out)
 }
 
 // collectAllPoints returns all route point slices for use with quality.BoundingBox.

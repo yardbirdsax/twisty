@@ -393,9 +393,9 @@ func TestGradientColor(t *testing.T) {
 		level     int
 		wantColor string
 	}{
-		{level: 0, wantColor: TierColors[0]},     // green
-		{level: 256, wantColor: "FF0000FF"},       // red (AABBGGRR: A=FF,B=00,G=00,R=FF)
-		{level: 511, wantColor: "FFFF00FF"},       // magenta (AABBGGRR: A=FF,B=FF,G=00,R=FF)
+		{level: 0, wantColor: TierColors[0]}, // green
+		{level: 256, wantColor: "FF0000FF"},  // red (AABBGGRR: A=FF,B=00,G=00,R=FF)
+		{level: 511, wantColor: "FFFF00FF"},  // magenta (AABBGGRR: A=FF,B=FF,G=00,R=FF)
 	}
 
 	for _, tc := range tests {

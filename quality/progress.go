@@ -34,8 +34,8 @@ var _ ProgressReporter = NoopProgressReporter{}
 // It is the safe default when no progress output is desired.
 type NoopProgressReporter struct{}
 
-func (NoopProgressReporter) SetTotal(_ int)            {}
-func (NoopProgressReporter) Tick(_ bool)               {}
-func (NoopProgressReporter) Retry()                    {}
+func (NoopProgressReporter) SetTotal(_ int)                {}
+func (NoopProgressReporter) Tick(_ bool)                   {}
+func (NoopProgressReporter) Retry()                        {}
 func (NoopProgressReporter) FetchDuration(_ time.Duration) {}
-func (NoopProgressReporter) Done()                     {}
+func (NoopProgressReporter) Done()                         {}

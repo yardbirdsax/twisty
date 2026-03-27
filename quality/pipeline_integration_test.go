@@ -49,7 +49,7 @@ func radiusForTier(tier int) float64 {
 // (startLat, startLon) and advancing in an alternating NE/NW zigzag pattern.
 // Each way gets one segment of the specified tier with the given length.
 // The zigzag ensures cumulative bearing change > 20° so segments survive the deflection filter.
-func fixtureConnectedWays(startID int64, name, highway string, startLat, startLon, stepLat float64, count int, tier int, segLength float64) ScoredWays {
+func fixtureConnectedWays(startID int64, name, highway string, startLat, startLon float64, count int, tier int, segLength float64) ScoredWays {
 	const (
 		latPerM = 1.0 / 111000.0
 		lonPerM = 1.0 / 78500.0
@@ -309,10 +309,10 @@ func fixtureMainStreet() ScoredWays {
 	const name = "Main Street"
 
 	// Cluster A: 4 ways in Vermont area, each 1,250 m (total 5,000 m > MinRoadLengthM)
-	clusterA := fixtureConnectedWays(400, name, "residential", 44.40, -72.70, 0.01125, 4, 2, 1250.0)
+	clusterA := fixtureConnectedWays(400, name, "residential", 44.40, -72.70, 4, 2, 1250.0)
 
 	// Cluster B: 4 ways in North Carolina — far enough that they form a separate component
-	clusterB := fixtureConnectedWays(410, name, "residential", 36.00, -80.00, 0.01125, 4, 2, 1250.0)
+	clusterB := fixtureConnectedWays(410, name, "residential", 36.00, -80.00, 4, 2, 1250.0)
 
 	return append(clusterA, clusterB...)
 }
