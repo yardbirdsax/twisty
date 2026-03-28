@@ -67,6 +67,11 @@ func TestOverpassDockerRunArgs(t *testing.T) {
 		}
 	}
 
+	// Verify restart policy.
+	if !slices.Contains(args, "unless-stopped") {
+		t.Errorf("args missing --restart unless-stopped\ngot: %v", args)
+	}
+
 	// Verify port mapping.
 	if !slices.Contains(args, "8080:80") {
 		t.Errorf("args missing port mapping 8080:80\ngot: %v", args)

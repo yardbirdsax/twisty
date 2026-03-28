@@ -240,6 +240,7 @@ func overpassDockerRunArgs(port int, absDBDir, absMergedBZ2 string) []string {
 	return []string{
 		"run", "-d",
 		"--name", overpassContainerName,
+		"--restart", "unless-stopped",
 		"-p", fmt.Sprintf("%d:80", port),
 		"-v", absDBDir + ":/db",
 		"-v", absMergedBZ2 + ":/data/planet.osm.bz2:ro",
