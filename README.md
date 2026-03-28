@@ -2,13 +2,14 @@
 
 `twisty` is a CLI tool for finding and scoring curvy roads using OpenStreetMap data. It fetches road geometry from the Overpass API, scores segments based on curvature, and outputs files you can load in Google Earth or similar tools.
 
-Heavily influenced by the amazing [Curvature](https://roadcurvature.com/) project; please go donate and support it!
+Heavily influenced by the amazing [Curvature](https://roadcurvature.com/) project; please go donate and support it!`
 
 ## Subcommands
 
 - `twisty score` — score roads in a region and write a KML file
 - `twisty fetch` — pre-populate the Overpass tile cache for a region
 - `twisty route` — uses the [Valhalla API](https://valhalla.openstreetmap.de/) to construct routes between two points, then picks the most twisty one
+- `twisty overpass` — manage a local Overpass API instance running in Docker
 
 ## twisty score
 
@@ -213,3 +214,111 @@ At `twist=0.0` the fastest route wins; at `twist=1.0` the twistiest wins; interm
 ### Output
 
 The selected route is written as a GPX track to `-out`. A summary line is printed showing distance, duration, angular density, and twist score. With `-show-all`, a comparison table lists all candidates with the selected route marked.
+
+## twisty overpass
+
+Manages a local [Overpass API](https://github.com/wiktorn/Overpass-API) instance running in Docker. Useful for running `twisty score` or `twisty fetch` against a local instance instead of the public API — helpful for large regions or high-volume queries.
+
+The local instance is backed by OSM data downloaded from [Geofabrik](https://download.geofabrik.de/) and stored in a local data directory (default: `.overpass/`).
+
+### Subcommands
+
+| Subcommand | Description |
+|-----------|-------------|
+| `start` | Download data, convert it, and start the Overpass container |
+| `stop` | Stop the running container |
+| `status` | Print whether the container is running |
+| `logs` | Stream live logs from the container |
+| `clean` | Stop the container and delete all local data |
+| `build` | Build the Docker image from source (arm64-compatible) |
+
+### twisty overpass start
+
+Downloads PBF data for the specified regions, converts it to the OSM XML format required by Overpass, and starts the container.
+
+```
+twisty overpass start -regions <region>[,<region>...] [flags]
+```
+
+#### Required flags
+
+| Flag | Description |
+|------|-------------|
+| `-regions string` | Comma-separated Geofabrik region paths (e.g. `north-america/us/new-york`) |
+
+#### Optional flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-port int` | `8080` | Host port to expose the Overpass API on |
+| `-data-dir string` | `.overpass` | Directory for downloaded PBF files and the Overpass database |
+
+Once the container is ready the endpoint is printed:
+
+```
+Overpass API is ready: http://localhost:8080/api/interpreter
+```
+
+Pass this URL to `twisty score` or `twisty fetch` via `-overpass-url`.
+
+#### Example
+
+```bash
+twisty overpass start \
+  -regions north-america/us/north-carolina,north-america/us/tennessee \
+  -port 8080
+
+# Then score roads against the local instance:
+twisty score \
+  -address "Asheville, NC" \
+  -overpass-url http://localhost:8080/api/interpreter \
+  -out roads.kml
+```
+
+#### Region management
+
+Regions are cumulative. If you run `start` again with additional regions, twisty detects the change, re-downloads any missing PBF files, rebuilds the merged data file, and re-imports the database. Regions that were already downloaded are reused from the local cache.
+
+### twisty overpass stop
+
+Stops the running container (data is preserved).
+
+```
+twisty overpass stop
+```
+
+### twisty overpass status
+
+Prints whether the Overpass container is currently running.
+
+```
+twisty overpass status
+```
+
+### twisty overpass logs
+
+Streams live logs from the container (equivalent to `docker logs -f`).
+
+```
+twisty overpass logs
+```
+
+### twisty overpass clean
+
+Stops the container and removes the entire data directory.
+
+```
+twisty overpass clean [-data-dir <dir>]
+```
+
+### twisty overpass build
+
+Builds the Overpass Docker image from source. Run this if the pre-built image is not available for your architecture (e.g. Apple Silicon). `start` calls this automatically when needed.
+
+```
+twisty overpass build [-data-dir <dir>]
+```
+
+### Docker image
+
+twisty uses the [`wiktorn/overpass-api`](https://github.com/wiktorn/Overpass-API) image. On arm64 hosts (Apple Silicon) the image is built locally from source because no official arm64 image is published. The build is triggered automatically by `start` if needed, or can be triggered manually with `build`.
