@@ -219,7 +219,7 @@ The selected route is written as a GPX track to `-out`. A summary line is printe
 
 Manages a local [Overpass API](https://github.com/wiktorn/Overpass-API) instance running in Docker. Useful for running `twisty score` or `twisty fetch` against a local instance instead of the public API — helpful for large regions or high-volume queries.
 
-The local instance is backed by OSM data downloaded from [Geofabrik](https://download.geofabrik.de/) and stored in a local data directory (default: `.overpass/`).
+The local instance is backed by OSM data downloaded from [Geofabrik](https://download.geofabrik.de/) and stored in a local data directory (default: `~/.twisty/overpass/`).
 
 ### Subcommands
 
@@ -251,7 +251,7 @@ twisty overpass start -regions <region>[,<region>...] [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-port int` | `8080` | Host port to expose the Overpass API on |
-| `-data-dir string` | `.overpass` | Directory for downloaded PBF files and the Overpass database |
+| `-data-dir string` | `~/.twisty/overpass` | Directory for downloaded PBF files and the Overpass database |
 
 Once the container is ready the endpoint is printed:
 

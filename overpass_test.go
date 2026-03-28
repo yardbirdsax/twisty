@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"sync/atomic"
@@ -194,5 +196,24 @@ func TestWaitForOverpass_ReturnsError_WhenContextCanceled(t *testing.T) {
 	err := waitForOverpass(ctx, srv.URL)
 	if err == nil {
 		t.Fatal("waitForOverpass should return error when context times out")
+	}
+}
+
+func TestResolveOverpassDataDir_DefaultsToHomeDotTwistyOverpass(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("os.UserHomeDir: %v", err)
+	}
+	want := filepath.Join(home, ".twisty", "overpass")
+	got := resolveOverpassDataDir("")
+	if got != want {
+		t.Errorf("resolveOverpassDataDir(\"\") = %q, want %q", got, want)
+	}
+}
+
+func TestResolveOverpassDataDir_PassthroughWhenExplicit(t *testing.T) {
+	got := resolveOverpassDataDir("/custom/path")
+	if got != "/custom/path" {
+		t.Errorf("resolveOverpassDataDir(\"/custom/path\") = %q, want %q", "/custom/path", got)
 	}
 }

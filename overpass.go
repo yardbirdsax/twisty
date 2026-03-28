@@ -26,8 +26,7 @@ const (
 	overpassRepoURL        = "https://github.com/wiktorn/Overpass-API.git"
 	overpassVersion        = "0.7.62.4"
 	geofabrikBaseURL       = "https://download.geofabrik.de"
-	defaultOverpassDataDir = ".overpass"
-	defaultOverpassPort    = 8080
+	defaultOverpassPort = 8080
 )
 
 func runOverpass(args []string) {
@@ -58,8 +57,9 @@ func runOverpassStart(args []string) {
 	fs := flag.NewFlagSet("overpass start", flag.ExitOnError)
 	regions := fs.String("regions", "", "Comma-separated Geofabrik region paths (e.g. north-america/us/new-york)")
 	port := fs.Int("port", defaultOverpassPort, "Port to expose the Overpass API on")
-	dataDir := fs.String("data-dir", defaultOverpassDataDir, "Directory for Overpass data files")
+	dataDir := fs.String("data-dir", "", "Directory for Overpass data files")
 	fs.Parse(args)
+	*dataDir = resolveOverpassDataDir(*dataDir)
 
 	if *regions == "" {
 		fmt.Fprintln(os.Stderr, "Error: -regions is required")
@@ -300,8 +300,9 @@ func runOverpassStatus(_ []string) {
 
 func runOverpassClean(args []string) {
 	fs := flag.NewFlagSet("overpass clean", flag.ExitOnError)
-	dataDir := fs.String("data-dir", defaultOverpassDataDir, "Directory for Overpass data files")
+	dataDir := fs.String("data-dir", "", "Directory for Overpass data files")
 	fs.Parse(args)
+	*dataDir = resolveOverpassDataDir(*dataDir)
 
 	dockerCmd("stop", overpassContainerName) //nolint:errcheck
 	if err := os.RemoveAll(*dataDir); err != nil {
@@ -323,8 +324,9 @@ func runOverpassLogs(_ []string) {
 
 func runOverpassBuild(args []string) {
 	fs := flag.NewFlagSet("overpass build", flag.ExitOnError)
-	dataDir := fs.String("data-dir", defaultOverpassDataDir, "Directory for Overpass data files")
+	dataDir := fs.String("data-dir", "", "Directory for Overpass data files")
 	fs.Parse(args)
+	*dataDir = resolveOverpassDataDir(*dataDir)
 
 	if err := buildOverpassImage(*dataDir); err != nil {
 		log.Fatalf("building overpass image: %v", err)
@@ -511,6 +513,20 @@ func isContainerRunning(name string) bool {
 		return false
 	}
 	return strings.Contains(out, "true")
+}
+
+// resolveOverpassDataDir returns dir if non-empty, otherwise defaults to
+// ~/.twisty/overpass (matching the home-directory cache pattern used by
+// other twisty commands).
+func resolveOverpassDataDir(dir string) string {
+	if dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("cannot determine home directory: %v", err)
+	}
+	return filepath.Join(home, ".twisty", "overpass")
 }
 
 // convertPBFsToBZ2 reads one or more PBF files, merges them in sorted order,
