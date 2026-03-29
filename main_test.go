@@ -300,6 +300,13 @@ func TestRunScoreE2EWithSyntheticCache(t *testing.T) {
 		}
 	}
 
+	// Stub Overpass so any unexpected cache miss fails fast instead of hitting the real API.
+	overpassStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"elements":[]}`))
+	}))
+	defer overpassStub.Close()
+
 	// Prepare output KML path.
 	outPath := filepath.Join(t.TempDir(), "output.kml")
 
@@ -308,10 +315,11 @@ func TestRunScoreE2EWithSyntheticCache(t *testing.T) {
 	err = runScore([]string{
 		"-address", "35.0,-82.0",
 		"-radius", "1",
-		"-tile-size", "0.1",
+		"-tile-size", "0.05",
 		"-cache-dir", cacheDir,
 		"-out", outPath,
 		"-no-cache", // skip score cache reads so the pipeline always runs
+		"-overpass-url", overpassStub.URL,
 	}, &stderr)
 	if err != nil {
 		t.Fatalf("runScore returned error: %v\nstderr: %s", err, stderr.String())
@@ -382,16 +390,24 @@ func TestRunScore_DefaultSingleColorOutput(t *testing.T) {
 		}
 	}
 
+	// Stub Overpass so any unexpected cache miss fails fast instead of hitting the real API.
+	overpassStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"elements":[]}`))
+	}))
+	defer overpassStub.Close()
+
 	outPath := filepath.Join(t.TempDir(), "output.kml")
 	var stderr bytes.Buffer
 	// Default — no -multi-color flag
 	err = runScore([]string{
 		"-address", "35.0,-82.0",
 		"-radius", "1",
-		"-tile-size", "0.1",
+		"-tile-size", "0.05",
 		"-cache-dir", cacheDir,
 		"-out", outPath,
 		"-no-cache",
+		"-overpass-url", overpassStub.URL,
 	}, &stderr)
 	if err != nil {
 		t.Fatalf("runScore returned error: %v\nstderr: %s", err, stderr.String())
@@ -454,16 +470,24 @@ func TestRunScore_MultiColorFlag(t *testing.T) {
 		}
 	}
 
+	// Stub Overpass so any unexpected cache miss fails fast instead of hitting the real API.
+	overpassStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"elements":[]}`))
+	}))
+	defer overpassStub.Close()
+
 	outPath := filepath.Join(t.TempDir(), "output.kml")
 	var stderr bytes.Buffer
 	err = runScore([]string{
 		"-address", "35.0,-82.0",
 		"-radius", "1",
-		"-tile-size", "0.1",
+		"-tile-size", "0.05",
 		"-cache-dir", cacheDir,
 		"-out", outPath,
 		"-no-cache",
 		"-multi-color",
+		"-overpass-url", overpassStub.URL,
 	}, &stderr)
 	if err != nil {
 		t.Fatalf("runScore returned error: %v\nstderr: %s", err, stderr.String())
