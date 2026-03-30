@@ -10,6 +10,29 @@ type CurvatureStats struct {
 	AdjustedScore  float64 // score after road quality penalties (set in Task 007)
 }
 
+// normalize scales value into [0, 1] relative to [minVal, maxVal].
+// If minVal == maxVal the range is degenerate and 1.0 is returned.
+func normalize(value, minVal, maxVal float64) float64 {
+	if maxVal == minVal {
+		return 1.0
+	}
+	return (value - minVal) / (maxVal - minVal)
+}
+
+// minMax returns the minimum and maximum values in vals.
+// If vals is empty both return values are 0.
+func minMax(vals []float64) (float64, float64) {
+	if len(vals) == 0 {
+		return 0, 0
+	}
+	lo, hi := vals[0], vals[0]
+	for _, v := range vals[1:] {
+		lo = min(lo, v)
+		hi = max(hi, v)
+	}
+	return lo, hi
+}
+
 // ScoreRoute computes curvature statistics for a decoded route polyline.
 // It populates route.Stats.Indirectness, AngularDensity, and Score.
 func ScoreRoute(r *Route) {
@@ -31,12 +54,7 @@ func ScoreRoute(r *Route) {
 	// Indirectness
 	straightLine := geo.Haversine(points[0], points[len(points)-1])
 	indirectness := straightLine / totalDist
-	if indirectness < 0 {
-		indirectness = 0
-	}
-	if indirectness > 1 {
-		indirectness = 1
-	}
+	indirectness = max(0, min(1, indirectness))
 
 	// Angular density
 	totalHeadingChange := 0.0
@@ -74,45 +92,24 @@ func SelectRoute(routes []Route, twist float64) int {
 	}
 
 	// Find min/max duration.
-	minDur := routes[0].Duration
-	maxDur := routes[0].Duration
-	for _, r := range routes[1:] {
-		if r.Duration < minDur {
-			minDur = r.Duration
-		}
-		if r.Duration > maxDur {
-			maxDur = r.Duration
-		}
+	durs := make([]float64, len(routes))
+	for i, r := range routes {
+		durs[i] = r.Duration
 	}
+	minDur, maxDur := minMax(durs)
 
 	// Find min/max adjusted score.
-	minScore := routes[0].Stats.AdjustedScore
-	maxScore := routes[0].Stats.AdjustedScore
-	for _, r := range routes[1:] {
-		if r.Stats.AdjustedScore < minScore {
-			minScore = r.Stats.AdjustedScore
-		}
-		if r.Stats.AdjustedScore > maxScore {
-			maxScore = r.Stats.AdjustedScore
-		}
+	scores := make([]float64, len(routes))
+	for i, r := range routes {
+		scores[i] = r.Stats.AdjustedScore
 	}
+	minScore, maxScore := minMax(scores)
 
 	bestIdx := 0
 	bestSel := -1.0
 	for i, r := range routes {
-		var normDur float64
-		if maxDur == minDur {
-			normDur = 1.0
-		} else {
-			normDur = (r.Duration - minDur) / (maxDur - minDur)
-		}
-
-		var normScore float64
-		if maxScore == minScore {
-			normScore = 1.0
-		} else {
-			normScore = (r.Stats.AdjustedScore - minScore) / (maxScore - minScore)
-		}
+		normDur := normalize(r.Duration, minDur, maxDur)
+		normScore := normalize(r.Stats.AdjustedScore, minScore, maxScore)
 
 		sel := twist*normScore + (1.0-twist)*(1.0-normDur)
 		if sel > bestSel {
