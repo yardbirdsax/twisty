@@ -82,6 +82,10 @@ func (s *PBFScanner) readBlock() (string, []byte, error) {
 	// Read 4-byte header length (big-endian)
 	var headerLen int32
 	if err := binary.Read(s.r, binary.BigEndian, &headerLen); err != nil {
+		// io.EOF means a clean end-of-stream (no bytes for the next block).
+		// io.ErrUnexpectedEOF means we hit EOF mid-read of the 4-byte header-length
+		// field — i.e., before any block data was consumed — which is also a clean
+		// end-of-file rather than a real truncation error.
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			return "", nil, io.EOF
 		}

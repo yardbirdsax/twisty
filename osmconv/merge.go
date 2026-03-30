@@ -1,6 +1,9 @@
 package osmconv
 
-import "container/heap"
+import (
+	"container/heap"
+	"sync"
+)
 
 // MergeScanners returns an ObjectScanner that performs an N-way sorted merge
 // of pre-sorted ObjectScanners. Deduplicates consecutive objects with the
@@ -12,7 +15,7 @@ func MergeScanners(scanners ...ObjectScanner) ObjectScanner {
 type mergeScanner struct {
 	scanners []ObjectScanner
 	h        mergeHeap
-	inited   bool
+	once     sync.Once
 	current  Object
 	err      error
 	lastType ObjectType
@@ -21,7 +24,6 @@ type mergeScanner struct {
 }
 
 func (m *mergeScanner) init() {
-	m.inited = true
 	for i, s := range m.scanners {
 		if s.Next() {
 			heap.Push(&m.h, &heapEntry{obj: s.Object(), idx: i})
@@ -33,11 +35,9 @@ func (m *mergeScanner) init() {
 }
 
 func (m *mergeScanner) Next() bool {
-	if !m.inited {
-		m.init()
-		if m.err != nil {
-			return false
-		}
+	m.once.Do(func() { m.init() })
+	if m.err != nil {
+		return false
 	}
 
 	for m.h.Len() > 0 {

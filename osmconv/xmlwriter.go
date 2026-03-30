@@ -3,6 +3,7 @@ package osmconv
 import (
 	"bufio"
 	"fmt"
+	"html"
 	"io"
 	"sort"
 	"strings"
@@ -134,22 +135,5 @@ func formatCoord(c float64) string {
 }
 
 func xmlEscape(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch r {
-		case '&':
-			b.WriteString("&amp;")
-		case '<':
-			b.WriteString("&lt;")
-		case '>':
-			b.WriteString("&gt;")
-		case '"':
-			b.WriteString("&quot;")
-		case '\'':
-			b.WriteString("&apos;")
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return html.EscapeString(s)
 }
