@@ -42,3 +42,4 @@ twisty
 
 # Temporary working files
 .tmp/
+*.gpx
