@@ -31,7 +31,6 @@ var _ WaypointSelector = (*ChainSelector)(nil)
 
 // chainCandidate holds an eligible collection with precomputed fields.
 type chainCandidate struct {
-	index             int
 	collection        quality.RoadCollection
 	midpoint          geo.Coord
 	bearing           float64
@@ -62,7 +61,7 @@ func (s *ChainSelector) Select(
 
 	// Step A: Build eligible list.
 	var eligibles []chainCandidate
-	for i, c := range collections {
+	for _, c := range collections {
 		if c.PenalizedScore <= 0 {
 			continue
 		}
@@ -77,7 +76,6 @@ func (s *ChainSelector) Select(
 		bearing := geo.Bearing(origin, mid)
 		estimatedTimeSec := c.TotalLength / avgSpeedMS
 		eligibles = append(eligibles, chainCandidate{
-			index:             i,
 			collection:        c,
 			midpoint:          mid,
 			bearing:           bearing,
@@ -91,10 +89,7 @@ func (s *ChainSelector) Select(
 	}
 
 	// Step B: Pick a random outbound direction and filter to sector.
-	float64Fn := rand.Float64
-	if s.Rand != nil {
-		float64Fn = s.Rand.Float64
-	}
+	float64Fn := resolveRNG(s.Rand)
 	outboundBearing := float64Fn() * 360.0
 
 	// Filter to sector; widen if needed.
@@ -204,17 +199,7 @@ func (s *ChainSelector) Select(
 			}
 
 			// Fix (c): Use nearest endpoint distance instead of midpoint.
-			connectorDistM := geo.Haversine(currentPos, e.midpoint)
-			if start, end, ok := collectionEndpoints(e.collection); ok {
-				dStart := geo.Haversine(currentPos, start)
-				dEnd := geo.Haversine(currentPos, end)
-				if dStart < connectorDistM {
-					connectorDistM = dStart
-				}
-				if dEnd < connectorDistM {
-					connectorDistM = dEnd
-				}
-			}
+			connectorDistM := min(geo.Haversine(currentPos, e.midpoint), nearestEndpointDist(currentPos, e.collection))
 			connectorTimeSec := connectorDistM / avgSpeedMS
 			totalCandidateTimeSec := connectorTimeSec + e.estimatedTimeSec
 
@@ -271,17 +256,7 @@ func (s *ChainSelector) Select(
 
 		cand := sectorEligibles[bestCandIdx]
 		// Fix (c): Use nearest endpoint distance for actual time accounting.
-		connectorDistM := geo.Haversine(currentPos, cand.midpoint)
-		if start, end, ok := collectionEndpoints(cand.collection); ok {
-			dStart := geo.Haversine(currentPos, start)
-			dEnd := geo.Haversine(currentPos, end)
-			if dStart < connectorDistM {
-				connectorDistM = dStart
-			}
-			if dEnd < connectorDistM {
-				connectorDistM = dEnd
-			}
-		}
+		connectorDistM := min(geo.Haversine(currentPos, cand.midpoint), nearestEndpointDist(currentPos, cand.collection))
 		connectorTimeSec := connectorDistM / avgSpeedMS
 
 		oriented, exitPos := orientCollection(cand.collection, currentPos)
@@ -299,6 +274,18 @@ func (s *ChainSelector) Select(
 
 	// Step D: Extract dense waypoints from the chain.
 	return extractDenseWaypoints(chain, waypointInterval)
+}
+
+// nearestEndpointDist returns the minimum haversine distance from pos to either
+// endpoint of c. If c has no segments, math.MaxFloat64 is returned.
+func nearestEndpointDist(pos geo.Coord, c quality.RoadCollection) float64 {
+	dist := math.MaxFloat64
+	if start, end, ok := collectionEndpoints(c); ok {
+		dStart := geo.Haversine(pos, start)
+		dEnd := geo.Haversine(pos, end)
+		dist = min(dStart, dEnd)
+	}
+	return dist
 }
 
 // collectionEndpoints returns the start and end coordinates of a RoadCollection
@@ -455,41 +442,42 @@ func (g *spatialGrid) MarkSegments(c quality.RoadCollection) {
 	}
 }
 
-// MarkPath samples points along a great-circle path and marks each cell.
-func (g *spatialGrid) MarkPath(from, to geo.Coord) {
-	dist := geo.Haversine(from, to)
-	steps := int(dist / (g.cellSizeM / 2))
+// samplePath returns points sampled at stepM-meter intervals along the
+// great-circle path from start to end (inclusive of both endpoints).
+func samplePath(start, end geo.Coord, stepM float64) []geo.Coord {
+	dist := geo.Haversine(start, end)
+	steps := int(dist / stepM)
 	if steps < 1 {
 		steps = 1
 	}
-	bearing := geo.Bearing(from, to)
+	bearing := geo.Bearing(start, end)
+	pts := make([]geo.Coord, steps+1)
 	for i := 0; i <= steps; i++ {
 		d := dist * float64(i) / float64(steps)
-		pt := geo.DestinationPoint(from, bearing, d)
+		pts[i] = geo.DestinationPoint(start, bearing, d)
+	}
+	return pts
+}
+
+// MarkPath samples points along a great-circle path and marks each cell.
+func (g *spatialGrid) MarkPath(from, to geo.Coord) {
+	for _, pt := range samplePath(from, to, g.cellSizeM/2) {
 		g.Mark(pt)
 	}
 }
 
 // OverlapFraction returns the fraction of sampled corridor cells already visited.
 func (g *spatialGrid) OverlapFraction(from, to geo.Coord) float64 {
-	dist := geo.Haversine(from, to)
-	steps := int(dist / (g.cellSizeM / 2))
-	if steps < 1 {
-		steps = 1
+	pts := samplePath(from, to, g.cellSizeM/2)
+	total := len(pts)
+	if total == 0 {
+		return 0
 	}
-	bearing := geo.Bearing(from, to)
-	total := 0
 	overlap := 0
-	for i := 0; i <= steps; i++ {
-		d := dist * float64(i) / float64(steps)
-		pt := geo.DestinationPoint(from, bearing, d)
-		total++
+	for _, pt := range pts {
 		if g.visited[g.cellKey(pt)] {
 			overlap++
 		}
-	}
-	if total == 0 {
-		return 0
 	}
 	return float64(overlap) / float64(total)
 }
@@ -498,12 +486,7 @@ func (g *spatialGrid) OverlapFraction(from, to geo.Coord) float64 {
 // positive in the given sweep direction (1 for CW, -1 for CCW).
 func signedAngleDiff(from, to float64, sweepDir int) float64 {
 	diff := to - from
-	for diff > 180 {
-		diff -= 360
-	}
-	for diff < -180 {
-		diff += 360
-	}
+	diff = math.Mod(math.Mod(diff+180, 360)+360, 360) - 180
 	return diff * float64(sweepDir)
 }
 

@@ -9,6 +9,14 @@ import (
 
 const MinRoadLengthM = 500.0 // collections shorter than this are excluded
 
+// resolveRNG returns rng.Float64 if rng is non-nil, otherwise rand.Float64.
+func resolveRNG(rng *rand.Rand) func() float64 {
+	if rng != nil {
+		return rng.Float64
+	}
+	return rand.Float64
+}
+
 // WeightedRandomSelector samples road collections without replacement,
 // with probability proportional to PenalizedScore.
 type WeightedRandomSelector struct {
@@ -75,10 +83,7 @@ func (s *WeightedRandomSelector) Select(
 func WeightedSampleWithoutReplacement(rng *rand.Rand, weights []float64, n int) []int {
 	result := make([]int, 0, n)
 
-	float64Fn := rand.Float64
-	if rng != nil {
-		float64Fn = rng.Float64
-	}
+	float64Fn := resolveRNG(rng)
 
 	for len(result) < n {
 		// Compute total weight.

@@ -1,6 +1,7 @@
 package waypoint
 
 import (
+	"math"
 	"math/rand"
 	"sort"
 
@@ -59,10 +60,7 @@ func (s *SectorLobeSelector) Select(
 	radiusM := radiusKm * 1000.0
 
 	// Pick a random outbound bearing (0–360°).
-	float64Fn := rand.Float64
-	if s.Rand != nil {
-		float64Fn = s.Rand.Float64
-	}
+	float64Fn := resolveRNG(s.Rand)
 	outboundBearing := float64Fn() * 360.0
 
 	// Build the eligible list.
@@ -134,12 +132,7 @@ func (s *SectorLobeSelector) Select(
 	var left, right []sectorCandidate
 	for _, c := range selected {
 		diff := c.bearing - outboundBearing
-		for diff > 180 {
-			diff -= 360
-		}
-		for diff < -180 {
-			diff += 360
-		}
+		diff = math.Mod(math.Mod(diff+180, 360)+360, 360) - 180
 		if diff < 0 {
 			left = append(left, c)
 		} else {
