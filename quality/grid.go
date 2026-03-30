@@ -31,14 +31,9 @@ func BuildSpatialGrid(ways []Way, cellSizeDeg float64) *SpatialGrid {
 
 	for i := range ways {
 		w := &ways[i]
-		// Track which cells this way has already been added to.
-		addedCells := make(map[[2]int]bool)
 		for _, node := range w.Geometry {
 			key := g.cellKey(node)
-			if !addedCells[key] {
-				addedCells[key] = true
-				g.cells[key] = append(g.cells[key], w)
-			}
+			g.cells[key] = append(g.cells[key], w)
 		}
 	}
 

@@ -1,14 +1,25 @@
 package quality
 
+var unpavedSurfaces = map[string]bool{
+	"unpaved": true,
+	"gravel":  true,
+	"dirt":    true,
+	"mud":     true,
+	"sand":    true,
+}
+
+var nonMotorVehicleHighways = map[string]bool{
+	"track":       true,
+	"path":        true,
+	"footway":     true,
+	"cycleway":    true,
+	"bridleway":   true,
+	"steps":       true,
+	"residential": true,
+}
+
 // isHardFiltered returns true if a way should be removed by the hard filter.
 func isHardFiltered(tags map[string]string) bool {
-	unpavedSurfaces := map[string]bool{
-		"unpaved": true,
-		"gravel":  true,
-		"dirt":    true,
-		"mud":     true,
-		"sand":    true,
-	}
 	if surface, ok := tags["surface"]; ok && unpavedSurfaces[surface] {
 		return true
 	}
@@ -23,14 +34,6 @@ func isHardFiltered(tags map[string]string) bool {
 		return true
 	}
 
-	nonMotorVehicleHighways := map[string]bool{
-		"track":     true,
-		"path":      true,
-		"footway":   true,
-		"cycleway":  true,
-		"bridleway": true,
-		"steps":     true,
-	}
 	if nonMotorVehicleHighways[tags["highway"]] {
 		return true
 	}

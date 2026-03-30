@@ -503,7 +503,7 @@ func AggregateNameGroup(name string, namedWays ScoredWays) []RoadCollection {
 			segGroups := SplitAtStraightGaps(chunk, StraightGapSplitM)
 
 			for _, segs := range segGroups {
-				rc := buildRoadCollection(name, wayByID, segs)
+				rc := BuildRoadCollection(name, wayByID, segs)
 				nameCollections = append(nameCollections, rc)
 			}
 		}
@@ -515,12 +515,6 @@ func AggregateNameGroup(name string, namedWays ScoredWays) []RoadCollection {
 	}
 
 	return nameCollections
-}
-
-// BuildRoadCollection constructs a RoadCollection from a name, a way lookup
-// map, and a segment group.
-func BuildRoadCollection(name string, wayByID map[int64]ScoredWay, segs []ScoredSegment) RoadCollection {
-	return buildRoadCollection(name, wayByID, segs)
 }
 
 // Aggregate processes all scored ways into road collections.
@@ -542,10 +536,10 @@ func Aggregate(ways ScoredWays) []RoadCollection {
 	return collections
 }
 
-// buildRoadCollection constructs a RoadCollection from a segment group.
+// BuildRoadCollection constructs a RoadCollection from a segment group.
 // wayByID is a map of way ID to ScoredWay used to look up tags for ways that
 // contributed segments to segs. Only ways that appear in segs are included.
-func buildRoadCollection(name string, wayByID map[int64]ScoredWay, segs []ScoredSegment) RoadCollection {
+func BuildRoadCollection(name string, wayByID map[int64]ScoredWay, segs []ScoredSegment) RoadCollection {
 	rc := RoadCollection{
 		Name:     name,
 		Segments: segs,
@@ -599,7 +593,8 @@ func DeepCopyWays(ways ScoredWays) ScoredWays {
 }
 
 // FlattenWaySegments returns all segments from ordered ways as a single slice.
-// Each segment's WayID is set from its parent way if not already set.
+// Each returned segment's WayID is set from its parent way if not already set.
+// The input ways are not modified.
 func FlattenWaySegments(ways ScoredWays) []ScoredSegment {
 	var all []ScoredSegment
 	for _, w := range ways {

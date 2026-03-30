@@ -123,6 +123,22 @@ func MergeTierRuns(segments []ScoredSegment) []tierRun {
 	return runs
 }
 
+// filterAndSortCollections filters collections by minScore and MinRoadLengthM,
+// then sorts them by penalized score descending.
+func filterAndSortCollections(cols []RoadCollection, minScore, minLength float64) []RoadCollection {
+	var filtered []RoadCollection
+	for _, c := range cols {
+		if c.PenalizedScore < minScore || c.TotalLength < minLength {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].PenalizedScore > filtered[j].PenalizedScore
+	})
+	return filtered
+}
+
 // formatCoordinates formats segment coordinates for KML as "lon,lat,0" pairs
 // separated by spaces. Includes the start of the first segment, then the end
 // of each segment to avoid duplicating shared endpoints.
@@ -130,12 +146,12 @@ func formatCoordinates(segments []ScoredSegment) string {
 	if len(segments) == 0 {
 		return ""
 	}
-	var parts []string
-	parts = append(parts, fmt.Sprintf("%f,%f,0", segments[0].Start.Lon, segments[0].Start.Lat))
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%f,%f,0", segments[0].Start.Lon, segments[0].Start.Lat)
 	for _, seg := range segments {
-		parts = append(parts, fmt.Sprintf("%f,%f,0", seg.End.Lon, seg.End.Lat))
+		fmt.Fprintf(&sb, " %f,%f,0", seg.End.Lon, seg.End.Lat)
 	}
-	return strings.Join(parts, " ")
+	return sb.String()
 }
 
 // WriteKML writes road collections as a KML file.
@@ -143,23 +159,11 @@ func formatCoordinates(segments []ScoredSegment) string {
 // Collections with penalized score below minScore or total length below
 // MinRoadLengthM are excluded.
 func WriteKML(w io.Writer, collections []RoadCollection, minScore float64) error {
-	// Filter by minScore and MinRoadLengthM
-	var filtered []RoadCollection
-	for _, c := range collections {
-		if c.PenalizedScore < minScore || c.TotalLength < MinRoadLengthM {
-			continue
-		}
-		filtered = append(filtered, c)
-	}
-
-	// Sort by penalized score descending
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].PenalizedScore > filtered[j].PenalizedScore
-	})
+	filtered := filterAndSortCollections(collections, minScore, MinRoadLengthM)
 
 	// Build style definitions
-	styles := make([]KMLStyle, 0, 5)
-	for tier := 0; tier <= 4; tier++ {
+	styles := make([]KMLStyle, 0, len(TierColors))
+	for tier := 0; tier < len(TierColors); tier++ {
 		styles = append(styles, KMLStyle{
 			ID: fmt.Sprintf("tier%d", tier),
 			LineStyle: KMLLineStyle{
@@ -255,19 +259,7 @@ func GradientColor(level int) string {
 // TotalScore (not PenalizedScore) is used for the color because the visual should
 // reflect actual road geometry, while PenalizedScore is used for filtering and sort order.
 func WriteKMLSingleColor(w io.Writer, collections []RoadCollection, minScore float64) error {
-	// Filter by minScore and MinRoadLengthM
-	var filtered []RoadCollection
-	for _, c := range collections {
-		if c.PenalizedScore < minScore || c.TotalLength < MinRoadLengthM {
-			continue
-		}
-		filtered = append(filtered, c)
-	}
-
-	// Sort by penalized score descending
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].PenalizedScore > filtered[j].PenalizedScore
-	})
+	filtered := filterAndSortCollections(collections, minScore, MinRoadLengthM)
 
 	// Build folders — one per collection, one placemark per road
 	folders := make([]KMLSingleColorFolder, 0, len(filtered))
