@@ -1,0 +1,64 @@
+{
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "prompt",
+                        "prompt": "The agent wants to run '$ARGUMENTS'. If this command includes command substitution for capturing text (e.g. `git commit -m \"$(cat..\"`), respond with {\"ok\": false, \"reason\": \"DO NOT use command substitution when capturing text. Use a different approach, like just in-lining the text.\"}."
+                    },
+                    {
+                        "type": "prompt",
+                        "prompt": "The agent wants to run: $ARGUMENTS. If this command uses grep, sed, or awk to search or read files, respond {\"ok\": false, \"reason\": \"Use the built-in Grep, Glob, and Read tools instead of shell grep/sed/awk. They are more context-efficient.\"} If the command is fine or uses grep/sed as part of a pipeline where native tools wouldn't work, respond {\"ok\": true}."
+                    },
+                    {
+                        "type": "prompt",
+                        "prompt": "The agent wants to run: $ARGUMENTS. If this command tries to use temporary directories, like '/tmp' or '/private', respond {\"ok\": false, \"reason\": \"Use a directory in the current worktree called '.tmp'. If this directory isn't already in the '.gitignore' file, add it.\"}."
+                    }
+                ]
+            }
+        ]
+    },
+    "permissions": {
+        "allow": [
+            "Bash(git add:*)",
+            "Bash(git commit:*)",
+            "Bash(git diff:*)",
+            "Bash(git log:*)",
+            "Bash(git show:*)",
+            "Bash(go build:*)",
+            "Bash(go get:*)",
+            "Bash(go mod:*)",
+            "Bash(go test:*)",
+            "Bash(go vet:*)",
+            "Edit",
+            "Read",
+            "Write"
+        ],
+        "deny": [
+            "Bash(git push --force)"
+        ]
+    },
+    "sandbox": {
+        "autoAllowBashIfSandboxed": true,
+        "enabled": true,
+        "filesystem": {
+            "allowWrite": [
+                "~/go/pkg/mod/cache/**"
+            ],
+            "allowRead": [
+                "~/.twisty/**"
+            ]
+        },
+        "network": {
+            "allowedDomains": [
+                "valhalla1.openstreetmap.de",
+                "nominatim.openstreetmap.org",
+                "overpass-api.de",
+                "proxy.golang.org"
+            ],
+            "allowLocalBinding": true
+        }
+    }
+}
