@@ -47,44 +47,36 @@ func processTilesConcurrently(
 	return processTilesConcurrentlyWith(ctx, tiles, processor, progress)
 }
 
-// processTilesConcurrentlyWith is the internal implementation of tile processing
-// that accepts a pluggable tileProcessorFunc. This enables unit tests to inject
-// error-returning processors without requiring a real tile cache on disk.
-func processTilesConcurrentlyWith(
+// runWorkerPool runs work items through a pool of GOMAXPROCS workers.
+// The processor fn returns (*R, error); a nil *R means skip (no result emitted).
+// The caller must drain resultCh fully before inspecting errCh; the resultCh is
+// closed once all workers have exited. cancel must be called by the caller (via
+// defer) to release the context. errCh is buffered to hold one error per worker.
+func runWorkerPool[W, R any](
 	ctx context.Context,
-	tiles []quality.Tile,
-	processor tileProcessorFunc,
-	progress quality.ProgressReporter,
-) (map[string]quality.ScoredWays, *pipelineStats, error) {
-	stats := &pipelineStats{}
-
+	items []W,
+	processor func(W) (*R, error),
+) (<-chan R, <-chan error, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	workerCount := runtime.GOMAXPROCS(0)
-
-	if progress != nil {
-		progress.SetTotal(len(tiles))
-	}
-
-	tileCh := make(chan quality.Tile, len(tiles))
-	resultCh := make(chan tileResult, workerCount*2)
+	workCh := make(chan W, len(items))
+	resultCh := make(chan R, workerCount*2)
 	errCh := make(chan error, workerCount)
 
 	var wg sync.WaitGroup
 
-	// Launch workers.
 	for range workerCount {
 		wg.Go(func() {
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case tile, ok := <-tileCh:
+				case item, ok := <-workCh:
 					if !ok {
 						return
 					}
-					res, err := processor(tile)
+					res, err := processor(item)
 					if err != nil {
 						select {
 						case errCh <- err:
@@ -94,7 +86,6 @@ func processTilesConcurrentlyWith(
 						return
 					}
 					if res == nil {
-						// Tile skipped (no data).
 						continue
 					}
 					select {
@@ -107,23 +98,62 @@ func processTilesConcurrentlyWith(
 		})
 	}
 
-	// Send tiles to workers.
 	go func() {
-		defer close(tileCh)
-		for _, tile := range tiles {
+		defer close(workCh)
+		for _, item := range items {
 			select {
-			case tileCh <- tile:
+			case workCh <- item:
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
-	// Close resultCh after all workers are done.
 	go func() {
 		wg.Wait()
 		close(resultCh)
 	}()
+
+	return resultCh, errCh, cancel
+}
+
+// drainPoolErr checks errCh and ctx after the result channel has been drained.
+// It returns the first worker error if one was sent, the context error if the
+// context was canceled, or nil otherwise.
+func drainPoolErr(ctx context.Context, errCh <-chan error) error {
+	select {
+	case err := <-errCh:
+		return err
+	default:
+	}
+	if ctx.Err() != nil {
+		select {
+		case err := <-errCh:
+			return err
+		default:
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// processTilesConcurrentlyWith is the internal implementation of tile processing
+// that accepts a pluggable tileProcessorFunc. This enables unit tests to inject
+// error-returning processors without requiring a real tile cache on disk.
+func processTilesConcurrentlyWith(
+	ctx context.Context,
+	tiles []quality.Tile,
+	processor tileProcessorFunc,
+	progress quality.ProgressReporter,
+) (map[string]quality.ScoredWays, *pipelineStats, error) {
+	stats := &pipelineStats{}
+
+	if progress != nil {
+		progress.SetTotal(len(tiles))
+	}
+
+	resultCh, errCh, cancel := runWorkerPool(ctx, tiles, processor)
+	defer cancel()
 
 	// Collect results and group by name, deduplicating by WayID per group.
 	grouped := make(map[string]quality.ScoredWays)
@@ -156,21 +186,8 @@ func processTilesConcurrentlyWith(
 		progress.Done()
 	}
 
-	// Check for errors.
-	select {
-	case err := <-errCh:
+	if err := drainPoolErr(ctx, errCh); err != nil {
 		return nil, stats, err
-	default:
-	}
-
-	if ctx.Err() != nil {
-		// Check if it was due to a worker error.
-		select {
-		case err := <-errCh:
-			return nil, stats, err
-		default:
-			return nil, stats, ctx.Err()
-		}
 	}
 
 	return grouped, stats, nil
@@ -246,81 +263,29 @@ func processNameGroupsConcurrently(ctx context.Context, groups map[string]qualit
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	workerCount := runtime.GOMAXPROCS(0)
-
-	workCh := make(chan nameGroupWork, workerCount)
-	resultCh := make(chan []quality.RoadCollection, workerCount*2)
-	errCh := make(chan error, workerCount)
-
-	var wg sync.WaitGroup
-
-	for range workerCount {
-		wg.Go(func() {
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case work, ok := <-workCh:
-					if !ok {
-						return
-					}
-					cols, err := processNameGroup(work.name, work.ways)
-					if err != nil {
-						select {
-						case errCh <- err:
-						default:
-						}
-						cancel()
-						return
-					}
-					select {
-					case resultCh <- cols:
-					case <-ctx.Done():
-						return
-					}
-				}
-			}
-		})
+	items := make([]nameGroupWork, 0, len(groups))
+	for name, ways := range groups {
+		items = append(items, nameGroupWork{name: name, ways: ways})
 	}
 
-	// Send name groups to workers.
-	go func() {
-		defer close(workCh)
-		for name, ways := range groups {
-			select {
-			case workCh <- nameGroupWork{name: name, ways: ways}:
-			case <-ctx.Done():
-				return
-			}
+	processor := func(w nameGroupWork) (*[]quality.RoadCollection, error) {
+		cols, err := processNameGroup(w.name, w.ways)
+		if err != nil {
+			return nil, err
 		}
-	}()
+		return &cols, nil
+	}
 
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
+	resultCh, errCh, cancel := runWorkerPool(ctx, items, processor)
+	defer cancel()
 
 	var all []quality.RoadCollection
 	for cols := range resultCh {
 		all = append(all, cols...)
 	}
 
-	select {
-	case err := <-errCh:
+	if err := drainPoolErr(ctx, errCh); err != nil {
 		return nil, err
-	default:
-	}
-
-	if ctx.Err() != nil {
-		select {
-		case err := <-errCh:
-			return nil, err
-		default:
-			return nil, ctx.Err()
-		}
 	}
 
 	return all, nil

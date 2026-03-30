@@ -39,3 +39,6 @@ twisty
 
 # Benchmark data
 .benchmark-data/
+
+# Temporary working files
+.tmp/

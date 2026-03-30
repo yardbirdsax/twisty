@@ -123,7 +123,7 @@ func runOverpassStart(args []string) {
 
 	// Download any missing PBF files.
 	for _, region := range allRegions {
-		filename := strings.ReplaceAll(region, "/", "_") + "-latest.osm.pbf"
+		filename := pbfFilename(region)
 		destPath := filepath.Join(pbfDir, filename)
 		if _, err := os.Stat(destPath); os.IsNotExist(err) {
 			url := geofabrikBaseURL + "/" + region + "-latest.osm.pbf"
@@ -140,7 +140,7 @@ func runOverpassStart(args []string) {
 	if _, err := os.Stat(mergedBZ2); os.IsNotExist(err) {
 		var pbfPaths []string
 		for _, region := range allRegions {
-			filename := strings.ReplaceAll(region, "/", "_") + "-latest.osm.pbf"
+			filename := pbfFilename(region)
 			pbfPaths = append(pbfPaths, filepath.Join(pbfDir, filename))
 		}
 		fmt.Fprintf(os.Stderr, "Converting %d PBF file(s) to BZ2...\n", len(pbfPaths))
@@ -215,6 +215,13 @@ func runOverpassStart(args []string) {
 	}
 
 	fmt.Fprintf(os.Stderr, "\nOverpass API is ready: %s\n", endpoint)
+}
+
+// pbfFilename returns the local PBF filename for a Geofabrik region path.
+// Slashes in the region path are replaced with underscores so the name is
+// safe to use as a flat filename.
+func pbfFilename(region string) string {
+	return strings.ReplaceAll(region, "/", "_") + "-latest.osm.pbf"
 }
 
 // mergeRegions returns the sorted union of existing and new region lists.
@@ -381,10 +388,11 @@ func buildOverpassImage(dataDir string) error {
 	if err != nil {
 		return fmt.Errorf("reading Dockerfile template: %w", err)
 	}
-	dockerfile := strings.ReplaceAll(string(tmpl), "{version}", overpassVersion)
-	// The template uses Python str.format() syntax where {{ and }} are literal braces.
-	dockerfile = strings.ReplaceAll(dockerfile, "{{", "{")
-	dockerfile = strings.ReplaceAll(dockerfile, "}}", "}")
+	dockerfile := strings.NewReplacer(
+		"{version}", overpassVersion,
+		"{{", "{",
+		"}}", "}",
+	).Replace(string(tmpl))
 	dockerfilePath := filepath.Join(srcDir, "Dockerfile")
 	if err := os.WriteFile(dockerfilePath, []byte(dockerfile), 0o644); err != nil {
 		return fmt.Errorf("writing Dockerfile: %w", err)
