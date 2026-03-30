@@ -13,6 +13,8 @@ import (
 	"github.com/yardbirdsax/twisty/geo"
 )
 
+var defaultClient = &http.Client{Timeout: 10 * time.Second}
+
 // Result holds a resolved geographic location.
 type Result struct {
 	Lat         float64
@@ -52,7 +54,20 @@ func Classify(s string) (isCoord bool, lat, lon float64, err error) {
 	return false, 0, 0, nil
 }
 
-// NeedsGeocode returns true if the input will require a Nominatim request.
+// parseLatLon parses the Lat and Lon string fields of a nominatimResult into float64 values.
+func parseLatLon(r nominatimResult) (float64, float64, error) {
+	lat, err := strconv.ParseFloat(r.Lat, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parsing lat %q: %w", r.Lat, err)
+	}
+	lon, err := strconv.ParseFloat(r.Lon, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("parsing lon %q: %w", r.Lon, err)
+	}
+	return lat, lon, nil
+}
+
+// NeedsGeocode is a convenience wrapper that returns true if the input requires a geocoding request, without exposing Classify's full return values.
 func NeedsGeocode(input string) bool {
 	isCoord, _, _, err := Classify(input)
 	if err != nil {
@@ -69,13 +84,9 @@ func processNominatimResults(results []nominatimResult, address, label string) (
 	}
 
 	best := results[0]
-	bestLat, err := strconv.ParseFloat(best.Lat, 64)
+	bestLat, bestLon, err := parseLatLon(best)
 	if err != nil {
-		return Result{}, fmt.Errorf("parsing lat %q: %w", best.Lat, err)
-	}
-	bestLon, err := strconv.ParseFloat(best.Lon, 64)
-	if err != nil {
-		return Result{}, fmt.Errorf("parsing lon %q: %w", best.Lon, err)
+		return Result{}, err
 	}
 
 	fmt.Printf("%s: %q → %s (%.4f, %.4f)\n", label, address, best.DisplayName, bestLat, bestLon)
@@ -83,11 +94,7 @@ func processNominatimResults(results []nominatimResult, address, label string) (
 	if len(results) > 1 {
 		limit := min(len(results)-1, 2)
 		for _, r := range results[1 : 1+limit] {
-			rLat, err := strconv.ParseFloat(r.Lat, 64)
-			if err != nil {
-				continue
-			}
-			rLon, err := strconv.ParseFloat(r.Lon, 64)
+			rLat, rLon, err := parseLatLon(r)
 			if err != nil {
 				continue
 			}
@@ -104,10 +111,17 @@ func processNominatimResults(results []nominatimResult, address, label string) (
 // best result. It prints resolution or disambiguation output to stdout.
 // label is "Origin" or "Destination" for display purposes.
 func Geocode(address, label string) (Result, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-
-	reqURL := "https://nominatim.openstreetmap.org/search?q=" +
-		url.QueryEscape(address) + "&format=jsonv2&limit=5"
+	u := url.URL{
+		Scheme: "https",
+		Host:   "nominatim.openstreetmap.org",
+		Path:   "/search",
+	}
+	q := url.Values{}
+	q.Set("q", address)
+	q.Set("format", "jsonv2")
+	q.Set("limit", "5")
+	u.RawQuery = q.Encode()
+	reqURL := u.String()
 
 	req, err := http.NewRequest(http.MethodGet, reqURL, nil)
 	if err != nil {
@@ -115,7 +129,7 @@ func Geocode(address, label string) (Result, error) {
 	}
 	req.Header.Set("User-Agent", "twisty/1.0")
 
-	resp, err := client.Do(req)
+	resp, err := defaultClient.Do(req)
 	if err != nil {
 		return Result{}, fmt.Errorf("geocoding %s %q: %w", label, address, err)
 	}
