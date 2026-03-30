@@ -11,11 +11,13 @@ type Coord struct {
 // Haversine returns the great-circle distance in meters between two coordinates.
 func Haversine(a, b Coord) float64 {
 	const R = 6371000
+	aLatR := a.Lat * math.Pi / 180
+	bLatR := b.Lat * math.Pi / 180
 	dLat := (b.Lat - a.Lat) * math.Pi / 180
 	dLon := (b.Lon - a.Lon) * math.Pi / 180
 	sinDLat := math.Sin(dLat / 2)
 	sinDLon := math.Sin(dLon / 2)
-	h := sinDLat*sinDLat + math.Cos(a.Lat*math.Pi/180)*math.Cos(b.Lat*math.Pi/180)*sinDLon*sinDLon
+	h := sinDLat*sinDLat + math.Cos(aLatR)*math.Cos(bLatR)*sinDLon*sinDLon
 	return 2 * R * math.Atan2(math.Sqrt(h), math.Sqrt(1-h))
 }
 
@@ -38,33 +40,45 @@ func DecodePolyline(encoded string, precision float64) []Coord {
 	latAcc := 0
 	lonAcc := 0
 	for i < len(encoded) {
-		lonDecoded := false
-		for idx, acc := range []*int{&latAcc, &lonAcc} {
-			if i >= len(encoded) {
+		// Decode latitude
+		result := 0
+		shift := 0
+		for i < len(encoded) {
+			b := int(encoded[i]) - 63
+			i++
+			result |= (b & 0x1F) << shift
+			shift += 5
+			if b < 0x20 {
 				break
 			}
-			result := 0
-			shift := 0
-			for i < len(encoded) {
-				b := int(encoded[i]) - 63
-				i++
-				result |= (b & 0x1F) << shift
-				shift += 5
-				if b < 0x20 {
-					break
-				}
-			}
-			if result&1 != 0 {
-				result = ^result
-			}
-			*acc += result >> 1
-			if idx == 1 {
-				lonDecoded = true
+		}
+		if result&1 != 0 {
+			result = ^result
+		}
+		latAcc += result >> 1
+
+		if i >= len(encoded) {
+			break
+		}
+
+		// Decode longitude
+		result = 0
+		shift = 0
+		for i < len(encoded) {
+			b := int(encoded[i]) - 63
+			i++
+			result |= (b & 0x1F) << shift
+			shift += 5
+			if b < 0x20 {
+				break
 			}
 		}
-		if lonDecoded {
-			coords = append(coords, Coord{Lat: float64(latAcc) / precision, Lon: float64(lonAcc) / precision})
+		if result&1 != 0 {
+			result = ^result
 		}
+		lonAcc += result >> 1
+
+		coords = append(coords, Coord{Lat: float64(latAcc) / precision, Lon: float64(lonAcc) / precision})
 	}
 	return coords
 }
@@ -94,11 +108,6 @@ func DestinationPoint(origin Coord, bearingDeg, distM float64) Coord {
 // 360°/0° wraparound. Result is in [0, 180].
 func AngleDiff(a, b float64) float64 {
 	diff := b - a
-	for diff > 180 {
-		diff -= 360
-	}
-	for diff < -180 {
-		diff += 360
-	}
+	diff = math.Mod(math.Mod(diff+180, 360)+360, 360) - 180
 	return math.Abs(diff)
 }

@@ -12,6 +12,7 @@ func Circumradius(a, b, c Coord) float64 {
 
 	s := (sideA + sideB + sideC) / 2
 	areaSquared := s * (s - sideA) * (s - sideB) * (s - sideC)
+	// Guard against floating-point rounding errors on collinear or near-collinear points.
 	if areaSquared < 0 {
 		areaSquared = 0
 	}
