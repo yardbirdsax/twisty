@@ -16,38 +16,39 @@ Heavily influenced by the amazing [Curvature](https://roadcurvature.com/) projec
 Scores roads in a circular region around a center address and writes a KML file with color-coded results.
 
 ```
-twisty score -address <address> -out <file.kml> [flags]
+twisty score --address <address> --out <file.kml> [flags]
 ```
 
 ### Required flags
 
 | Flag | Description |
 |------|-------------|
-| `-address string` | Center address for the search region |
-| `-out string` | Output KML file path |
+| `--address string` | Center address for the search region |
+| `--out string` | Output KML file path |
 
 ### Optional flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-radius float` | `25.0` | Search radius in km |
-| `-tile-size float` | `0.05` | Tile size in degrees for grid-based fetching |
-| `-cache-dir string` | `~/.twisty/cache/overpass/` | Overpass tile cache directory |
-| `-no-cache` | false | Skip score cache reads (cache writes still happen) |
-| `-clear-score-cache` | false | Delete all score cache entries before running |
-| `-min-score float` | `0` | Minimum penalized score to include in output |
-| `-multi-color` | false | Color each segment by curvature tier instead of per-road |
-| `-overpass-url string` | `https://overpass-api.de/api/interpreter` | Overpass API endpoint |
-| `-v` | false | Verbose logging to stderr |
+| `--radius float` | `25.0` | Search radius in km |
+| `--tile-size float` | `0.1` | Tile size in degrees for grid-based fetching |
+| `--cache-dir string` | `~/.twisty/cache/overpass/` | Overpass tile cache directory |
+| `--no-cache` | false | Skip score cache reads (cache writes still happen) |
+| `--fetch-delay string` | `1s` | Delay between tile fetches in Go duration format (e.g. `500ms`, `2s`) |
+| `--clear-score-cache` | false | Delete all score cache entries before running |
+| `--min-score float` | `0` | Minimum penalized score to include in output |
+| `--multi-color` | false | Color each segment by curvature tier instead of per-road |
+| `--overpass-url string` | `https://overpass-api.de/api/interpreter` | Overpass API endpoint |
+| `--v` | false | Verbose logging to stderr |
 
 ### Example
 
 ```bash
 twisty score \
-  -address "Mulholland Drive, Los Angeles, CA" \
-  -radius 15 \
-  -out twisty_roads.kml \
-  -min-score 500
+  --address "Mulholland Drive, Los Angeles, CA" \
+  --radius 15 \
+  --out twisty_roads.kml \
+  --min-score 500
 ```
 
 ### How scoring works
@@ -95,7 +96,7 @@ Each road collection is penalized based on its highway type(s):
 | secondary / secondary_link | 0.9 |
 | tertiary and below | 1.0 |
 
-Roads with mixed types get the lowest applicable multiplier. The final `PenalizedScore` is used for filtering (`-min-score`) and KML ordering.
+Roads with mixed types get the lowest applicable multiplier. The final `PenalizedScore` is used for filtering (`--min-score`) and KML ordering.
 
 #### 5. Minimum road length
 
@@ -107,7 +108,7 @@ Roads are sorted by penalized score (highest first). Each road appears as a name
 
 **Default mode:** Each road is drawn as a single polyline colored on a green→yellow→red→magenta gradient based on its total penalized score.
 
-**Multi-color mode** (`-multi-color`): Each segment is colored by its curvature tier:
+**Multi-color mode** (`--multi-color`): Each segment is colored by its curvature tier:
 
 | Tier | Color |
 |------|-------|
@@ -121,39 +122,40 @@ Road descriptions in the KML include penalized score, score per km, total length
 
 ### Caching
 
-Score results are cached per tile in `~/.twisty/cache/scores/`. The cache is keyed on scoring parameters, so it is automatically invalidated when the algorithm changes. Use `-no-cache` to ignore cached scores for the current run (new scores are still written), or `-clear-score-cache` to delete all cached scores before running.
+Score results are cached per tile in `~/.twisty/cache/scores/`. The cache is keyed on scoring parameters, so it is automatically invalidated when the algorithm changes. Use `--no-cache` to ignore cached scores for the current run (new scores are still written), or `--clear-score-cache` to delete all cached scores before running.
 
 ## twisty fetch
 
 Pre-populates the Overpass tile cache for a region without scoring. Useful for warming the cache before a `score` run or managing stale tiles.
 
 ```
-twisty fetch -address <address> [flags]
+twisty fetch --address <address> [flags]
 ```
 
 ### Required flags
 
 | Flag | Description |
 |------|-------------|
-| `-address string` | Center address for the region to fetch |
+| `--address string` | Center address for the region to fetch |
 
 ### Optional flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-radius float` | `25.0` | Search radius in km |
-| `-tile-size float` | `0.05` | Tile size in degrees |
-| `-cache-dir string` | `~/.twisty/cache/overpass/` | Overpass tile cache directory |
-| `-no-cache` | false | Bypass cache reads (still writes fetched tiles) |
-| `-clear-cache` | false | Delete all cached tiles before fetching |
-| `-purge-older-than string` | — | Purge tiles older than a duration before fetching (e.g. `90d`, `6m`; `m` = months) |
-| `-overpass-url string` | `https://overpass-api.de/api/interpreter` | Overpass API endpoint |
-| `-v` | false | Verbose logging to stderr |
+| `--radius float` | `25.0` | Search radius in km |
+| `--tile-size float` | `0.1` | Tile size in degrees |
+| `--cache-dir string` | `~/.twisty/cache/overpass/` | Overpass tile cache directory |
+| `--no-cache` | false | Bypass cache reads (still writes fetched tiles) |
+| `--clear-cache` | false | Delete all cached tiles before fetching |
+| `--purge-older-than string` | — | Purge tiles older than a duration before fetching (e.g. `90d`, `6m`; `m` = months) |
+| `--overpass-url string` | `https://overpass-api.de/api/interpreter` | Overpass API endpoint |
+| `--fetch-delay string` | `1s` | Delay between tile fetches in Go duration format (e.g. `500ms`, `2s`) |
+| `--v` | false | Verbose logging to stderr |
 
 ### Example
 
 ```bash
-twisty fetch -address "Asheville, NC" -radius 30 -purge-older-than 90d
+twisty fetch --address "Asheville, NC" --radius 30 --purge-older-than 90d
 ```
 
 ## twisty route
@@ -161,35 +163,35 @@ twisty fetch -address "Asheville, NC" -radius 30 -purge-older-than 90d
 Fetches candidate routes between two addresses using the [Valhalla API](https://valhalla.openstreetmap.de/), scores each one for curvature, and writes the best match to a GPX file.
 
 ```
-twisty route -origin <address> -dest <address> [flags]
+twisty route --origin <address> --dest <address> [flags]
 ```
 
 ### Required flags
 
 | Flag | Description |
 |------|-------------|
-| `-origin string` | Origin address or `lat,lon` |
-| `-dest string` | Destination address or `lat,lon` |
+| `--origin string` | Origin address or `lat,lon` |
+| `--dest string` | Destination address or `lat,lon` |
 
 ### Optional flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-twist float` | `0.5` | Selection bias: `0.0` = fastest route, `1.0` = twistiest route |
-| `-out string` | `route.gpx` | Output GPX file path |
-| `-show-all` | false | Print a comparison table of all candidate routes |
-| `-overpass-url string` | `https://overpass-api.de/api/interpreter` | Overpass API endpoint (used for road quality filtering) |
-| `-v` | false | Verbose timing logs to stderr |
+| `--twist float` | `0.5` | Selection bias: `0.0` = fastest route, `1.0` = twistiest route |
+| `--out string` | `route.gpx` | Output GPX file path |
+| `--show-all` | false | Print a comparison table of all candidate routes |
+| `--overpass-url string` | `https://overpass-api.de/api/interpreter` | Overpass API endpoint (used for road quality filtering) |
+| `--v` | false | Verbose timing logs to stderr |
 
 ### Example
 
 ```bash
 twisty route \
-  -origin "Asheville, NC" \
-  -dest "Deals Gap, NC" \
-  -twist 0.9 \
-  -out gap_run.gpx \
-  -show-all
+  --origin "Asheville, NC" \
+  --dest "Deals Gap, NC" \
+  --twist 0.9 \
+  --out gap_run.gpx \
+  --show-all
 ```
 
 ### How route selection works
@@ -213,7 +215,7 @@ At `twist=0.0` the fastest route wins; at `twist=1.0` the twistiest wins; interm
 
 ### Output
 
-The selected route is written as a GPX track to `-out`. A summary line is printed showing distance, duration, angular density, and twist score. With `-show-all`, a comparison table lists all candidates with the selected route marked.
+The selected route is written as a GPX track to `--out`. A summary line is printed showing distance, duration, angular density, and twist score. With `--show-all`, a comparison table lists all candidates with the selected route marked.
 
 ## twisty overpass
 
@@ -237,21 +239,21 @@ The local instance is backed by OSM data downloaded from [Geofabrik](https://dow
 Downloads PBF data for the specified regions, converts it to the OSM XML format required by Overpass, and starts the container.
 
 ```
-twisty overpass start -regions <region>[,<region>...] [flags]
+twisty overpass start --regions <region>[,<region>...] [flags]
 ```
 
 #### Required flags
 
 | Flag | Description |
 |------|-------------|
-| `-regions string` | Comma-separated Geofabrik region paths (e.g. `north-america/us/new-york`) |
+| `--regions string` | Comma-separated Geofabrik region paths (e.g. `north-america/us/new-york`) |
 
 #### Optional flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-port int` | `8080` | Host port to expose the Overpass API on |
-| `-data-dir string` | `~/.twisty/overpass` | Directory for downloaded PBF files and the Overpass database |
+| `--port int` | `8080` | Host port to expose the Overpass API on |
+| `--data-dir string` | `~/.twisty/overpass` | Directory for downloaded PBF files and the Overpass database |
 
 Once the container is ready the endpoint is printed:
 
@@ -259,20 +261,20 @@ Once the container is ready the endpoint is printed:
 Overpass API is ready: http://localhost:8080/api/interpreter
 ```
 
-Pass this URL to `twisty score` or `twisty fetch` via `-overpass-url`.
+Pass this URL to `twisty score` or `twisty fetch` via `--overpass-url`.
 
 #### Example
 
 ```bash
 twisty overpass start \
-  -regions north-america/us/north-carolina,north-america/us/tennessee \
-  -port 8080
+  --regions north-america/us/north-carolina,north-america/us/tennessee \
+  --port 8080
 
 # Then score roads against the local instance:
 twisty score \
-  -address "Asheville, NC" \
-  -overpass-url http://localhost:8080/api/interpreter \
-  -out roads.kml
+  --address "Asheville, NC" \
+  --overpass-url http://localhost:8080/api/interpreter \
+  --out roads.kml
 ```
 
 #### Region management
@@ -300,15 +302,21 @@ twisty overpass status
 Streams live logs from the container (equivalent to `docker logs -f`).
 
 ```
-twisty overpass logs
+twisty overpass logs [--lines <n>]
 ```
+
+#### Optional flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--lines int` | `0` | Number of log lines to show (0 = stream all) |
 
 ### twisty overpass clean
 
 Stops the container and removes the entire data directory.
 
 ```
-twisty overpass clean [-data-dir <dir>]
+twisty overpass clean [--data-dir <dir>]
 ```
 
 ### twisty overpass build
@@ -316,8 +324,14 @@ twisty overpass clean [-data-dir <dir>]
 Builds the Overpass Docker image from source. Run this if the pre-built image is not available for your architecture (e.g. Apple Silicon). `start` calls this automatically when needed.
 
 ```
-twisty overpass build [-data-dir <dir>]
+twisty overpass build [--src-dir <dir>]
 ```
+
+#### Optional flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--src-dir string` | — | Source directory for the Docker build |
 
 ### Docker image
 
