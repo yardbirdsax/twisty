@@ -2,6 +2,7 @@ package quality
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/yardbirdsax/twisty/geo"
@@ -163,9 +164,15 @@ func FindConnectedComponents(ways ScoredWays, proximityM float64) []ScoredWays {
 		compMap[root] = append(compMap[root], w)
 	}
 
+	roots := make([]int, 0, len(compMap))
+	for k := range compMap {
+		roots = append(roots, k)
+	}
+	sort.Ints(roots)
+
 	components := make([]ScoredWays, 0, len(compMap))
-	for _, comp := range compMap {
-		components = append(components, comp)
+	for _, k := range roots {
+		components = append(components, compMap[k])
 	}
 	return components
 }
@@ -205,26 +212,39 @@ func buildAdjacency(ways ScoredWays) map[geo.Coord][]wayEnd {
 // ends are the route terminus (where we finish), not where we start, so they
 // are skipped when looking for a start point.
 func findStartIndex(ways ScoredWays, adj map[geo.Coord][]wayEnd) (index int, startFromEnd bool) {
-	// First pass: prefer degree-1 nodes at a way's start (natural forward traversal)
-	// or at the end of a non-oneway way (can be reversed to become a start).
-	for _, ends := range adj {
+	type candidate struct {
+		coord        geo.Coord
+		index        int
+		startFromEnd bool
+	}
+	var candidates []candidate
+
+	for coord, ends := range adj {
 		if len(ends) != 1 {
 			continue
 		}
 		we := ends[0]
 		w := ways[we.index]
 		if we.isStart {
-			// Degree-1 node is the way's start: begin traversal naturally.
-			return we.index, false
+			candidates = append(candidates, candidate{coord: coord, index: we.index, startFromEnd: false})
+		} else if !isOneway(w) {
+			candidates = append(candidates, candidate{coord: coord, index: we.index, startFromEnd: true})
 		}
-		// Degree-1 node is the way's end.
-		if !isOneway(w) {
-			// Can reverse to start from this terminus.
-			return we.index, true
-		}
-		// Oneway end — this is the route terminus, not a valid start. Skip.
+		// Oneway end — route terminus, not a valid start. Skip.
 	}
-	return 0, false
+
+	if len(candidates) == 0 {
+		return 0, false
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].coord.Lat != candidates[j].coord.Lat {
+			return candidates[i].coord.Lat < candidates[j].coord.Lat
+		}
+		return candidates[i].coord.Lon < candidates[j].coord.Lon
+	})
+
+	return candidates[0].index, candidates[0].startFromEnd
 }
 
 // wayExitBearing returns the bearing of the last segment of a way.

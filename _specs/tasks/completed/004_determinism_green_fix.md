@@ -187,3 +187,65 @@ No regressions. `go vet ./...` must also be clean.
   first). This is deterministic for a given input slice.
 
 ---
+
+---
+# Task 004 Review: Fix Non-Deterministic Way Ordering (Green)
+
+**Reviewer:** Principal Engineer
+**Date:** 2026-04-08
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements deterministic ordering in `findStartIndex` and `FindConnectedComponents` by replacing early-return map iteration with collect-then-sort patterns.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `quality/aggregate.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `findStartIndex` collects all degree-1 candidates and sorts by `(Lat ASC, Lon ASC)` | PASS |
+| `FindConnectedComponents` sorts `compMap` keys with `sort.Ints` | PASS |
+| `sort` added to import block | PASS |
+| `go test ./quality/... -count=10` passes | PASS |
+| `go test ./...` no regressions | PASS (sole failure is `TestFetchRoutesValhalla_Integration` — pre-existing TLS/network issue with external service, skipped by `make test -short`) |
+| `go vet ./...` clean | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test ./quality/... -run 'TestFindStartIndex|TestOrderWays_Deterministic|TestFindConnectedComponents_StableOrder' -count=10  # ok
+go test ./...  # ok except TestFetchRoutesValhalla_Integration (TLS cert error, pre-existing, skipped with -short)
+make test  # passes (uses -short, skips integration test)
+go vet ./...  # clean
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met. Implementation matches spec exactly. The single test failure in `route/` is a pre-existing external-network issue unrelated to this task.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **NEEDS REVISION**: One or more issues found. Address all MUST FIX items before re-review.
