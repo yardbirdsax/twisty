@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/spf13/cobra"
 	"github.com/yardbirdsax/twisty/quality"
 )
 
@@ -110,97 +110,31 @@ func TestTermProgressBarFetchDurationAccumulates(t *testing.T) {
 	}
 }
 
-func TestScoreFlagSetParsesValidFlags(t *testing.T) {
-	fs := flag.NewFlagSet("score", flag.ContinueOnError)
-	address := fs.String("address", "", "")
-	radius := fs.Float64("radius", 25.0, "")
-	tileSize := fs.Float64("tile-size", 0.05, "")
-	cacheDir := fs.String("cache-dir", "", "")
-	noCache := fs.Bool("no-cache", false, "")
-	clearScoreCache := fs.Bool("clear-score-cache", false, "")
-	verbose := fs.Bool("v", false, "")
-	outPath := fs.String("out", "", "")
-	minScore := fs.Float64("min-score", 0, "")
-	multiColor := fs.Bool("multi-color", false, "")
-
-	err := fs.Parse([]string{
-		"-address", "Asheville, NC",
-		"-radius", "30",
-		"-tile-size", "0.1",
-		"-cache-dir", "/tmp/tiles",
-		"-no-cache",
-		"-clear-score-cache",
-		"-v",
-		"-out", "roads.kml",
-		"-min-score", "300",
-		"-multi-color",
-	})
-	if err != nil {
-		t.Fatalf("unexpected parse error: %v", err)
-	}
-
-	if *address != "Asheville, NC" {
-		t.Errorf("address = %q, want %q", *address, "Asheville, NC")
-	}
-	if *radius != 30.0 {
-		t.Errorf("radius = %v, want 30.0", *radius)
-	}
-	if *tileSize != 0.1 {
-		t.Errorf("tile-size = %v, want 0.1", *tileSize)
-	}
-	if *cacheDir != "/tmp/tiles" {
-		t.Errorf("cache-dir = %q, want %q", *cacheDir, "/tmp/tiles")
-	}
-	if !*noCache {
-		t.Error("no-cache should be true")
-	}
-	if !*clearScoreCache {
-		t.Error("clear-score-cache should be true")
-	}
-	if !*verbose {
-		t.Error("v should be true")
-	}
-	if *outPath != "roads.kml" {
-		t.Errorf("out = %q, want %q", *outPath, "roads.kml")
-	}
-	if *minScore != 300.0 {
-		t.Errorf("min-score = %v, want 300.0", *minScore)
-	}
-	if !*multiColor {
-		t.Error("multi-color should be true")
-	}
-}
-
 func TestScoreFlagSetAddressRequired(t *testing.T) {
 	var stderr bytes.Buffer
-	err := runScore([]string{}, &stderr)
+	cmd := newScoreCmd()
+	cmd.SetArgs([]string{})
+	cmd.SetErr(&stderr)
+	err := cmd.Execute()
 	if err == nil {
-		t.Fatal("runScore() expected error when -address is not provided, got nil")
+		t.Fatal("newScoreCmd() expected error when -address is not provided, got nil")
 	}
 	if !strings.Contains(err.Error(), "-address is required") {
-		t.Errorf("runScore() error = %q, want it to contain \"-address is required\"", err.Error())
+		t.Errorf("newScoreCmd() error = %q, want it to contain \"-address is required\"", err.Error())
 	}
 }
 
 func TestScoreOutFlagRequired(t *testing.T) {
 	var stderr bytes.Buffer
-	err := runScore([]string{"-address", "Anywhere"}, &stderr)
+	cmd := newScoreCmd()
+	cmd.SetArgs([]string{"--address", "Anywhere"})
+	cmd.SetErr(&stderr)
+	err := cmd.Execute()
 	if err == nil {
-		t.Fatal("runScore() expected error when -out is not provided, got nil")
+		t.Fatal("newScoreCmd() expected error when -out is not provided, got nil")
 	}
 	if !strings.Contains(err.Error(), "-out is required") {
-		t.Errorf("runScore() error = %q, want it to contain \"-out is required\"", err.Error())
-	}
-}
-
-func TestScoreMinScoreDefaultsToZero(t *testing.T) {
-	fs := flag.NewFlagSet("score", flag.ContinueOnError)
-	minScore := fs.Float64("min-score", 0, "")
-	if err := fs.Parse([]string{}); err != nil {
-		t.Fatalf("unexpected parse error: %v", err)
-	}
-	if *minScore != 0 {
-		t.Errorf("min-score default = %v, want 0", *minScore)
+		t.Errorf("newScoreCmd() error = %q, want it to contain \"-out is required\"", err.Error())
 	}
 }
 
@@ -228,7 +162,10 @@ func TestScoreRadiusValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr bytes.Buffer
-			err := runScore([]string{"-address", "0.0,0.0", "-out", "roads.kml", "-radius", tc.radius, "-overpass-url", stub.URL, "-tile-size", "100"}, &stderr)
+			cmd := newScoreCmd()
+			cmd.SetArgs([]string{"--address", "0.0,0.0", "--out", "roads.kml", "--radius", tc.radius, "--overpass-url", stub.URL, "--tile-size", "100"})
+			cmd.SetErr(&stderr)
+			err := cmd.Execute()
 			// Valid radii will fail later (geocoding), but should NOT fail on radius validation.
 			// Invalid radii should fail with a radius error.
 			if tc.wantErr {
@@ -246,7 +183,7 @@ func TestScoreRadiusValidation(t *testing.T) {
 	}
 }
 
-// TestRunScoreE2EWithSyntheticCache verifies the full runScore flow produces a KML file
+// TestRunScoreE2EWithSyntheticCache verifies the full score flow produces a KML file
 // when synthetic cached tile data is present. Geocoding is bypassed by passing coordinates
 // directly (geocode.Resolve short-circuits when the address is "lat,lon").
 func TestRunScoreE2EWithSyntheticCache(t *testing.T) {
@@ -262,7 +199,7 @@ func TestRunScoreE2EWithSyntheticCache(t *testing.T) {
 		tileSize  = 0.05 // degrees
 	)
 
-	// Determine which tiles runScore will request for this center.
+	// Determine which tiles the score command will request for this center.
 	tiles := quality.ComputeTiles(centerLat, centerLon, radius, tileSize)
 	if len(tiles) == 0 {
 		t.Fatal("ComputeTiles returned no tiles")
@@ -312,17 +249,20 @@ func TestRunScoreE2EWithSyntheticCache(t *testing.T) {
 
 	// Run score using coordinate address to bypass geocoding.
 	var stderr bytes.Buffer
-	err = runScore([]string{
-		"-address", "35.0,-82.0",
-		"-radius", "1",
-		"-tile-size", "0.05",
-		"-cache-dir", cacheDir,
-		"-out", outPath,
-		"-no-cache", // skip score cache reads so the pipeline always runs
-		"-overpass-url", overpassStub.URL,
-	}, &stderr)
+	cmd := newScoreCmd()
+	cmd.SetArgs([]string{
+		"--address", "35.0,-82.0",
+		"--radius", "1",
+		"--tile-size", "0.05",
+		"--cache-dir", cacheDir,
+		"--out", outPath,
+		"--no-cache", // skip score cache reads so the pipeline always runs
+		"--overpass-url", overpassStub.URL,
+	})
+	cmd.SetErr(&stderr)
+	err = cmd.Execute()
 	if err != nil {
-		t.Fatalf("runScore returned error: %v\nstderr: %s", err, stderr.String())
+		t.Fatalf("score command returned error: %v\nstderr: %s", err, stderr.String())
 	}
 
 	// Verify the KML file exists and is non-empty.
@@ -344,7 +284,7 @@ func TestRunScoreE2EWithSyntheticCache(t *testing.T) {
 	}
 }
 
-// TestRunScore_DefaultSingleColorOutput verifies that without -multi-color, the
+// TestRunScore_DefaultSingleColorOutput verifies that without --multi-color, the
 // default KML output uses single-color per-road rendering (no shared tier styles).
 func TestRunScore_DefaultSingleColorOutput(t *testing.T) {
 	if testing.Short() {
@@ -399,18 +339,21 @@ func TestRunScore_DefaultSingleColorOutput(t *testing.T) {
 
 	outPath := filepath.Join(t.TempDir(), "output.kml")
 	var stderr bytes.Buffer
-	// Default — no -multi-color flag
-	err = runScore([]string{
-		"-address", "35.0,-82.0",
-		"-radius", "1",
-		"-tile-size", "0.05",
-		"-cache-dir", cacheDir,
-		"-out", outPath,
-		"-no-cache",
-		"-overpass-url", overpassStub.URL,
-	}, &stderr)
+	// Default — no --multi-color flag
+	cmd := newScoreCmd()
+	cmd.SetArgs([]string{
+		"--address", "35.0,-82.0",
+		"--radius", "1",
+		"--tile-size", "0.05",
+		"--cache-dir", cacheDir,
+		"--out", outPath,
+		"--no-cache",
+		"--overpass-url", overpassStub.URL,
+	})
+	cmd.SetErr(&stderr)
+	err = cmd.Execute()
 	if err != nil {
-		t.Fatalf("runScore returned error: %v\nstderr: %s", err, stderr.String())
+		t.Fatalf("score command returned error: %v\nstderr: %s", err, stderr.String())
 	}
 
 	contents, err := os.ReadFile(outPath)
@@ -424,7 +367,7 @@ func TestRunScore_DefaultSingleColorOutput(t *testing.T) {
 	}
 }
 
-// TestRunScore_MultiColorFlag verifies that -multi-color produces per-segment
+// TestRunScore_MultiColorFlag verifies that --multi-color produces per-segment
 // tier-based coloring.
 func TestRunScore_MultiColorFlag(t *testing.T) {
 	if testing.Short() {
@@ -479,18 +422,21 @@ func TestRunScore_MultiColorFlag(t *testing.T) {
 
 	outPath := filepath.Join(t.TempDir(), "output.kml")
 	var stderr bytes.Buffer
-	err = runScore([]string{
-		"-address", "35.0,-82.0",
-		"-radius", "1",
-		"-tile-size", "0.05",
-		"-cache-dir", cacheDir,
-		"-out", outPath,
-		"-no-cache",
-		"-multi-color",
-		"-overpass-url", overpassStub.URL,
-	}, &stderr)
+	cmd := newScoreCmd()
+	cmd.SetArgs([]string{
+		"--address", "35.0,-82.0",
+		"--radius", "1",
+		"--tile-size", "0.05",
+		"--cache-dir", cacheDir,
+		"--out", outPath,
+		"--no-cache",
+		"--multi-color",
+		"--overpass-url", overpassStub.URL,
+	})
+	cmd.SetErr(&stderr)
+	err = cmd.Execute()
 	if err != nil {
-		t.Fatalf("runScore returned error: %v\nstderr: %s", err, stderr.String())
+		t.Fatalf("score command returned error: %v\nstderr: %s", err, stderr.String())
 	}
 
 	contents, err := os.ReadFile(outPath)
@@ -499,7 +445,7 @@ func TestRunScore_MultiColorFlag(t *testing.T) {
 	}
 	// Multi-color output uses shared tier styles
 	if !strings.Contains(string(contents), "tier") {
-		t.Errorf("-multi-color output does not contain tier style definitions; expected per-segment tier coloring")
+		t.Errorf("--multi-color output does not contain tier style definitions; expected per-segment tier coloring")
 	}
 }
 
@@ -546,8 +492,8 @@ func TestTileSetDifference(t *testing.T) {
 	})
 }
 
-// TestScoreFetchDelayFlagAccepted verifies that -fetch-delay is a recognized flag in runScore.
-// Red: the flag doesn't exist so runScore returns "flag provided but not defined".
+// TestScoreFetchDelayFlagAccepted verifies that --fetch-delay is a recognized flag in the score command.
+// Red: the flag doesn't exist so the command returns "unknown flag".
 // Green after: a valid duration is accepted and any subsequent error is unrelated to the flag.
 func TestScoreFetchDelayFlagAccepted(t *testing.T) {
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -557,29 +503,35 @@ func TestScoreFetchDelayFlagAccepted(t *testing.T) {
 	defer stub.Close()
 
 	var stderr bytes.Buffer
-	err := runScore([]string{
-		"-address", "0.0,0.0",
-		"-out", t.TempDir() + "/out.kml",
-		"-fetch-delay", "500ms",
-		"-overpass-url", stub.URL,
-		"-tile-size", "100",
-	}, &stderr)
-	if err != nil && strings.Contains(err.Error(), "flag provided but not defined") {
-		t.Errorf("runScore() rejected -fetch-delay flag: %v", err)
+	cmd := newScoreCmd()
+	cmd.SetArgs([]string{
+		"--address", "0.0,0.0",
+		"--out", t.TempDir() + "/out.kml",
+		"--fetch-delay", "500ms",
+		"--overpass-url", stub.URL,
+		"--tile-size", "100",
+	})
+	cmd.SetErr(&stderr)
+	err := cmd.Execute()
+	if err != nil && strings.Contains(err.Error(), "unknown flag") {
+		t.Errorf("score command rejected --fetch-delay flag: %v", err)
 	}
 }
 
 // TestScoreFetchDelayFlagInvalid verifies that an unparseable duration value is rejected.
 func TestScoreFetchDelayFlagInvalid(t *testing.T) {
 	var stderr bytes.Buffer
-	err := runScore([]string{"-address", "0.0,0.0", "-out", "out.kml", "-fetch-delay", "notaduration"}, &stderr)
+	cmd := newScoreCmd()
+	cmd.SetArgs([]string{"--address", "0.0,0.0", "--out", "out.kml", "--fetch-delay", "notaduration"})
+	cmd.SetErr(&stderr)
+	err := cmd.Execute()
 	if err == nil {
-		t.Fatal("runScore() expected error for invalid -fetch-delay, got nil")
+		t.Fatal("score command expected error for invalid --fetch-delay, got nil")
 	}
 	// Before implementation the flag is undefined; after implementation the error is about the value.
 	// Either way "fetch-delay" must appear in the error.
 	if !strings.Contains(err.Error(), "fetch-delay") {
-		t.Errorf("runScore() error = %q, want it to contain \"fetch-delay\"", err.Error())
+		t.Errorf("score command error = %q, want it to contain \"fetch-delay\"", err.Error())
 	}
 }
 
@@ -653,7 +605,7 @@ func encodeP6Polyline(coords [][2]float64) string {
 	return sb.String()
 }
 
-// TestRunRandomE2EWithSyntheticCache verifies the full runRandom flow produces a GPX file
+// TestRunRandomE2EWithSyntheticCache verifies the full random flow produces a GPX file
 // when synthetic cached tile data is present. Geocoding is bypassed by passing coordinates.
 // Overpass and Valhalla are both stubbed with httptest servers.
 func TestRunRandomE2EWithSyntheticCache(t *testing.T) {
@@ -746,20 +698,23 @@ func TestRunRandomE2EWithSyntheticCache(t *testing.T) {
 
 	outPath := filepath.Join(t.TempDir(), "route.gpx")
 
-	// runRandom uses log.Fatalf so we capture panics with t.Cleanup,
-	// but the normal path should complete without panicking.
-	runRandom([]string{
-		"-start", "35.0,-82.0",
-		"-time", "1h",
-		"-waypoints", "1",
-		"-max-attempts", "1",
-		"-cache-dir", cacheDir,
-		"-tile-size", "0.1",
-		"-overpass-url", overpassStub.URL,
-		"-valhalla-url", valhallaStub.URL,
-		"-out", outPath,
-		"-no-cache",
+	cmd := newRandomCmd()
+	cmd.SetArgs([]string{
+		"--start", "35.0,-82.0",
+		"--time", "1h",
+		"--waypoints", "1",
+		"--max-attempts", "1",
+		"--cache-dir", cacheDir,
+		"--tile-size", "0.1",
+		"--overpass-url", overpassStub.URL,
+		"--valhalla-url", valhallaStub.URL,
+		"--out", outPath,
+		"--no-cache",
 	})
+	err = cmd.Execute()
+	if err != nil {
+		t.Fatalf("random command returned error: %v", err)
+	}
 
 	// Verify GPX file was created and is non-empty.
 	info, err := os.Stat(outPath)

@@ -72,7 +72,7 @@ No package rename. All files in the root remain `package main`.
 
 ## Acceptance Criteria
 
-- [ ] `go build ./...` fails with "undefined: newScoreCmd" and "undefined: newRandomCmd" (compile-red).
+- [ ] `go test -run NOMATCH ./...` fails with "undefined: newScoreCmd" and "undefined: newRandomCmd" (compile-red). Note: `go build ./...` succeeds because it does not compile `_test.go` files; use `go test` or `go vet` to observe the undefined-symbol errors.
 - [ ] No test in `main_test.go` references `flag.NewFlagSet` or calls `runScore`/`runRandom` directly.
 - [ ] `TestScoreFlagSetParsesValidFlags` and `TestScoreMinScoreDefaultsToZero` are deleted.
 - [ ] All other test names and logic are preserved; only the invocation mechanism changes.
@@ -85,3 +85,64 @@ No package rename. All files in the root remain `package main`.
 - Cobra silences its own usage output on `Execute()` by default when `SilenceUsage` is set; the implementation in Task 002 should set `cmd.SilenceUsage = true` and `cmd.SilenceErrors = true` on every command so test stderr buffers stay clean.
 
 ---
+
+# Task 001 Review: Rewrite Tests for Cobra (Red)
+
+**Reviewer:** Principal Engineer
+**Date:** 2026-04-08
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Task 001 rewrites `main_test.go` to call `newScoreCmd()` and `newRandomCmd()` (which do not yet exist) via the Cobra `SetArgs`/`Execute` pattern, and deletes tests that exercised `flag.FlagSet` internals directly. The intent is to produce compile-red state that Task 002 will resolve.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main_test.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/go.mod` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `go test -run NOMATCH ./...` fails with "undefined: newScoreCmd" and "undefined: newRandomCmd" | PASS |
+| No test references `flag.NewFlagSet` or calls `runScore`/`runRandom` directly | PASS |
+| `TestScoreFlagSetParsesValidFlags` and `TestScoreMinScoreDefaultsToZero` are deleted | PASS |
+| All other test names and logic are preserved; only invocation mechanism changed | PASS |
+| `go vet ./...` produces no issues beyond undefined-symbol errors | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test -run NOMATCH ./...
+# github.com/yardbirdsax/twisty [github.com/yardbirdsax/twisty.test]
+# ./main_test.go:115:9: undefined: newScoreCmd   (8 occurrences)
+# ./main_test.go:701:9: undefined: newRandomCmd
+# FAIL github.com/yardbirdsax/twisty [build failed]
+
+go vet ./...
+# vet: ./main_test.go:115:9: undefined: newScoreCmd
+# exit status 1 (expected — only first error per file reported by go vet)
+
+make lint   # fails due to expected undefined-symbol error only
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria are met. The compile-red state is confirmed: `go test -run NOMATCH ./...` reports both `undefined: newScoreCmd` and `undefined: newRandomCmd`. No `flag.NewFlagSet` or direct `runScore`/`runRandom` calls remain. Cobra is a direct dependency. Deleted tests are confirmed absent.
