@@ -294,7 +294,9 @@ func runScore(args []string, stderr io.Writer) error {
 	clearScoreCache := fs.Bool("clear-score-cache", false, "Delete all score cache entries before running")
 	verbose := fs.Bool("v", false, "Enable verbose logging to stderr")
 	outPath := fs.String("out", "", "output KML file path (required)")
-	minScore := fs.Float64("min-score", 0, "minimum penalized score to include in output")
+	minScore := fs.Float64("min-score", 0, "minimum penalized score (after highway-type penalties) to include in output; "+
+		"in single-color mode roads graduate green→yellow→red→magenta over scores 0–8000; "+
+		"in multi-color mode colors reflect per-segment curve tightness (green=straight, red=tightest) regardless of this threshold")
 	multiColor := fs.Bool("multi-color", false, "Use per-segment tier coloring instead of single-color per-road")
 	overpassURL := fs.String("overpass-url", quality.OverpassBaseURL, "Overpass API endpoint URL")
 	if err := fs.Parse(args); err != nil {
