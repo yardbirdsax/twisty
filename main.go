@@ -178,6 +178,7 @@ func runFetch(args []string) {
 	purgeOlderThan := fs.String("purge-older-than", "", "Purge cache files older than duration (e.g., 90d, 6m where m=months not minutes)")
 	verbose := fs.Bool("v", false, "Enable verbose timing logs to stderr")
 	overpassURL := fs.String("overpass-url", quality.OverpassBaseURL, "Overpass API endpoint URL")
+	fetchDelay := fs.String("fetch-delay", "", "delay between tile fetches in Go duration format (e.g. 500ms, 2s); default 1s")
 	fs.Parse(args)
 
 	var logger *slog.Logger
@@ -270,6 +271,14 @@ func runFetch(args []string) {
 		Logger:   logger,
 		Progress: progress,
 	}
+	if *fetchDelay != "" {
+		d, err := time.ParseDuration(*fetchDelay)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid -fetch-delay %q: %v\n", *fetchDelay, err)
+			os.Exit(1)
+		}
+		cfg.RateLimitDelay = d
+	}
 
 	done = stageTimer(logger, "fetch-tiled-ways")
 	ways, err := quality.FetchTiledWays(context.Background(), centerResult.Lat, centerResult.Lon, *radius, cfg)
@@ -299,6 +308,7 @@ func runScore(args []string, stderr io.Writer) error {
 		"in multi-color mode colors reflect per-segment curve tightness (green=straight, red=tightest) regardless of this threshold")
 	multiColor := fs.Bool("multi-color", false, "Use per-segment tier coloring instead of single-color per-road")
 	overpassURL := fs.String("overpass-url", quality.OverpassBaseURL, "Overpass API endpoint URL")
+	fetchDelay := fs.String("fetch-delay", "", "delay between tile fetches in Go duration format (e.g. 500ms, 2s); default 1s")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -380,6 +390,13 @@ func runScore(args []string, stderr io.Writer) error {
 		Cache:    tileCache,
 		Logger:   logger,
 		Progress: fetchProgress,
+	}
+	if *fetchDelay != "" {
+		d, err := time.ParseDuration(*fetchDelay)
+		if err != nil {
+			return fmt.Errorf("invalid -fetch-delay %q: %w", *fetchDelay, err)
+		}
+		fetchCfg.RateLimitDelay = d
 	}
 	if _, err := quality.FetchTiledWays(context.Background(), centerResult.Lat, centerResult.Lon, *radius, fetchCfg); err != nil {
 		return fmt.Errorf("fetching tiles: %w", err)

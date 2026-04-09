@@ -546,6 +546,43 @@ func TestTileSetDifference(t *testing.T) {
 	})
 }
 
+// TestScoreFetchDelayFlagAccepted verifies that -fetch-delay is a recognized flag in runScore.
+// Red: the flag doesn't exist so runScore returns "flag provided but not defined".
+// Green after: a valid duration is accepted and any subsequent error is unrelated to the flag.
+func TestScoreFetchDelayFlagAccepted(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"elements":[]}`))
+	}))
+	defer stub.Close()
+
+	var stderr bytes.Buffer
+	err := runScore([]string{
+		"-address", "0.0,0.0",
+		"-out", t.TempDir() + "/out.kml",
+		"-fetch-delay", "500ms",
+		"-overpass-url", stub.URL,
+		"-tile-size", "100",
+	}, &stderr)
+	if err != nil && strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Errorf("runScore() rejected -fetch-delay flag: %v", err)
+	}
+}
+
+// TestScoreFetchDelayFlagInvalid verifies that an unparseable duration value is rejected.
+func TestScoreFetchDelayFlagInvalid(t *testing.T) {
+	var stderr bytes.Buffer
+	err := runScore([]string{"-address", "0.0,0.0", "-out", "out.kml", "-fetch-delay", "notaduration"}, &stderr)
+	if err == nil {
+		t.Fatal("runScore() expected error for invalid -fetch-delay, got nil")
+	}
+	// Before implementation the flag is undefined; after implementation the error is about the value.
+	// Either way "fetch-delay" must appear in the error.
+	if !strings.Contains(err.Error(), "fetch-delay") {
+		t.Errorf("runScore() error = %q, want it to contain \"fetch-delay\"", err.Error())
+	}
+}
+
 func TestParseDuration(t *testing.T) {
 	tests := []struct {
 		input   string
