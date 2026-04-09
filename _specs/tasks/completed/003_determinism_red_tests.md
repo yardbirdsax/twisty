@@ -189,6 +189,71 @@ func TestFindConnectedComponents_StableOrder(t *testing.T) {
 
 ---
 
+## Review
+
+---
+# Task 003 Review: Write Failing Tests for Deterministic Way Ordering (Red)
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-04-08
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Added four test functions to `quality/aggregate_test.go` targeting map-iteration non-determinism in `findStartIndex` and `FindConnectedComponents`. These are red-phase tests that fail intermittently before the Task 004 fix.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/quality/aggregate_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| All four test functions present in `quality/aggregate_test.go` | PASS |
+| `go build ./...` succeeds | PASS |
+| Tests fail on at least some runs with `-count=10` | PASS |
+| No existing tests modified or deleted | PASS |
+| `go vet ./...` reports no issues | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go build ./...           # no output (success)
+go vet ./...             # no output (success)
+go test ./quality/... -run 'TestFindStartIndex|TestOrderWays_Deterministic|TestFindConnectedComponents_StableOrder' -count=10
+# Multiple FAILs across runs confirming non-determinism
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All four tests are present and match the spec exactly. Build and vet pass. The `-count=10` run confirms tests fail intermittently, exercising the map-iteration non-determinism as intended.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **NEEDS REVISION**: One or more issues found. Address all MUST FIX items before re-review.
+
+---
+
 ## Acceptance Criteria
 
 - [ ] All four test functions are present in `quality/aggregate_test.go`.

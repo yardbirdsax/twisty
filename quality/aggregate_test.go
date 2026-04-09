@@ -1260,3 +1260,119 @@ func TestOrderWays_DisconnectedSubgraph(t *testing.T) {
 		}
 	}
 }
+
+func TestFindStartIndex_PicksLowerLatTerminus(t *testing.T) {
+	t.Parallel()
+	south := geo.Coord{Lat: 44.000, Lon: -72.0}
+	mid1  := geo.Coord{Lat: 44.001, Lon: -72.0}
+	mid2  := geo.Coord{Lat: 44.002, Lon: -72.0}
+	north := geo.Coord{Lat: 44.003, Lon: -72.0}
+
+	ways := ScoredWays{
+		makeWay(1, south, mid1),
+		makeWay(2, mid1, mid2),
+		makeWay(3, mid2, north),
+	}
+
+	adj := buildAdjacency(ways)
+	idx, startFromEnd := findStartIndex(ways, adj)
+
+	// The southern terminus is a degree-1 node at way 0's start.
+	// findStartIndex must always return it (lower lat wins).
+	if startFromEnd {
+		t.Errorf("startFromEnd = true; expected false (forward traversal from southern terminus)")
+	}
+	gotStart, _, ok := wayEndpoints(ways[idx])
+	if !ok {
+		t.Fatal("chosen way has no segments")
+	}
+	if gotStart != south {
+		t.Errorf("start coord = %v; want southern terminus %v", gotStart, south)
+	}
+}
+
+func TestFindStartIndex_PicksLowerLatTerminus_ReverseInput(t *testing.T) {
+	t.Parallel()
+	south := geo.Coord{Lat: 44.000, Lon: -72.0}
+	mid1  := geo.Coord{Lat: 44.001, Lon: -72.0}
+	mid2  := geo.Coord{Lat: 44.002, Lon: -72.0}
+	north := geo.Coord{Lat: 44.003, Lon: -72.0}
+
+	// Ways provided in reverse geographic order.
+	ways := ScoredWays{
+		makeWay(3, mid2, north),
+		makeWay(2, mid1, mid2),
+		makeWay(1, south, mid1),
+	}
+
+	adj := buildAdjacency(ways)
+	idx, startFromEnd := findStartIndex(ways, adj)
+
+	// Whether we start from the way's start or reverse it, the actual
+	// geographic start point must still be the southern terminus.
+	var actualStart geo.Coord
+	if startFromEnd {
+		_, actualStart, _ = wayEndpoints(ways[idx])
+	} else {
+		actualStart, _, _ = wayEndpoints(ways[idx])
+	}
+	if actualStart != south {
+		t.Errorf("start coord = %v; want southern terminus %v", actualStart, south)
+	}
+}
+
+func TestOrderWays_Deterministic(t *testing.T) {
+	t.Parallel()
+	south := geo.Coord{Lat: 44.000, Lon: -72.0}
+	mid1  := geo.Coord{Lat: 44.001, Lon: -72.0}
+	mid2  := geo.Coord{Lat: 44.002, Lon: -72.0}
+	north := geo.Coord{Lat: 44.003, Lon: -72.0}
+
+	ways := ScoredWays{
+		makeWay(1, south, mid1),
+		makeWay(2, mid1, mid2),
+		makeWay(3, mid2, north),
+	}
+
+	first := OrderWays(ways)
+	if len(first) != 3 {
+		t.Fatalf("expected 3 ways, got %d", len(first))
+	}
+
+	for i := 0; i < 100; i++ {
+		got := OrderWays(ways)
+		if len(got) != len(first) {
+			t.Fatalf("iteration %d: length %d, want %d", i, len(got), len(first))
+		}
+		for j := range first {
+			if got[j].WayID != first[j].WayID {
+				t.Errorf("iteration %d: ways[%d].WayID = %d, want %d",
+					i, j, got[j].WayID, first[j].WayID)
+			}
+		}
+	}
+}
+
+func TestFindConnectedComponents_StableOrder(t *testing.T) {
+	t.Parallel()
+	// Cluster A — Vermont area
+	a := makeWay(10, geo.Coord{Lat: 44.000, Lon: -72.0}, geo.Coord{Lat: 44.001, Lon: -72.0})
+	// Cluster B — North Carolina area (far away, will not connect to A)
+	b := makeWay(20, geo.Coord{Lat: 36.000, Lon: -80.0}, geo.Coord{Lat: 36.001, Lon: -80.0})
+
+	ways := ScoredWays{a, b}
+	comps := FindConnectedComponents(ways, ConnectedEndpointProximityM)
+
+	if len(comps) != 2 {
+		t.Fatalf("expected 2 components, got %d", len(comps))
+	}
+
+	// Component order must be stable: the component whose union-find root has
+	// the lower index (i.e. way at input index 0) must come first.
+	if comps[0][0].WayID != 10 {
+		t.Errorf("first component WayID = %d; want 10 (lower input index)", comps[0][0].WayID)
+	}
+	if comps[1][0].WayID != 20 {
+		t.Errorf("second component WayID = %d; want 20", comps[1][0].WayID)
+	}
+}
