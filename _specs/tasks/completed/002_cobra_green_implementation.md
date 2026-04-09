@@ -177,3 +177,173 @@ go test -run TestRunRandomE2EWithSyntheticCache -v -count=1
 - The `overpass.go` sub-handlers (`runOverpassStart`, etc.) already receive parsed values through local vars; the refactor is mechanical — wrap each in a `*cobra.Command` and move the `flag.NewFlagSet` block into the factory.
 
 ---
+
+---
+# Task 002 Review: Implement Cobra Commands (Green)
+
+**Reviewer:** Principal Engineer
+**Date:** 2026-04-08
+**Verdict:** NEEDS REVISION
+
+---
+
+## Summary
+
+Replaced the hand-rolled `os.Args` switch in `main()` with a Cobra command tree. Each subcommand has a factory function (`newScoreCmd`, `newFetchCmd`, `newRouteCmd`, `newRandomCmd`, `newOverpassCmd`) that binds flags and delegates to an `exec*` helper.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/overpass.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `go build ./...` succeeds | PASS |
+| `go test ./... -count=1 -short` passes | PASS |
+| `go test -run TestRunScoreE2EWithSyntheticCache` passes | PASS |
+| `go test -run TestRunRandomE2EWithSyntheticCache` passes | PASS |
+| `go vet ./...` produces no warnings | PASS |
+| `twisty --help` lists all subcommands | PASS |
+| `twisty score --help` lists all flags | PASS |
+| No `flag.NewFlagSet` in `main.go` or `overpass.go` | PASS |
+| No `os.Exit` in `exec*` helpers | PASS |
+
+---
+
+## MUST FIX
+
+### 1. Blank import of `cobra` in test file
+
+**File:** `/Users/joshuafeierman/repos/yardbirdsax/twisty/main_test.go`
+**Line:** 15
+
+**Issue:** `_ "github.com/spf13/cobra"` is a no-op blank import with no side effects and must be removed.
+
+**Current:**
+```go
+_ "github.com/spf13/cobra"
+```
+
+**Required:** Remove the line entirely.
+
+**Rationale:** Dead imports are disallowed by standard Go tooling and the project linter. This import does nothing.
+
+---
+
+## Good Practices Observed
+
+None noted per reviewer instructions.
+
+---
+
+## Verification Commands Run
+
+```bash
+go build ./...                                          # PASS
+go vet ./...                                            # PASS
+go test ./... -count=1 -short                          # PASS
+go test -run TestRunScoreE2EWithSyntheticCache -v      # PASS
+go test -run TestRunRandomE2EWithSyntheticCache -v     # PASS (4.05s)
+grep 'flag\.NewFlagSet' main.go overpass.go            # no matches
+grep 'os\.Exit' main.go                                # only main.go:29 inside main()
+grep '_ "github.com/spf13/cobra"' main_test.go        # main_test.go:15 — blank import found
+```
+
+---
+
+## Final Verdict
+
+**NEEDS REVISION**
+
+All acceptance criteria pass. One blocking issue: the blank `_ "github.com/spf13/cobra"` import in `main_test.go:15` must be removed before this is merge-ready.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **NEEDS REVISION**: One or more issues found. Address all MUST FIX items before re-review.
+
+---
+
+## Revision Notes
+
+**Issue 1 fixed:** Removed blank `_ "github.com/spf13/cobra"` import from `main_test.go:15`. `go test ./... -count=1 -short` passes.
+
+---
+
+---
+# Task 002 Review: Implement Cobra Commands (Green) — Re-review
+
+**Reviewer:** Principal Engineer
+**Date:** 2026-04-08
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+All acceptance criteria pass. The previously blocking blank `_ "github.com/spf13/cobra"` import has been removed from `main_test.go`.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/overpass.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `go build ./...` succeeds | PASS |
+| `go test ./... -count=1 -short` passes | PASS |
+| `go test -run TestRunScoreE2EWithSyntheticCache` passes | PASS |
+| `go test -run TestRunRandomE2EWithSyntheticCache` passes | PASS |
+| `go vet ./...` produces no warnings | PASS |
+| `twisty --help` lists all subcommands | PASS |
+| `twisty score --help` lists all flags | PASS |
+| No `flag.NewFlagSet` in `main.go` or `overpass.go` | PASS |
+| No `os.Exit` in `exec*` helpers | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go build ./...                                          # PASS
+go vet ./...                                            # PASS
+go test ./... -count=1 -short                          # PASS
+go test -run TestRunScoreE2EWithSyntheticCache -v      # PASS
+go test -run TestRunRandomE2EWithSyntheticCache -v     # PASS (4.04s)
+grep 'flag\.NewFlagSet' main.go overpass.go            # no matches
+grep 'os\.Exit' main.go                                # only main.go:29 inside main()
+grep 'cobra' main_test.go                              # no blank import found
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria pass and the previously flagged blank import has been removed. Ready to merge.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **NEEDS REVISION**: One or more issues found. Address all MUST FIX items before re-review.

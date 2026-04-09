@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -17,58 +16,140 @@ import (
 	"time"
 
 	"github.com/dsnet/compress/bzip2"
+	"github.com/spf13/cobra"
 	"github.com/yardbirdsax/twisty/osmconv"
 )
 
 const (
-	overpassContainerName  = "twisty-overpass"
-	overpassImage          = "wiktorn/overpass-api"
-	overpassRepoURL        = "https://github.com/wiktorn/Overpass-API.git"
-	overpassVersion        = "0.7.62.4"
-	geofabrikBaseURL       = "https://download.geofabrik.de"
-	defaultOverpassPort = 8080
+	overpassContainerName = "twisty-overpass"
+	overpassImage         = "wiktorn/overpass-api"
+	overpassRepoURL       = "https://github.com/wiktorn/Overpass-API.git"
+	overpassVersion       = "0.7.62.4"
+	geofabrikBaseURL      = "https://download.geofabrik.de"
+	defaultOverpassPort   = 8080
 )
 
-func runOverpass(args []string) {
-	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: twisty overpass <start|stop|status|clean|logs>")
-		os.Exit(1)
+func newOverpassCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:           "overpass",
+		Short:         "Manage a local Overpass API instance via Docker",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
-	switch args[0] {
-	case "start":
-		runOverpassStart(args[1:])
-	case "stop":
-		runOverpassStop(args[1:])
-	case "status":
-		runOverpassStatus(args[1:])
-	case "clean":
-		runOverpassClean(args[1:])
-	case "logs":
-		runOverpassLogs(args[1:])
-	case "build":
-		runOverpassBuild(args[1:])
-	default:
-		fmt.Fprintf(os.Stderr, "unknown overpass subcommand %q\n", args[0])
-		os.Exit(1)
+	cmd.AddCommand(
+		newOverpassStartCmd(),
+		newOverpassStopCmd(),
+		newOverpassStatusCmd(),
+		newOverpassCleanCmd(),
+		newOverpassLogsCmd(),
+		newOverpassBuildCmd(),
+	)
+	return cmd
+}
+
+func newOverpassStartCmd() *cobra.Command {
+	var (
+		regions string
+		port    int
+		dataDir string
+	)
+	cmd := &cobra.Command{
+		Use:           "start",
+		Short:         "Start the local Overpass API container",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runOverpassStart(regions, port, dataDir, cmd.ErrOrStderr())
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&regions, "regions", "", "Comma-separated Geofabrik region paths (e.g. north-america/us/new-york)")
+	f.IntVar(&port, "port", defaultOverpassPort, "Port to expose the Overpass API on")
+	f.StringVar(&dataDir, "data-dir", "", "Directory for Overpass data files")
+	return cmd
+}
+
+func newOverpassStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:           "stop",
+		Short:         "Stop the local Overpass API container",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runOverpassStop(cmd.ErrOrStderr())
+		},
 	}
 }
 
-func runOverpassStart(args []string) {
-	fs := flag.NewFlagSet("overpass start", flag.ExitOnError)
-	regions := fs.String("regions", "", "Comma-separated Geofabrik region paths (e.g. north-america/us/new-york)")
-	port := fs.Int("port", defaultOverpassPort, "Port to expose the Overpass API on")
-	dataDir := fs.String("data-dir", "", "Directory for Overpass data files")
-	fs.Parse(args)
-	*dataDir = resolveOverpassDataDir(*dataDir)
+func newOverpassStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:           "status",
+		Short:         "Show status of the local Overpass API container",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runOverpassStatus(cmd.ErrOrStderr())
+		},
+	}
+}
 
-	if *regions == "" {
-		fmt.Fprintln(os.Stderr, "Error: -regions is required")
-		fs.Usage()
-		os.Exit(1)
+func newOverpassCleanCmd() *cobra.Command {
+	var dataDir string
+	cmd := &cobra.Command{
+		Use:           "clean",
+		Short:         "Stop the container and remove all Overpass data",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runOverpassClean(dataDir, cmd.ErrOrStderr())
+		},
+	}
+	cmd.Flags().StringVar(&dataDir, "data-dir", "", "Directory for Overpass data files")
+	return cmd
+}
+
+func newOverpassLogsCmd() *cobra.Command {
+	var lines int
+	cmd := &cobra.Command{
+		Use:           "logs",
+		Short:         "Stream logs from the Overpass API container",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runOverpassLogs(lines)
+		},
+	}
+	cmd.Flags().IntVar(&lines, "lines", 0, "Number of log lines to show (0 = follow)")
+	return cmd
+}
+
+func newOverpassBuildCmd() *cobra.Command {
+	var srcDir string
+	cmd := &cobra.Command{
+		Use:           "build",
+		Short:         "Build the Overpass API Docker image from source",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runOverpassBuild(srcDir, cmd.ErrOrStderr())
+		},
+	}
+	cmd.Flags().StringVar(&srcDir, "src-dir", "", "Directory for Overpass source files (default: data-dir/overpass-src)")
+	return cmd
+}
+
+func runOverpassStart(regions string, port int, dataDir string, stderr io.Writer) error {
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+	dataDir = resolveOverpassDataDir(dataDir)
+
+	if regions == "" {
+		return fmt.Errorf("-regions is required")
 	}
 
 	// Parse new regions from the flag.
-	parts := strings.Split(*regions, ",")
+	parts := strings.Split(regions, ",")
 	var newRegions []string
 	for _, r := range parts {
 		r = strings.TrimSpace(r)
@@ -77,17 +158,17 @@ func runOverpassStart(args []string) {
 		}
 	}
 
-	pbfDir := filepath.Join(*dataDir, "pbf")
-	dbDir := filepath.Join(*dataDir, "db")
-	mergedBZ2 := filepath.Join(*dataDir, "merged.osm.bz2")
-	stampFile := filepath.Join(*dataDir, ".regions")
+	pbfDir := filepath.Join(dataDir, "pbf")
+	dbDir := filepath.Join(dataDir, "db")
+	mergedBZ2 := filepath.Join(dataDir, "merged.osm.bz2")
+	stampFile := filepath.Join(dataDir, ".regions")
 
 	// Create data directories.
 	if err := os.MkdirAll(pbfDir, 0o755); err != nil {
-		log.Fatalf("creating pbf dir: %v", err)
+		return fmt.Errorf("creating pbf dir: %w", err)
 	}
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
-		log.Fatalf("creating db dir: %v", err)
+		return fmt.Errorf("creating db dir: %w", err)
 	}
 
 	// Load previously loaded regions from stamp file and merge with new ones.
@@ -108,16 +189,16 @@ func runOverpassStart(args []string) {
 	// If regions grew, wipe db and merged PBF to force re-import with full set.
 	if allRegionsKey != existingKey {
 		if len(existingRegions) > 0 {
-			fmt.Fprintf(os.Stderr, "Adding new regions; re-importing with full set.\n")
+			fmt.Fprintf(stderr, "Adding new regions; re-importing with full set.\n")
 		}
 		if err := os.RemoveAll(dbDir); err != nil {
-			log.Fatalf("removing db dir: %v", err)
+			return fmt.Errorf("removing db dir: %w", err)
 		}
 		if err := os.MkdirAll(dbDir, 0o755); err != nil {
-			log.Fatalf("recreating db dir: %v", err)
+			return fmt.Errorf("recreating db dir: %w", err)
 		}
 		if err := os.Remove(mergedBZ2); err != nil && !os.IsNotExist(err) {
-			log.Fatalf("removing merged BZ2: %v", err)
+			return fmt.Errorf("removing merged BZ2: %w", err)
 		}
 	}
 
@@ -127,12 +208,12 @@ func runOverpassStart(args []string) {
 		destPath := filepath.Join(pbfDir, filename)
 		if _, err := os.Stat(destPath); os.IsNotExist(err) {
 			url := geofabrikBaseURL + "/" + region + "-latest.osm.pbf"
-			fmt.Fprintf(os.Stderr, "Downloading %s -> %s\n", url, destPath)
+			fmt.Fprintf(stderr, "Downloading %s -> %s\n", url, destPath)
 			if err := downloadPBF(url, destPath); err != nil {
-				log.Fatalf("downloading %s: %v", url, err)
+				return fmt.Errorf("downloading %s: %w", url, err)
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "PBF already exists: %s\n", destPath)
+			fmt.Fprintf(stderr, "PBF already exists: %s\n", destPath)
 		}
 	}
 
@@ -143,59 +224,59 @@ func runOverpassStart(args []string) {
 			filename := pbfFilename(region)
 			pbfPaths = append(pbfPaths, filepath.Join(pbfDir, filename))
 		}
-		fmt.Fprintf(os.Stderr, "Converting %d PBF file(s) to BZ2...\n", len(pbfPaths))
-		if err := convertPBFsToBZ2(pbfPaths, mergedBZ2, os.Stderr); err != nil {
-			log.Fatalf("converting PBF to BZ2: %v", err)
+		fmt.Fprintf(stderr, "Converting %d PBF file(s) to BZ2...\n", len(pbfPaths))
+		if err := convertPBFsToBZ2(pbfPaths, mergedBZ2, stderr); err != nil {
+			return fmt.Errorf("converting PBF to BZ2: %w", err)
 		}
 	} else {
-		fmt.Fprintf(os.Stderr, "BZ2 already exists: %s\n", mergedBZ2)
+		fmt.Fprintf(stderr, "BZ2 already exists: %s\n", mergedBZ2)
 	}
 
 	// Write stamp file.
 	if err := os.WriteFile(stampFile, []byte(allRegionsKey), 0o644); err != nil {
-		log.Fatalf("writing regions stamp: %v", err)
+		return fmt.Errorf("writing regions stamp: %w", err)
 	}
 
 	// If container is already running, just report the URL.
 	if isContainerRunning(overpassContainerName) {
-		fmt.Fprintf(os.Stderr, "Overpass API already running: http://localhost:%d/api/interpreter\n", *port)
-		return
+		fmt.Fprintf(stderr, "Overpass API already running: http://localhost:%d/api/interpreter\n", port)
+		return nil
 	}
 
 	// Ensure the Overpass image is built for the current architecture.
-	if err := ensureOverpassImage(*dataDir); err != nil {
-		log.Fatalf("ensuring overpass image: %v", err)
+	if err := ensureOverpassImage(dataDir); err != nil {
+		return fmt.Errorf("ensuring overpass image: %w", err)
 	}
 
 	// Remove any pre-existing stopped container.
 	dockerCmd("rm", overpassContainerName) //nolint:errcheck — ignore errors if not present
 
 	// Resolve absolute paths for volume mounts.
-	absDataDir, err := filepath.Abs(*dataDir)
+	absDataDir, err := filepath.Abs(dataDir)
 	if err != nil {
-		log.Fatalf("resolving data dir: %v", err)
+		return fmt.Errorf("resolving data dir: %w", err)
 	}
 	absMergedBZ2, err := filepath.Abs(mergedBZ2)
 	if err != nil {
-		log.Fatalf("resolving merged BZ2 path: %v", err)
+		return fmt.Errorf("resolving merged BZ2 path: %w", err)
 	}
 
-	runArgs := overpassDockerRunArgs(*port, absDataDir+"/db", absMergedBZ2)
+	runArgs := overpassDockerRunArgs(port, absDataDir+"/db", absMergedBZ2)
 	out, err := dockerCmd(runArgs...)
 	if err != nil {
-		log.Fatalf("starting overpass container: %v\n%s", err, out)
+		return fmt.Errorf("starting overpass container: %v\n%s", err, out)
 	}
 
-	endpoint := fmt.Sprintf("http://localhost:%d/api/interpreter", *port)
-	fmt.Fprintf(os.Stderr, "Overpass API starting. Streaming logs until ready...\n")
-	fmt.Fprintf(os.Stderr, "Endpoint: %s\n\n", endpoint)
+	endpoint := fmt.Sprintf("http://localhost:%d/api/interpreter", port)
+	fmt.Fprintf(stderr, "Overpass API starting. Streaming logs until ready...\n")
+	fmt.Fprintf(stderr, "Endpoint: %s\n\n", endpoint)
 
 	// Stream container logs in the background.
 	logCmd := exec.Command("docker", "logs", "-f", overpassContainerName)
-	logCmd.Stdout = os.Stderr
-	logCmd.Stderr = os.Stderr
+	logCmd.Stdout = stderr
+	logCmd.Stderr = stderr
 	if err := logCmd.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not stream container logs: %v\n", err)
+		fmt.Fprintf(stderr, "warning: could not stream container logs: %v\n", err)
 	}
 	defer func() {
 		if logCmd.Process != nil {
@@ -209,12 +290,13 @@ func runOverpassStart(args []string) {
 	defer cancel()
 
 	if err := waitForOverpass(ctx, endpoint); err != nil {
-		fmt.Fprintf(os.Stderr, "\nOverpass API failed to become ready: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Container is still running. Use 'twisty overpass logs' to inspect.\n")
-		os.Exit(1)
+		fmt.Fprintf(stderr, "\nOverpass API failed to become ready: %v\n", err)
+		fmt.Fprintf(stderr, "Container is still running. Use 'twisty overpass logs' to inspect.\n")
+		return fmt.Errorf("overpass API failed to become ready: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "\nOverpass API is ready: %s\n", endpoint)
+	fmt.Fprintf(stderr, "\nOverpass API is ready: %s\n", endpoint)
+	return nil
 }
 
 // pbfFilename returns the local PBF filename for a Geofabrik region path.
@@ -292,53 +374,69 @@ func waitForOverpass(ctx context.Context, endpoint string) error {
 	}
 }
 
-func runOverpassStop(_ []string) {
-	dockerCmd("stop", overpassContainerName) //nolint:errcheck — ignore errors
-	fmt.Fprintln(os.Stderr, "Overpass API stopped.")
-}
-
-func runOverpassStatus(_ []string) {
-	if isContainerRunning(overpassContainerName) {
-		fmt.Fprintf(os.Stderr, "Overpass API is running: http://localhost:%d/api/interpreter\n", defaultOverpassPort)
-	} else {
-		fmt.Fprintln(os.Stderr, "Overpass API is not running.")
+func runOverpassStop(stderr io.Writer) error {
+	if stderr == nil {
+		stderr = os.Stderr
 	}
+	dockerCmd("stop", overpassContainerName) //nolint:errcheck — ignore errors
+	fmt.Fprintln(stderr, "Overpass API stopped.")
+	return nil
 }
 
-func runOverpassClean(args []string) {
-	fs := flag.NewFlagSet("overpass clean", flag.ExitOnError)
-	dataDir := fs.String("data-dir", "", "Directory for Overpass data files")
-	fs.Parse(args)
-	*dataDir = resolveOverpassDataDir(*dataDir)
+func runOverpassStatus(stderr io.Writer) error {
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+	if isContainerRunning(overpassContainerName) {
+		fmt.Fprintf(stderr, "Overpass API is running: http://localhost:%d/api/interpreter\n", defaultOverpassPort)
+	} else {
+		fmt.Fprintln(stderr, "Overpass API is not running.")
+	}
+	return nil
+}
+
+func runOverpassClean(dataDir string, stderr io.Writer) error {
+	if stderr == nil {
+		stderr = os.Stderr
+	}
+	dataDir = resolveOverpassDataDir(dataDir)
 
 	dockerCmd("stop", overpassContainerName) //nolint:errcheck
-	if err := os.RemoveAll(*dataDir); err != nil {
-		log.Fatalf("removing data dir %s: %v", *dataDir, err)
+	if err := os.RemoveAll(dataDir); err != nil {
+		return fmt.Errorf("removing data dir %s: %w", dataDir, err)
 	}
-	fmt.Fprintf(os.Stderr, "Overpass container stopped and data directory %q removed.\n", *dataDir)
+	fmt.Fprintf(stderr, "Overpass container stopped and data directory %q removed.\n", dataDir)
+	return nil
 }
 
-func runOverpassLogs(_ []string) {
+func runOverpassLogs(_ int) error {
 	dockerPath, err := exec.LookPath("docker")
 	if err != nil {
-		log.Fatalf("docker not found in PATH: %v", err)
+		return fmt.Errorf("docker not found in PATH: %w", err)
 	}
 	argv := []string{"docker", "logs", "-f", overpassContainerName}
 	if err := syscall.Exec(dockerPath, argv, os.Environ()); err != nil {
-		log.Fatalf("exec docker logs: %v", err)
+		return fmt.Errorf("exec docker logs: %w", err)
 	}
+	return nil
 }
 
-func runOverpassBuild(args []string) {
-	fs := flag.NewFlagSet("overpass build", flag.ExitOnError)
-	dataDir := fs.String("data-dir", "", "Directory for Overpass data files")
-	fs.Parse(args)
-	*dataDir = resolveOverpassDataDir(*dataDir)
-
-	if err := buildOverpassImage(*dataDir); err != nil {
-		log.Fatalf("building overpass image: %v", err)
+func runOverpassBuild(srcDir string, stderr io.Writer) error {
+	if stderr == nil {
+		stderr = os.Stderr
 	}
-	fmt.Fprintln(os.Stderr, "Overpass image built successfully.")
+	// srcDir flag is not used as the data-dir source; use resolveOverpassDataDir for data location.
+	// If srcDir is empty, resolve via default data dir.
+	dataDir := resolveOverpassDataDir("")
+	if srcDir != "" {
+		dataDir = srcDir
+	}
+
+	if err := buildOverpassImage(dataDir); err != nil {
+		return fmt.Errorf("building overpass image: %w", err)
+	}
+	fmt.Fprintln(stderr, "Overpass image built successfully.")
+	return nil
 }
 
 // ensureOverpassImage checks if the Overpass image exists for the current
@@ -589,4 +687,3 @@ func convertPBFsToBZ2(pbfPaths []string, bz2Path string, progress io.Writer) err
 	}
 	return outFile.Close()
 }
-

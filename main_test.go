@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/spf13/cobra"
 	"github.com/yardbirdsax/twisty/quality"
 )
 
