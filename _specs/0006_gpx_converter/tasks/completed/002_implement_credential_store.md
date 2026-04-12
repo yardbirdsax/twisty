@@ -332,3 +332,66 @@ All tests should pass.
 - File store is human-readable JSON for debugging but with restrictive file permissions (0600).
 - The factory function ensures callers never need to know which implementation is in use.
 - For future platforms (Linux, Windows), additional implementations can be added to the factory.
+
+---
+
+# Task 002 Review: Implement Credential Store Abstraction and Platform-Specific Storage
+
+**Reviewer:** Claude (Principal Engineer)
+**Date:** 2026-04-11
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements `CredentialStore` interface with macOS Keychain (`KeychainStore`) and file-based (`FileStore`) backends, plus a `NewCredentialStore` factory that selects by `runtime.GOOS`. Tests cover `FileStore` Set/Get/Delete/ErrNotFound and persistence.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `auth/store.go` | Reviewed |
+| `auth/keychain.go` | Reviewed |
+| `auth/filestore.go` | Reviewed |
+| `auth/store_test.go` | Reviewed |
+| `go.mod` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `auth/keychain.go` implements `CredentialStore` using macOS Keychain | PASS |
+| `auth/filestore.go` implements `CredentialStore` using file-based storage | PASS |
+| `NewCredentialStore` factory routes based on `runtime.GOOS` | PASS |
+| File store creates directory with 0700 permissions if not present | PASS |
+| File store persists data to JSON file with 0600 permissions | PASS |
+| `Get` returns `ErrNotFound` for non-existent keys | PASS |
+| `Set` stores and retrieves values correctly | PASS |
+| `Delete` removes values and persists deletion | PASS |
+| Unit tests pass for `FileStore` | PASS |
+| `go build ./...` compiles without errors | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test ./auth/... -v   # PASS (TestFileStore, TestFileStorePersistence)
+go build ./...          # PASS (clean)
+make lint               # PASS (go vet ./... clean)
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met. Both issues from the prior review (spurious `// indirect` on `go-keychain` and missing doc comments on `FileStore` methods) have been resolved. Ready to merge.
