@@ -74,6 +74,7 @@ func TestValidateGoogleMapsURLVariations(t *testing.T) {
 		{"https://maps.google.com/maps/dir/Home/Work", false},
 		{"https://maps.app.goo.gl/abc123", false},
 		{"https://google.com/maps/dir/A/B", false},
+		{"https://www.google.com/maps/dir/A/B", false},
 		{"https://example.com/maps/dir/A/B", true},
 		{"https://notmaps.google.com/something", true},
 		{"not a url at all", true},
