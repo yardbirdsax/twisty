@@ -133,6 +133,26 @@ func TestConvertRouteToGPX_Empty(t *testing.T) {
 	}
 }
 
+func TestConvertRouteToGPX_MultiStop(t *testing.T) {
+	tmpDir := t.TempDir()
+	outPath := filepath.Join(tmpDir, "multi.gpx")
+
+	data := testRouteData()
+	if err := ConvertRouteToGPX(data, outPath); err != nil {
+		t.Fatalf("ConvertRouteToGPX failed for multi-stop route: %v", err)
+	}
+
+	content, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+
+	xml := string(content)
+	if !strings.Contains(xml, "Gas Station") {
+		t.Error("intermediate waypoint 'Gas Station' not found in XML")
+	}
+}
+
 func TestConvertRouteToGPX_LargeRoute(t *testing.T) {
 	tmpDir := t.TempDir()
 	outPath := filepath.Join(tmpDir, "route.gpx")

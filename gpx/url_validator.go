@@ -14,9 +14,9 @@ func ValidateGoogleMapsURL(rawURL string) error {
 	}
 
 	host := parsed.Host
-	if !strings.Contains(host, "maps.google.com") &&
-		!strings.Contains(host, "maps.app.goo.gl") &&
-		!(strings.Contains(host, "google.com") && strings.Contains(parsed.Path, "/maps")) {
+	if host != "maps.google.com" &&
+		host != "maps.app.goo.gl" &&
+		!(host == "google.com" && strings.HasPrefix(parsed.Path, "/maps/")) {
 		return fmt.Errorf("not a valid Google Maps shared link. Expected format: maps.google.com/maps/dir/... or maps.app.goo.gl/...")
 	}
 

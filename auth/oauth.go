@@ -36,17 +36,19 @@ func DefaultGoogleMapsOAuthConfig() *OAuthConfig {
 
 // Authenticator handles OAuth 2.0 PKCE flow.
 type Authenticator struct {
-	config  *OAuthConfig
-	store   CredentialStore
-	timeout time.Duration
+	config        *OAuthConfig
+	store         CredentialStore
+	timeout       time.Duration
+	openBrowserFn func(string)
 }
 
 // NewAuthenticator creates a new OAuth authenticator.
 func NewAuthenticator(config *OAuthConfig, store CredentialStore) *Authenticator {
 	return &Authenticator{
-		config:  config,
-		store:   store,
-		timeout: consentFlowTimeout,
+		config:        config,
+		store:         store,
+		timeout:       consentFlowTimeout,
+		openBrowserFn: openBrowser,
 	}
 }
 
@@ -110,7 +112,7 @@ func (a *Authenticator) interactiveLogin(ctx context.Context) (*Token, error) {
 	authURL := a.buildAuthURL(redirectURI, state, pkce.Challenge)
 
 	fmt.Printf("Open the following URL in your browser to authorize twisty:\n\n%s\n\nWaiting for authorization (timeout: %s)...\n", authURL, a.timeout)
-	openBrowser(authURL)
+	a.openBrowserFn(authURL)
 
 	code, returnedState, err := a.waitForCallback(ctx, ln)
 	if err != nil {
@@ -184,7 +186,9 @@ func (a *Authenticator) waitForCallback(ctx context.Context, ln net.Listener) (s
 	select {
 	case code := <-codeCh:
 		returnedState := <-stateCh
-		srv.Close()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer shutdownCancel()
+		srv.Shutdown(shutdownCtx) //nolint:errcheck
 		return code, returnedState, nil
 	case err := <-errCh:
 		return "", "", fmt.Errorf("consent flow callback error: %w", err)

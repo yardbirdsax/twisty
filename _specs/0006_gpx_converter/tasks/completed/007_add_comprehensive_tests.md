@@ -313,3 +313,69 @@ Aim for >80% coverage in `auth/` and `gpx/` packages.
 - No external dependencies in tests (no live API calls, no keychain access).
 - The `MockCredentialStore` from Task 006 can be reused here if needed.
 - Coverage gaps in the OAuth interactive flow are acceptable since it requires a live browser — focus coverage on testable units (token logic, PKCE, file store, polyline decoding, GPX generation).
+
+---
+
+# Task 007 Review: Add Comprehensive Tests and Quality Assurance
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-04-11
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements comprehensive unit tests for auth token logic, FileStore, PKCE/state generation, OAuth flow, GPX coordinate boundaries, URL validation/parsing, Maps client, and service layer. All acceptance criteria are met.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `auth/auth_test.go` | Reviewed |
+| `auth/oauth.go` | Reviewed |
+| `gpx/validation_test.go` | Reviewed |
+| `gpx/url_parsing_test.go` | Reviewed |
+| `gpx/testhelpers_test.go` | Reviewed |
+| `gpx/maps_client_test.go` | Reviewed |
+| `gpx/service_test.go` | Reviewed |
+| `gpx/service.go` | Reviewed |
+| `gpx/url_validator.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| Token expiry tests cover: already expired, expiring within buffer, valid | PASS |
+| `FileStore` tests cover: Set/Get/Delete, ErrNotFound, persistence across instances, nested directory creation | PASS |
+| PKCE tests cover: uniqueness of verifiers and states | PASS |
+| GPX coordinate boundary tests cover all four extremes and invalid values | PASS |
+| URL parsing tests cover path-based waypoints, multiple stops, and invalid URLs | PASS |
+| All tests pass: `go test ./... -v` | PASS |
+| No race conditions: `go test ./... -race` | PASS |
+| Test coverage >80% for `auth/` and `gpx/` packages | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test ./auth/... ./gpx/... -v -race -count=1   # all tests pass, no races
+go test ./auth/... ./gpx/... -coverprofile=/tmp/coverage.out && go tool cover -func=/tmp/coverage.out
+# auth/: 83.3%, gpx/: 80.8%
+go vet ./auth/... ./gpx/...                       # clean
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met. Coverage is 83.3% (`auth/`) and 80.8% (`gpx/`), both above the 80% threshold. All tests pass with no race conditions. The URL validator path-matching bug from the prior review has been fixed (`strings.HasPrefix` instead of `strings.Contains`).
