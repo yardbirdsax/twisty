@@ -6,8 +6,10 @@ import (
 	"github.com/yardbirdsax/twisty/geo"
 )
 
-// ConvertRouteToGPX converts RouteData into a GPX 1.1 file at the given path.
-// It reuses the existing WriteGPXWithWaypoints function.
+// ConvertRouteToGPX converts RouteData into a GPX 1.1 file at outPath.
+// Input: a RouteData containing named waypoints and decoded track points.
+// Output: a GPX file with labeled <wpt> elements for each stop and a <trkseg> for the route polyline.
+// Returns an error if the data contains no points or any coordinate is out of range.
 func ConvertRouteToGPX(data *RouteData, outPath string) error {
 	if len(data.RouteWaypoints) == 0 && len(data.TrackPoints) == 0 {
 		return fmt.Errorf("route must contain either waypoints or track points")

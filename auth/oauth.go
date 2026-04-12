@@ -52,7 +52,10 @@ func NewAuthenticator(config *OAuthConfig, store CredentialStore) *Authenticator
 	}
 }
 
-// GetToken retrieves a valid access token, refreshing if necessary.
+// GetToken retrieves a valid access token using the following strategy:
+// 1. Load any stored token; if it is still valid, return it immediately.
+// 2. If the stored token is expired but has a refresh token, attempt a silent refresh.
+// 3. If no token exists or the refresh fails, fall back to an interactive browser-based OAuth 2.0 PKCE flow.
 func (a *Authenticator) GetToken(ctx context.Context) (*Token, error) {
 	token, err := a.loadToken()
 	if err == nil && !token.IsExpired() {

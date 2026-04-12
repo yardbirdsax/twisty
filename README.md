@@ -10,6 +10,7 @@ Heavily influenced by the amazing [Curvature](https://roadcurvature.com/) projec
 - `twisty fetch` — pre-populate the Overpass tile cache for a region
 - `twisty route` — uses the [Valhalla API](https://valhalla.openstreetmap.de/) to construct routes between two points, then picks the most twisty one
 - `twisty overpass` — manage a local Overpass API instance running in Docker
+- `twisty gpx` — export a Google Maps driving route as a GPX file
 
 ## twisty score
 
@@ -336,3 +337,45 @@ twisty overpass build [--src-dir <dir>]
 ### Docker image
 
 twisty uses the [`wiktorn/overpass-api`](https://github.com/wiktorn/Overpass-API) image. On arm64 hosts (Apple Silicon) the image is built locally from source because no official arm64 image is published. The build is triggered automatically by `start` if needed, or can be triggered manually with `build`.
+
+## twisty gpx
+
+Exports a driving route from a Google Maps shared link as a GPX file for use in offline navigation applications like OSMAnd.
+
+```
+twisty gpx --maps-url <url> --out <file>
+```
+
+### Required flags
+
+| Flag | Description |
+|------|-------------|
+| `--maps-url string` | Google Maps shared link URL |
+| `--out string` | Output GPX file path |
+
+### Supported URL formats
+
+| Format | Example |
+|--------|---------|
+| Short link | `https://maps.app.goo.gl/abc123` |
+| Full directions URL | `https://maps.google.com/maps/dir/origin/destination` |
+
+### Authentication
+
+The first time you run this command, a browser window will open for you to sign in with Google. Your credentials are stored securely (in the system keychain on macOS) and reused automatically. Re-authentication is not required for at least 24 hours under normal use.
+
+### Example
+
+```bash
+twisty gpx \
+  --maps-url "https://maps.app.goo.gl/abc123" \
+  --out my-route.gpx
+```
+
+### Output
+
+A GPX 1.1 file containing:
+- Named `<wpt>` elements for each stop in the route
+- A `<trkseg>` track segment with the full route polyline
+
+The file can be imported directly into OSMAnd or any other application that supports GPX.

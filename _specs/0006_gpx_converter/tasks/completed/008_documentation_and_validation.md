@@ -127,3 +127,67 @@ Ensure key functions have clear comments:
 - Add a `## twisty gpx` section to `README.md` following the same format as the existing command sections. Include: required flags table, supported URL formats, authentication note, example, and output description. Also add `twisty gpx` to the Subcommands bullet list near the top of the file.
 - There is no `cmd/twisty` package — the main package is at the project root, so `go build -o twisty .` is the correct build command.
 - All references to `internal/gpx`, `internal/auth`, or `cmd/gpx` in any generated code are incorrect for this project.
+
+---
+
+# Task 008 Review: Documentation and Manual Validation
+
+**Reviewer:** Principal Engineer
+**Date:** 2026-04-11
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Task 008 completes the `twisty gpx` feature by adding comprehensive help text, README documentation, in-code comments, and a manual validation procedure.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `README.md` | Reviewed |
+| `main.go` | Reviewed |
+| `_specs/0006_gpx_converter/VALIDATION.md` | Reviewed |
+| `auth/oauth.go` | Reviewed |
+| `gpx/converter.go` | Reviewed |
+| `gpx/service.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `README.md` has `## twisty gpx` section with flags, URL formats, auth note, example, output description | PASS |
+| `twisty gpx` added to Subcommands bullet list in `README.md` | PASS |
+| `newGpxCmd()` long help text is comprehensive and accurate | PASS |
+| Help shows correct syntax: `twisty gpx --maps-url <url> --out <file>` (no `convert` subcommand) | PASS |
+| `_specs/0006_gpx_converter/VALIDATION.md` exists with manual test cases | PASS |
+| `go build -o twisty .` succeeds | PASS |
+| `go test ./... -v -race` passes | PASS |
+| `go vet ./...` passes with no issues | PASS |
+| `runGpx`, `GetToken`, `ConvertRouteToGPX`, `ConvertToFile` have clear comments | PASS |
+| Manual testing with real Google Maps links | NOT VERIFIED (requires live credentials) |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go build -o .tmp/twisty .          # success
+go test ./... -race -timeout 60s   # all packages pass
+go vet ./...                        # no issues
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All verifiable acceptance criteria pass. Manual testing items require live Google credentials and a physical device and cannot be verified in this review; they are gated by the operator before production use.

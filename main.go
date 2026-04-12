@@ -1236,15 +1236,41 @@ func newGpxCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "gpx",
-		Short: "Convert a Google Maps shared link to a GPX file",
+		Short: "Export a Google Maps driving route as a GPX file",
 		Long: `Export a driving route from a Google Maps shared link as a GPX file
 for use in offline navigation applications like OSMAnd.
 
-The first time you run this command, you will be prompted to authenticate
-with Google. Your credentials are stored securely and reused automatically.
+AUTHENTICATION:
 
-Example:
-  twisty gpx --maps-url https://maps.app.goo.gl/... --out route.gpx`,
+The first time you run this command, you will be prompted to authenticate
+with Google via a browser window. Your credentials will be securely stored
+for future use (in the system keychain on macOS). You will not need to
+re-authenticate for 24 hours under normal use.
+
+FLAGS:
+
+  --maps-url (required)
+    Google Maps shared link. Supported formats:
+      https://maps.app.goo.gl/abc123
+      https://maps.google.com/maps/dir/origin/destination
+
+  --out (required)
+    Output file path for the GPX file.
+
+EXAMPLES:
+
+  # Convert a simple route
+  twisty gpx --maps-url "https://maps.app.goo.gl/abc123" --out my-route.gpx
+
+  # Convert a route with multiple stops
+  twisty gpx \
+    --maps-url "https://maps.google.com/maps/dir/Home/Stop1/Work" \
+    --out commute.gpx
+
+LIMITATIONS:
+
+  Only driving routes are supported.
+  If multiple route options exist in Google Maps, the primary route is used.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runGpx(cmd.Context(), mapsURL, outPath)
 		},
@@ -1258,6 +1284,10 @@ Example:
 	return cmd
 }
 
+// runGpx orchestrates the GPX conversion pipeline:
+// 1. Initialize the credential store and OAuth config.
+// 2. Build an Authenticator that retrieves or refreshes the Google access token.
+// 3. Pass the token to the GPX service, which calls the Maps API and writes the output file.
 func runGpx(ctx context.Context, mapsURL, outPath string) error {
 	store, err := auth.NewCredentialStore("twisty-maps")
 	if err != nil {

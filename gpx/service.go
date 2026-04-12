@@ -22,7 +22,8 @@ func NewService(authenticator *auth.Authenticator) *Service {
 	return &Service{authenticator: authenticator}
 }
 
-// ConvertToFile converts a Google Maps URL to a GPX file at outPath.
+// ConvertToFile is the end-to-end pipeline: it authenticates with Google,
+// fetches the route data from the Maps API, and writes a GPX 1.1 file to outPath.
 func (s *Service) ConvertToFile(ctx context.Context, mapsURL, outPath string) error {
 	// Get or refresh authentication token
 	token, err := s.authenticator.GetToken(ctx)
