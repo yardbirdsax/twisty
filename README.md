@@ -12,6 +12,31 @@ Heavily influenced by the amazing [Curvature](https://roadcurvature.com/) projec
 - `twisty overpass` — manage a local Overpass API instance running in Docker
 - `twisty gpx` — export a Google Maps driving route as a GPX file
 
+## Installation
+
+### Prerequisites
+
+- Go 1.21 or later
+- macOS (the build reads the Google API key from the macOS Keychain)
+- A Google API key stored in the Keychain (see [twisty gpx → Setup](#setup))
+
+### Build and install
+
+```bash
+make install
+```
+
+This compiles `twisty` and installs it to your Go bin directory (`$GOPATH/bin` or `$GOBIN`). The Google Routes API key is injected at link time from the macOS Keychain — no runtime credentials are needed.
+
+If `$GOPATH/bin` is already on your `PATH` (standard Go setup), the `twisty` command will be available immediately after install.
+
+To just build a local binary without installing:
+
+```bash
+make build
+# produces bin/twisty
+```
+
 ## twisty score
 
 Scores roads in a circular region around a center address and writes a KML file with color-coded results.

@@ -20,7 +20,7 @@ GOOGLE_API_KEY ?= $(shell security find-generic-password -s twisty/build/google/
 
 GOOGLE_LDFLAGS = -X main.builtInGoogleAPIKey=$(GOOGLE_API_KEY)
 
-.PHONY: build
+.PHONY: build install
 build: ## Build the twisty binary with the Google API key injected from the macOS keychain.
 	@if [ -z "$(GOOGLE_API_KEY)" ]; then \
 		echo "ERROR: twisty/build/google/api-key not found in keychain."; \
@@ -29,6 +29,15 @@ build: ## Build the twisty binary with the Google API key injected from the macO
 	fi
 	@mkdir -p bin
 	go build -ldflags "$(GOOGLE_LDFLAGS)" -o bin/twisty .
+
+.PHONY: install
+install: ## Install the twisty binary to $(GOPATH)/bin with the Google API key injected from the macOS keychain.
+	@if [ -z "$(GOOGLE_API_KEY)" ]; then \
+		echo "ERROR: twisty/build/google/api-key not found in keychain."; \
+		echo "  security add-generic-password -s twisty/build/google/api-key -a twisty -w '<value>'"; \
+		exit 1; \
+	fi
+	go install -ldflags "$(GOOGLE_LDFLAGS)" .
 
 # --- Local Overpass API ---
 OVERPASS_ARGS ?=
