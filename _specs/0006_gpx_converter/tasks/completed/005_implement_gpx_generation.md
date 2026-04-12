@@ -282,3 +282,65 @@ All tests should pass.
 - The converter's role is translation: `RouteData` → existing GPX types → file output.
 - The existing `WriteGPXWithWaypoints` already handles XML marshaling and file I/O.
 - `geo.Coord` is the existing coordinate type used by the GPX package (`Lat`, `Lon` fields).
+
+---
+
+# Task 005 Review: Implement GPX File Generation
+
+**Reviewer:** Principal Engineer
+**Date:** 2026-04-11
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements `ConvertRouteToGPX` in `gpx/converter.go` which translates `RouteData` into a GPX 1.1 file by reusing the existing `WriteGPXWithWaypoints` function. Includes coordinate validation and full unit test coverage.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/gpx/converter.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/gpx/converter_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `ConvertRouteToGPX` converts `*RouteData` to GPX 1.1 file at given path | PASS |
+| Reuses existing `WriteGPXWithWaypoints` | PASS |
+| Converts `RouteWaypoint` → `Waypoint` | PASS |
+| Converts `TrackCoord` → `geo.Coord` | PASS |
+| Coordinates validated (latitude ±90, longitude ±180) before writing | PASS |
+| Invalid coordinates cause clear error; no partial file written | PASS |
+| Empty routes cause an error | PASS |
+| Track name set to `"<StartName> to <DestinationName>"` | PASS |
+| Generated GPX file can be parsed by standard XML parser | PASS |
+| Unit tests pass for valid routes, coordinate validation, empty routes, large routes | PASS |
+| `go build ./...` compiles without errors | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go build ./...          # clean
+go vet ./gpx/...        # clean
+go test ./gpx/... -v -run TestConvert  # all 4 tests PASS
+make test               # all packages PASS
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met, all tests pass, build and vet are clean.
