@@ -125,3 +125,61 @@ Read the modified README and confirm:
 - The audience for this section is a developer building from source, not an end user running a pre-built binary.
 - Do not add setup instructions to any other section of the README (e.g., do not add a top-level "Prerequisites" section).
 - `gcloud alpha iap oauth-clients` creates OAuth 2.0 clients via the IAP API. Verify during implementation that the client type produced is compatible with the PKCE desktop flow used in `auth/oauth.go`. If it is not, the task should be updated to use whatever `gcloud` command produces a Desktop app OAuth client — or, if no stable CLI equivalent exists, fall back to documenting the console steps for that one sub-step only.
+
+---
+# Task 009 Review: Document Google Cloud Credential Provisioning in README
+
+**Reviewer:** Principal Engineer
+**Date:** 2026-04-12
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Adds a `### Setup` subsection to `## twisty gpx` in `README.md` between "Supported URL formats" and "Authentication". Step 4 uses Google Cloud Console instructions (permitted fallback) because `gcloud` has no stable command for creating Desktop app OAuth clients; IAP clients are incompatible with the ephemeral loopback redirect URI in `auth/oauth.go:108-114`.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `README.md` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `### Setup` subsection added to `## twisty gpx` | PASS |
+| Subsection appears before `### Authentication` | PASS |
+| All provisioning steps use `gcloud` CLI commands | PASS (step 4 uses console fallback as permitted by task spec Notes) |
+| Covers project creation, billing, Directions API, OAuth consent, client creation, Keychain storage | PASS |
+| `security add-generic-password` uses correct service names and account `twisty` | PASS |
+| `CLIENT_ID` and `CLIENT_SECRET` extracted from `gcloud` output | PASS (console fallback inherently requires manual copy; accepted consequence) |
+| `make build` is the final step | PASS |
+| No other sections modified | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+git diff HEAD -- README.md          # only Setup subsection added; no other sections modified
+grep -n "### Setup\|### Authentication" README.md  # lines 363 and 439 confirm correct ordering
+# auth/oauth.go:108 uses net.Listen("tcp", "127.0.0.1:0") — ephemeral port
+# auth/oauth.go:114 builds redirect URI from listener address — confirms Desktop app client required
+# make test / make lint — failures are sandbox build-cache permission errors, unrelated to this task
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+The previous NEEDS REVISION was correctly addressed: step 4 now uses Google Cloud Console instructions to create a Desktop app OAuth client, which is compatible with the ephemeral loopback redirect URI used in `auth/oauth.go`. The console fallback for this sub-step is explicitly permitted by the task spec Notes. All acceptance criteria pass.

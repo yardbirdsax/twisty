@@ -360,6 +360,82 @@ twisty gpx --maps-url <url> --out <file>
 | Short link | `https://maps.app.goo.gl/abc123` |
 | Full directions URL | `https://maps.google.com/maps/dir/origin/destination` |
 
+### Setup
+
+`twisty gpx` requires a Google Cloud project with the Directions API enabled and an OAuth 2.0 client ID baked into the binary at build time. All steps below use the `gcloud` CLI.
+
+#### 1. Create and configure a Google Cloud project
+
+```bash
+PROJECT_ID=twisty-maps   # must be globally unique; adjust if taken
+gcloud projects create $PROJECT_ID --name="Twisty Maps"
+gcloud config set project $PROJECT_ID
+```
+
+If you have a billing account, link it now (the Directions API requires billing to be enabled):
+
+```bash
+BILLING_ACCOUNT=$(gcloud billing accounts list --format='value(name)' --filter='open=true' | head -1)
+gcloud billing projects link $PROJECT_ID --billing-account=$BILLING_ACCOUNT
+```
+
+#### 2. Enable the Directions API
+
+```bash
+gcloud services enable directions-backend.googleapis.com
+```
+
+#### 3. Configure the OAuth consent screen
+
+```bash
+gcloud alpha iap oauth-brands create \
+  --application_title="Twisty" \
+  --support_email="$(gcloud config get-value account)"
+```
+
+Note the brand resource name printed in the output (format: `projects/PROJECT_NUMBER/brands/PROJECT_NUMBER`).
+
+#### 4. Create a Desktop app OAuth 2.0 client
+
+`gcloud` does not have a stable command for creating standard Desktop app OAuth 2.0 clients, so this step uses the Google Cloud Console:
+
+1. Open [APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials) in the Google Cloud Console (ensure your project is selected).
+2. Click **+ Create Credentials** → **OAuth client ID**.
+3. Set **Application type** to **Desktop app**.
+4. Set **Name** to `twisty-desktop` and click **Create**.
+5. In the dialog that appears, note the **Client ID** and **Client secret**.
+
+Then set shell variables for the following step:
+
+```bash
+CLIENT_ID=<paste Client ID here>
+CLIENT_SECRET=<paste Client secret here>
+```
+
+> A Desktop app client allows any `http://127.0.0.1` loopback URI without pre-registration, which is required by `twisty gpx`'s OAuth flow.
+
+#### 5. Store credentials in the macOS Keychain
+
+```bash
+security add-generic-password \
+  -s twisty/build/google/client-id \
+  -a twisty \
+  -w "$CLIENT_ID"
+
+security add-generic-password \
+  -s twisty/build/google/client-secret \
+  -a twisty \
+  -w "$CLIENT_SECRET"
+```
+
+These values are read automatically by `make build` and injected into the binary at link time. They are never written to disk outside the Keychain.
+
+#### 6. Build
+
+```bash
+make build
+```
+
 ### Authentication
 
 The first time you run this command, a browser window will open for you to sign in with Google. Your credentials are stored securely (in the system keychain on macOS) and reused automatically. Re-authentication is not required for at least 24 hours under normal use.
