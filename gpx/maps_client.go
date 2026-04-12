@@ -7,11 +7,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// MapsClient handles calls to the Google Maps Directions API.
+// MapsClient handles calls to the Google Routes API.
 type MapsClient struct {
 	accessToken string
 	httpClient  *http.Client
@@ -42,16 +43,12 @@ func (c *MapsClient) GetRoute(ctx context.Context, mapsURL string) (*RouteData, 
 		return nil, fmt.Errorf("shared link must contain at least an origin and destination")
 	}
 
-	routes, err := c.callDirectionsAPI(ctx, waypoints)
+	route, err := c.callRoutesAPI(ctx, waypoints)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(routes) == 0 {
-		return nil, fmt.Errorf("no routes found for the given waypoints")
-	}
-
-	return buildRouteData(routes[0], waypoints)
+	return buildRouteData(route, waypoints)
 }
 
 // parseSharedLink extracts waypoints from a Google Maps shared link URL.
@@ -103,54 +100,83 @@ func (c *MapsClient) parseSharedLink(mapsURL string) ([]string, error) {
 	return waypoints, nil
 }
 
-// callDirectionsAPI calls the Google Maps Directions API.
-func (c *MapsClient) callDirectionsAPI(ctx context.Context, waypoints []string) ([]directionsRoute, error) {
-	params := url.Values{}
-	params.Set("origin", waypoints[0])
-	params.Set("destination", waypoints[len(waypoints)-1])
-	params.Set("mode", "driving")
-	params.Set("overview", "full")
+const routesAPIURL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 
+// callRoutesAPI calls the Google Routes API and returns the first route.
+func (c *MapsClient) callRoutesAPI(ctx context.Context, waypoints []string) (*routesRoute, error) {
+	reqBody := routesRequest{
+		Origin:          waypointFromString(waypoints[0]),
+		Destination:     waypointFromString(waypoints[len(waypoints)-1]),
+		TravelMode:      "DRIVE",
+		PolylineQuality: "HIGH_QUALITY",
+	}
 	if len(waypoints) > 2 {
-		params.Set("waypoints", strings.Join(waypoints[1:len(waypoints)-1], "|"))
+		for _, wp := range waypoints[1 : len(waypoints)-1] {
+			reqBody.Intermediates = append(reqBody.Intermediates, waypointFromString(wp))
+		}
 	}
 
-	reqURL := "https://maps.googleapis.com/maps/api/directions/json?" + params.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, routesAPIURL, strings.NewReader(string(body)))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.accessToken)
+	req.Header.Set("X-Goog-FieldMask", "routes.polyline.encodedPolyline,routes.legs.startLocation,routes.legs.endLocation")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve route data from Google Maps API. Please verify the link is valid and try again: %w", err)
+		return nil, fmt.Errorf("failed to retrieve route from Google Routes API: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read API response: %w", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API call failed (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("Routes API call failed (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	var dirResp directionsAPIResponse
-	if err := json.Unmarshal(body, &dirResp); err != nil {
-		return nil, fmt.Errorf("parse API response: %w", err)
+	var routesResp routesResponse
+	if err := json.Unmarshal(respBody, &routesResp); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
-	if dirResp.Status != "OK" {
-		return nil, fmt.Errorf("API error: %s", dirResp.ErrorMessage)
+	if len(routesResp.Routes) == 0 {
+		return nil, fmt.Errorf("no routes found for the given waypoints")
 	}
 
-	return dirResp.Routes, nil
+	return &routesResp.Routes[0], nil
 }
 
-// buildRouteData constructs RouteData from a Directions API response.
-func buildRouteData(route directionsRoute, waypoints []string) (*RouteData, error) {
+// waypointFromString converts a raw waypoint string to a routesWaypoint.
+// Strings of the form "lat,lng" (both numeric) are treated as coordinates;
+// all other strings are treated as addresses.
+func waypointFromString(s string) routesWaypoint {
+	parts := strings.SplitN(s, ",", 2)
+	if len(parts) == 2 {
+		lat, errLat := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+		lng, errLng := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+		if errLat == nil && errLng == nil {
+			return routesWaypoint{
+				Location: &routesLocation{
+					LatLng: routesLatLng{Latitude: lat, Longitude: lng},
+				},
+			}
+		}
+	}
+	return routesWaypoint{Address: s}
+}
+
+// buildRouteData constructs RouteData from a Routes API response.
+func buildRouteData(route *routesRoute, waypoints []string) (*RouteData, error) {
 	if len(route.Legs) == 0 {
 		return nil, fmt.Errorf("route has no legs")
 	}
@@ -163,16 +189,16 @@ func buildRouteData(route directionsRoute, waypoints []string) (*RouteData, erro
 	// Start waypoint
 	data.RouteWaypoints = append(data.RouteWaypoints, RouteWaypoint{
 		Name:      waypoints[0],
-		Latitude:  route.Legs[0].StartLocation.Lat,
-		Longitude: route.Legs[0].StartLocation.Lng,
+		Latitude:  route.Legs[0].StartLocation.LatLng.Latitude,
+		Longitude: route.Legs[0].StartLocation.LatLng.Longitude,
 	})
 
-	// Intermediate waypoints (end of each leg except the last)
+	// Intermediate waypoints
 	for i := 0; i < len(route.Legs)-1; i++ {
 		data.RouteWaypoints = append(data.RouteWaypoints, RouteWaypoint{
 			Name:      waypoints[i+1],
-			Latitude:  route.Legs[i].EndLocation.Lat,
-			Longitude: route.Legs[i].EndLocation.Lng,
+			Latitude:  route.Legs[i].EndLocation.LatLng.Latitude,
+			Longitude: route.Legs[i].EndLocation.LatLng.Longitude,
 		})
 	}
 
@@ -180,31 +206,17 @@ func buildRouteData(route directionsRoute, waypoints []string) (*RouteData, erro
 	lastLeg := route.Legs[len(route.Legs)-1]
 	data.RouteWaypoints = append(data.RouteWaypoints, RouteWaypoint{
 		Name:      waypoints[len(waypoints)-1],
-		Latitude:  lastLeg.EndLocation.Lat,
-		Longitude: lastLeg.EndLocation.Lng,
+		Latitude:  lastLeg.EndLocation.LatLng.Latitude,
+		Longitude: lastLeg.EndLocation.LatLng.Longitude,
 	})
 
-	// Decode overview polyline for detailed track points
-	if route.OverviewPolyline.Points != "" {
-		points, err := decodePolyline(route.OverviewPolyline.Points)
+	// Decode route-level polyline
+	if route.Polyline.EncodedPolyline != "" {
+		points, err := decodePolyline(route.Polyline.EncodedPolyline)
 		if err != nil {
 			return nil, fmt.Errorf("decode polyline: %w", err)
 		}
 		data.TrackPoints = points
-	}
-
-	// Fallback: build track from per-leg polylines
-	if len(data.TrackPoints) == 0 {
-		for _, leg := range route.Legs {
-			if leg.Polyline.Points == "" {
-				continue
-			}
-			points, err := decodePolyline(leg.Polyline.Points)
-			if err != nil {
-				continue
-			}
-			data.TrackPoints = append(data.TrackPoints, points...)
-		}
 	}
 
 	return data, nil
@@ -264,30 +276,50 @@ func decodePolyline(encoded string) ([]TrackCoord, error) {
 	return points, nil
 }
 
-// API response types (Google Maps Directions API format)
+// --- Routes API request types ---
 
-type directionsAPIResponse struct {
-	Status       string            `json:"status"`
-	ErrorMessage string            `json:"error_message"`
-	Routes       []directionsRoute `json:"routes"`
+type routesRequest struct {
+	Origin          routesWaypoint   `json:"origin"`
+	Destination     routesWaypoint   `json:"destination"`
+	Intermediates   []routesWaypoint `json:"intermediates,omitempty"`
+	TravelMode      string           `json:"travelMode"`
+	PolylineQuality string           `json:"polylineQuality"`
 }
 
-type directionsRoute struct {
-	Legs             []directionsLeg `json:"legs"`
-	OverviewPolyline polylineEncoded `json:"overview_polyline"`
+type routesWaypoint struct {
+	Location *routesLocation `json:"location,omitempty"`
+	Address  string          `json:"address,omitempty"`
 }
 
-type directionsLeg struct {
-	StartLocation latlng          `json:"start_location"`
-	EndLocation   latlng          `json:"end_location"`
-	Polyline      polylineEncoded `json:"polyline"`
+type routesLocation struct {
+	LatLng routesLatLng `json:"latLng"`
 }
 
-type polylineEncoded struct {
-	Points string `json:"points"`
+type routesLatLng struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
 }
 
-type latlng struct {
-	Lat float64 `json:"lat"`
-	Lng float64 `json:"lng"`
+// --- Routes API response types ---
+
+type routesResponse struct {
+	Routes []routesRoute `json:"routes"`
+}
+
+type routesRoute struct {
+	Legs     []routesLeg    `json:"legs"`
+	Polyline routesPolyline `json:"polyline"`
+}
+
+type routesLeg struct {
+	StartLocation routesLocationResult `json:"startLocation"`
+	EndLocation   routesLocationResult `json:"endLocation"`
+}
+
+type routesLocationResult struct {
+	LatLng routesLatLng `json:"latLng"`
+}
+
+type routesPolyline struct {
+	EncodedPolyline string `json:"encodedPolyline"`
 }

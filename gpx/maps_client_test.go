@@ -43,8 +43,6 @@ func errResponse(code int, body string) *http.Response {
 	}
 }
 
-
-
 func TestValidateGoogleMapsURL(t *testing.T) {
 	tests := []struct {
 		url       string
@@ -112,22 +110,44 @@ func TestParseSharedLinkThreeStops(t *testing.T) {
 	}
 }
 
+func TestWaypointFromString_Coordinate(t *testing.T) {
+	wp := waypointFromString("40.238122,-75.526346")
+	if wp.Location == nil {
+		t.Fatal("expected Location to be set for coordinate string")
+	}
+	if wp.Address != "" {
+		t.Errorf("expected Address to be empty, got %q", wp.Address)
+	}
+	if wp.Location.LatLng.Latitude != 40.238122 {
+		t.Errorf("Latitude = %f, want 40.238122", wp.Location.LatLng.Latitude)
+	}
+	if wp.Location.LatLng.Longitude != -75.526346 {
+		t.Errorf("Longitude = %f, want -75.526346", wp.Location.LatLng.Longitude)
+	}
+}
+
+func TestWaypointFromString_Address(t *testing.T) {
+	wp := waypointFromString("Speedway, 14233 Kutztown Rd, Fleetwood, PA 19522")
+	if wp.Location != nil {
+		t.Error("expected Location to be nil for address string")
+	}
+	if wp.Address != "Speedway, 14233 Kutztown Rd, Fleetwood, PA 19522" {
+		t.Errorf("Address = %q, want %q", wp.Address, "Speedway, 14233 Kutztown Rd, Fleetwood, PA 19522")
+	}
+}
+
 func TestBuildRouteData_TwoLegs(t *testing.T) {
-	// Construct a fake two-leg route: Home -> Midpoint -> Work
-	route := directionsRoute{
-		Legs: []directionsLeg{
+	route := &routesRoute{
+		Legs: []routesLeg{
 			{
-				StartLocation: latlng{Lat: 40.7128, Lng: -74.0060},
-				EndLocation:   latlng{Lat: 40.7300, Lng: -74.0000},
-				Polyline:      polylineEncoded{Points: ""},
+				StartLocation: routesLocationResult{LatLng: routesLatLng{Latitude: 40.7128, Longitude: -74.0060}},
+				EndLocation:   routesLocationResult{LatLng: routesLatLng{Latitude: 40.7300, Longitude: -74.0000}},
 			},
 			{
-				StartLocation: latlng{Lat: 40.7300, Lng: -74.0000},
-				EndLocation:   latlng{Lat: 40.7580, Lng: -73.9855},
-				Polyline:      polylineEncoded{Points: ""},
+				StartLocation: routesLocationResult{LatLng: routesLatLng{Latitude: 40.7300, Longitude: -74.0000}},
+				EndLocation:   routesLocationResult{LatLng: routesLatLng{Latitude: 40.7580, Longitude: -73.9855}},
 			},
 		},
-		OverviewPolyline: polylineEncoded{Points: ""},
 	}
 	waypoints := []string{"Home", "Midpoint", "Work"}
 
@@ -142,7 +162,6 @@ func TestBuildRouteData_TwoLegs(t *testing.T) {
 	if data.DestinationName != "Work" {
 		t.Errorf("DestinationName = %q, want %q", data.DestinationName, "Work")
 	}
-	// Expect 3 waypoints: Home, Midpoint, Work
 	if len(data.RouteWaypoints) != 3 {
 		t.Fatalf("RouteWaypoints len = %d, want 3", len(data.RouteWaypoints))
 	}
@@ -155,18 +174,16 @@ func TestBuildRouteData_TwoLegs(t *testing.T) {
 	if data.RouteWaypoints[2].Name != "Work" {
 		t.Errorf("waypoint[2].Name = %q, want %q", data.RouteWaypoints[2].Name, "Work")
 	}
-	// Verify start coordinates
 	if data.RouteWaypoints[0].Latitude != 40.7128 {
 		t.Errorf("waypoint[0].Latitude = %f, want 40.7128", data.RouteWaypoints[0].Latitude)
 	}
-	// Verify destination coordinates
 	if data.RouteWaypoints[2].Latitude != 40.7580 {
 		t.Errorf("waypoint[2].Latitude = %f, want 40.7580", data.RouteWaypoints[2].Latitude)
 	}
 }
 
 func TestBuildRouteData_NoLegs(t *testing.T) {
-	route := directionsRoute{Legs: nil}
+	route := &routesRoute{Legs: nil}
 	_, err := buildRouteData(route, []string{"A", "B"})
 	if err == nil {
 		t.Error("buildRouteData with no legs should return an error")
@@ -175,14 +192,14 @@ func TestBuildRouteData_NoLegs(t *testing.T) {
 
 func TestBuildRouteData_WithOverviewPolyline(t *testing.T) {
 	// "_p~iF~ps|U_ulLnnqC_mqNvxq`@" decodes to 3 points
-	route := directionsRoute{
-		Legs: []directionsLeg{
+	route := &routesRoute{
+		Legs: []routesLeg{
 			{
-				StartLocation: latlng{Lat: 38.5, Lng: -120.2},
-				EndLocation:   latlng{Lat: 40.7, Lng: -120.95},
+				StartLocation: routesLocationResult{LatLng: routesLatLng{Latitude: 38.5, Longitude: -120.2}},
+				EndLocation:   routesLocationResult{LatLng: routesLatLng{Latitude: 40.7, Longitude: -120.95}},
 			},
 		},
-		OverviewPolyline: polylineEncoded{Points: "_p~iF~ps|U_ulLnnqC_mqNvxq`@"},
+		Polyline: routesPolyline{EncodedPolyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@"},
 	}
 	waypoints := []string{"Start", "End"}
 
@@ -191,55 +208,74 @@ func TestBuildRouteData_WithOverviewPolyline(t *testing.T) {
 		t.Fatalf("buildRouteData: %v", err)
 	}
 	if len(data.TrackPoints) == 0 {
-		t.Error("expected track points from overview polyline, got none")
+		t.Error("expected track points from polyline, got none")
 	}
 }
 
-func TestCallDirectionsAPI_OK(t *testing.T) {
-	fakeRoute := directionsRoute{
-		Legs: []directionsLeg{
+func TestCallRoutesAPI_OK(t *testing.T) {
+	fakeRoute := routesRoute{
+		Legs: []routesLeg{
 			{
-				StartLocation: latlng{Lat: 40.0, Lng: -74.0},
-				EndLocation:   latlng{Lat: 41.0, Lng: -75.0},
+				StartLocation: routesLocationResult{LatLng: routesLatLng{Latitude: 40.0, Longitude: -74.0}},
+				EndLocation:   routesLocationResult{LatLng: routesLatLng{Latitude: 41.0, Longitude: -75.0}},
 			},
 		},
 	}
-	fakeResp := directionsAPIResponse{Status: "OK", Routes: []directionsRoute{fakeRoute}}
+	fakeResp := routesResponse{Routes: []routesRoute{fakeRoute}}
 
+	var capturedReq *http.Request
 	client := newTestMapsClient(func(req *http.Request) (*http.Response, error) {
+		capturedReq = req
 		return jsonResponse(fakeResp), nil
 	})
 
-	routes, err := client.callDirectionsAPI(context.Background(), []string{"A", "B"})
+	route, err := client.callRoutesAPI(context.Background(), []string{"A", "B"})
 	if err != nil {
-		t.Fatalf("callDirectionsAPI: %v", err)
+		t.Fatalf("callRoutesAPI: %v", err)
 	}
-	if len(routes) != 1 {
-		t.Errorf("expected 1 route, got %d", len(routes))
+	if route == nil {
+		t.Fatal("expected a route, got nil")
+	}
+
+	// Verify POST method
+	if capturedReq.Method != http.MethodPost {
+		t.Errorf("method = %q, want POST", capturedReq.Method)
+	}
+	// Verify URL
+	if capturedReq.URL.String() != routesAPIURL {
+		t.Errorf("URL = %q, want %q", capturedReq.URL.String(), routesAPIURL)
+	}
+	// Verify Authorization header
+	if auth := capturedReq.Header.Get("Authorization"); auth != "Bearer test-token" {
+		t.Errorf("Authorization = %q, want %q", auth, "Bearer test-token")
+	}
+	// Verify X-Goog-FieldMask header
+	if mask := capturedReq.Header.Get("X-Goog-FieldMask"); mask == "" {
+		t.Error("X-Goog-FieldMask header should be set")
 	}
 }
 
-func TestCallDirectionsAPI_NonOKStatus(t *testing.T) {
-	fakeResp := directionsAPIResponse{Status: "ZERO_RESULTS", ErrorMessage: "no route found"}
-
-	client := newTestMapsClient(func(req *http.Request) (*http.Response, error) {
-		return jsonResponse(fakeResp), nil
-	})
-
-	_, err := client.callDirectionsAPI(context.Background(), []string{"A", "B"})
-	if err == nil {
-		t.Error("expected error for non-OK API status")
-	}
-}
-
-func TestCallDirectionsAPI_HTTPError(t *testing.T) {
+func TestCallRoutesAPI_HTTPError(t *testing.T) {
 	client := newTestMapsClient(func(req *http.Request) (*http.Response, error) {
 		return errResponse(http.StatusInternalServerError, "server error"), nil
 	})
 
-	_, err := client.callDirectionsAPI(context.Background(), []string{"A", "B"})
+	_, err := client.callRoutesAPI(context.Background(), []string{"A", "B"})
 	if err == nil {
 		t.Error("expected error for HTTP 500 response")
+	}
+}
+
+func TestCallRoutesAPI_NoRoutes(t *testing.T) {
+	fakeResp := routesResponse{Routes: []routesRoute{}}
+
+	client := newTestMapsClient(func(req *http.Request) (*http.Response, error) {
+		return jsonResponse(fakeResp), nil
+	})
+
+	_, err := client.callRoutesAPI(context.Background(), []string{"A", "B"})
+	if err == nil {
+		t.Error("expected error when no routes returned")
 	}
 }
 
@@ -252,7 +288,7 @@ func TestGetRoute_InvalidURL(t *testing.T) {
 }
 
 func TestGetRoute_NoRoutes(t *testing.T) {
-	fakeResp := directionsAPIResponse{Status: "OK", Routes: []directionsRoute{}}
+	fakeResp := routesResponse{Routes: []routesRoute{}}
 
 	client := newTestMapsClient(func(req *http.Request) (*http.Response, error) {
 		return jsonResponse(fakeResp), nil
@@ -265,16 +301,16 @@ func TestGetRoute_NoRoutes(t *testing.T) {
 }
 
 func TestGetRoute_Success(t *testing.T) {
-	fakeRoute := directionsRoute{
-		Legs: []directionsLeg{
+	fakeRoute := routesRoute{
+		Legs: []routesLeg{
 			{
-				StartLocation: latlng{Lat: 40.7128, Lng: -74.0060},
-				EndLocation:   latlng{Lat: 40.7580, Lng: -73.9855},
+				StartLocation: routesLocationResult{LatLng: routesLatLng{Latitude: 40.7128, Longitude: -74.0060}},
+				EndLocation:   routesLocationResult{LatLng: routesLatLng{Latitude: 40.7580, Longitude: -73.9855}},
 			},
 		},
-		OverviewPolyline: polylineEncoded{Points: "_p~iF~ps|U_ulLnnqC_mqNvxq`@"},
+		Polyline: routesPolyline{EncodedPolyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@"},
 	}
-	fakeResp := directionsAPIResponse{Status: "OK", Routes: []directionsRoute{fakeRoute}}
+	fakeResp := routesResponse{Routes: []routesRoute{fakeRoute}}
 
 	client := newTestMapsClient(func(req *http.Request) (*http.Response, error) {
 		return jsonResponse(fakeResp), nil
