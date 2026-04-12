@@ -199,3 +199,67 @@ make build
 - The `auth/` package import in `gpx/service_test.go` must be removed since `MockCredentialStore` is deleted. Confirm no other types from `auth` are referenced in that file.
 - The API key is passed in the query string rather than a header because that is what the Routes API expects for key-based auth. Do not use `Authorization: Bearer <key>` — that is the OAuth pattern and will not work.
 - `builtInGoogleClientID` and `builtInGoogleClientSecret` are intentionally kept unused in `main.go`. Do not delete them or add `//nolint` pragmas — they are reserved for future use.
+
+---
+
+# Task 014 Review: Switch GPX Command from OAuth to API Key Authentication
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-04-12
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Replaced OAuth-based authentication in the GPX command with API key authentication. `MapsClient` now passes the key as a `?key=` query parameter, `Service` accepts a plain string instead of an authenticator, and `main.go` introduces `builtInGoogleAPIKey` with an empty-check guard in `runGpx`.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `gpx/maps_client.go` | Reviewed |
+| `gpx/maps_client_test.go` | Reviewed |
+| `gpx/service.go` | Reviewed |
+| `gpx/service_test.go` | Reviewed |
+| `main.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `MapsClient.apiKey` replaces `accessToken`; request uses `?key=` with no `Authorization` header | PASS |
+| `NewService(apiKey string)` compiles and no longer imports `auth` | PASS |
+| `MockCredentialStore` and related auth test scaffolding removed from `gpx/service_test.go` | PASS |
+| `main.go` has `builtInGoogleAPIKey`; OAuth vars retained with reserved comment | PASS |
+| `runGpx` returns clear error if `builtInGoogleAPIKey` is empty | PASS |
+| `auth` import removed from `main.go` | PASS |
+| `TestCallRoutesAPI_OK` asserts API key in query string, not Authorization header | PASS |
+| `go test ./... -short` passes | PASS |
+| `go build ./...` compiles without errors | PASS |
+| Nothing in `auth/` modified | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go build ./...         # clean, no errors
+go test -short ./...   # all packages pass
+make lint              # go vet clean, no issues
+git diff --name-only HEAD auth/  # no auth/ files changed
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met. Implementation matches the specification exactly; no issues found.

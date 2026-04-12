@@ -19,8 +19,8 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 // newTestMapsClient returns a MapsClient whose HTTP calls are intercepted by fn.
 func newTestMapsClient(fn roundTripFunc) *MapsClient {
 	return &MapsClient{
-		accessToken: "test-token",
-		httpClient:  &http.Client{Transport: fn},
+		apiKey:     "test-token",
+		httpClient: &http.Client{Transport: fn},
 	}
 }
 
@@ -241,13 +241,12 @@ func TestCallRoutesAPI_OK(t *testing.T) {
 	if capturedReq.Method != http.MethodPost {
 		t.Errorf("method = %q, want POST", capturedReq.Method)
 	}
-	// Verify URL
-	if capturedReq.URL.String() != routesAPIURL {
-		t.Errorf("URL = %q, want %q", capturedReq.URL.String(), routesAPIURL)
+	// Verify API key is in query string, not Authorization header
+	if key := capturedReq.URL.Query().Get("key"); key != "test-token" {
+		t.Errorf("key query param = %q, want %q", key, "test-token")
 	}
-	// Verify Authorization header
-	if auth := capturedReq.Header.Get("Authorization"); auth != "Bearer test-token" {
-		t.Errorf("Authorization = %q, want %q", auth, "Bearer test-token")
+	if auth := capturedReq.Header.Get("Authorization"); auth != "" {
+		t.Errorf("Authorization header should not be set, got %q", auth)
 	}
 	// Verify X-Goog-FieldMask header
 	if mask := capturedReq.Header.Get("X-Goog-FieldMask"); mask == "" {

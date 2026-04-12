@@ -3,8 +3,6 @@ package gpx
 import (
 	"context"
 	"fmt"
-
-	"github.com/yardbirdsax/twisty/auth"
 )
 
 // RouteGetter retrieves route data from a Google Maps URL.
@@ -14,25 +12,18 @@ type RouteGetter interface {
 
 // Service orchestrates the GPX conversion pipeline.
 type Service struct {
-	authenticator *auth.Authenticator
+	apiKey string
 }
 
 // NewService creates a new GPX conversion service.
-func NewService(authenticator *auth.Authenticator) *Service {
-	return &Service{authenticator: authenticator}
+func NewService(apiKey string) *Service {
+	return &Service{apiKey: apiKey}
 }
 
-// ConvertToFile is the end-to-end pipeline: it authenticates with Google,
-// fetches the route data from the Maps API, and writes a GPX 1.1 file to outPath.
+// ConvertToFile is the end-to-end pipeline: it fetches the route from the
+// Routes API using the provided API key and writes a GPX 1.1 file to outPath.
 func (s *Service) ConvertToFile(ctx context.Context, mapsURL, outPath string) error {
-	// Get or refresh authentication token
-	token, err := s.authenticator.GetToken(ctx)
-	if err != nil {
-		return fmt.Errorf("authentication failed: %w", err)
-	}
-
-	// Extract route from Google Maps
-	client := NewMapsClient(token.AccessToken)
+	client := NewMapsClient(s.apiKey)
 	return s.convertWithClient(ctx, client, mapsURL, outPath)
 }
 

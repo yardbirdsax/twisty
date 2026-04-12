@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/yardbirdsax/twisty/auth"
 	"github.com/yardbirdsax/twisty/geo"
 	"github.com/yardbirdsax/twisty/geocode"
 	"github.com/yardbirdsax/twisty/gpx"
@@ -24,13 +23,16 @@ import (
 	"github.com/yardbirdsax/twisty/waypoint"
 )
 
-// builtInGoogleClientID and builtInGoogleClientSecret are the OAuth credentials
-// for the twisty Google Cloud project. These can be overridden at build time via
-// -ldflags "-X main.builtInGoogleClientID=<id> -X main.builtInGoogleClientSecret=<secret>"
+// builtInGoogleClientID and builtInGoogleClientSecret are reserved for a future
+// OAuth flow. They are currently unused. Set at build time via -ldflags if needed.
 var (
 	builtInGoogleClientID     = ""
 	builtInGoogleClientSecret = ""
 )
+
+// builtInGoogleAPIKey is the Routes API key injected at build time via:
+// -ldflags "-X main.builtInGoogleAPIKey=<key>"
+var builtInGoogleAPIKey = ""
 
 func main() {
 	root := newRootCmd()
@@ -1284,22 +1286,12 @@ LIMITATIONS:
 	return cmd
 }
 
-// runGpx orchestrates the GPX conversion pipeline:
-// 1. Initialize the credential store and OAuth config.
-// 2. Build an Authenticator that retrieves or refreshes the Google access token.
-// 3. Pass the token to the GPX service, which calls the Maps API and writes the output file.
 func runGpx(ctx context.Context, mapsURL, outPath string) error {
-	store, err := auth.NewCredentialStore("twisty-maps")
-	if err != nil {
-		return fmt.Errorf("failed to initialize credential store: %w", err)
+	if builtInGoogleAPIKey == "" {
+		return fmt.Errorf("no Google API key configured; rebuild with make build")
 	}
 
-	oauthConfig := auth.DefaultGoogleMapsOAuthConfig()
-	oauthConfig.ClientID = builtInGoogleClientID
-	oauthConfig.ClientSecret = builtInGoogleClientSecret
-
-	authenticator := auth.NewAuthenticator(oauthConfig, store)
-	service := gpx.NewService(authenticator)
+	service := gpx.NewService(builtInGoogleAPIKey)
 
 	fmt.Fprintln(os.Stderr, "Converting Google Maps route to GPX...")
 

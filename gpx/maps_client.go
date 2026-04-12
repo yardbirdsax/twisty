@@ -14,14 +14,14 @@ import (
 
 // MapsClient handles calls to the Google Routes API.
 type MapsClient struct {
-	accessToken string
-	httpClient  *http.Client
+	apiKey     string
+	httpClient *http.Client
 }
 
 // NewMapsClient creates a new Google Maps API client.
-func NewMapsClient(accessToken string) *MapsClient {
+func NewMapsClient(apiKey string) *MapsClient {
 	return &MapsClient{
-		accessToken: accessToken,
+		apiKey: apiKey,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -121,13 +121,21 @@ func (c *MapsClient) callRoutesAPI(ctx context.Context, waypoints []string) (*ro
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, routesAPIURL, strings.NewReader(string(body)))
+	reqURL, err := url.Parse(routesAPIURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse routes API URL: %w", err)
+	}
+	q := reqURL.Query()
+	q.Set("key", c.apiKey)
+	reqURL.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL.String(), strings.NewReader(string(body)))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.accessToken)
 	req.Header.Set("X-Goog-FieldMask", "routes.polyline.encodedPolyline,routes.legs.startLocation,routes.legs.endLocation")
+	// No Authorization header — API key is in the query string
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
