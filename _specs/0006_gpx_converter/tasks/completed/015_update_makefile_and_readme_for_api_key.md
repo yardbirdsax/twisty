@@ -144,3 +144,61 @@ GOOGLE_API_KEY= make build
 - The `gcloud alpha services api-keys create` command syntax should be verified during implementation — the `alpha` component is required as of early 2026 and the flags may differ slightly across gcloud versions.
 - The Makefile `?=` assignment allows `GOOGLE_API_KEY=abc123 make build` to work in CI without touching the Keychain.
 - The README warning about key extractability (it's baked into the binary) is intentionally omitted from user-facing docs — it's an accepted trade-off for a locally-distributed CLI, and the key restriction + quota cap mitigate the risk.
+
+---
+
+# Task 015 Review: Update Makefile and README for API Key Provisioning
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-04-12
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Replaces the two-secret OAuth keychain pattern (`GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`) with a single `twisty/build/google/api-key` entry. Updates Makefile to inject `builtInGoogleAPIKey` at link time and rewrites README `### Setup` and `### Authentication` subsections to use `gcloud`-based API key provisioning.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Makefile` | Reviewed |
+| `/README.md` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| Makefile uses `GOOGLE_API_KEY` / `twisty/build/google/api-key` | PASS |
+| `GOOGLE_LDFLAGS` injects `-X main.builtInGoogleAPIKey` | PASS |
+| `make build` fails with clear error when key is empty | PASS |
+| README `### Setup` uses `gcloud` to enable `routes.googleapis.com` and create key-restricted API key | PASS |
+| README `### Authentication` no longer describes browser login flow | PASS |
+| `make build` produces `bin/twisty` when key is present (logic verified) | PASS |
+| No references to `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, or OAuth in Makefile or README | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go test -short ./...   # all packages pass
+go vet ./...           # clean, no issues
+grep GOOGLE_CLIENT_ID Makefile README.md   # no matches
+grep GOOGLE_CLIENT_SECRET Makefile README.md   # no matches
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met. Implementation matches the task spec exactly. Tests pass and linter is clean.
