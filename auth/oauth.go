@@ -25,12 +25,12 @@ type OAuthConfig struct {
 	Scope        string
 }
 
-// DefaultGoogleMapsOAuthConfig returns the default Google OAuth configuration for Maps API.
+// DefaultGoogleMapsOAuthConfig returns the default Google OAuth configuration for the Routes API.
 func DefaultGoogleMapsOAuthConfig() *OAuthConfig {
 	return &OAuthConfig{
 		AuthURL:  "https://accounts.google.com/o/oauth2/v2/auth",
 		TokenURL: "https://oauth2.googleapis.com/token",
-		Scope:    "https://www.googleapis.com/auth/maps-platform.routesPreferredApi",
+		Scope:    "https://www.googleapis.com/auth/maps-platform.routespreferred",
 	}
 }
 
