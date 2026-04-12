@@ -84,6 +84,9 @@ func (c *MapsClient) parseSharedLink(mapsURL string) ([]string, error) {
 				if wp == "" {
 					continue
 				}
+				if strings.HasPrefix(wp, "@") {
+					break
+				}
 				if decoded, err := url.QueryUnescape(wp); err == nil {
 					waypoints = append(waypoints, decoded)
 				} else {
