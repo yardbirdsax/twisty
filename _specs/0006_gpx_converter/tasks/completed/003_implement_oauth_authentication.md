@@ -533,3 +533,68 @@ All tests should pass.
 - The loopback listener approach avoids the need for a persistent web server and stays local-only.
 - Token refresh happens transparently; users should not be prompted within a 24-hour period under normal usage.
 - The 5-minute timeout prevents users from being stuck waiting indefinitely.
+
+---
+
+# Task 003 Review: Implement OAuth 2.0 PKCE Authentication Flow
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-04-11
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Implements OAuth 2.0 PKCE flow across three files: `auth/token.go` (Token struct), `auth/pkce.go` (PKCE/state generation), and `auth/oauth.go` (Authenticator with browser-based login, token caching, and refresh).
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `auth/token.go` | Reviewed |
+| `auth/pkce.go` | Reviewed |
+| `auth/oauth.go` | Reviewed |
+| `auth/oauth_test.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `auth/token.go` defines `Token` struct with `IsExpired()` (1-minute buffer) | PASS |
+| `auth/pkce.go` implements `GeneratePKCE` (S256 challenge) and `GenerateState` | PASS |
+| `auth/oauth.go` implements `Authenticator` with PKCE consent flow | PASS |
+| `GetToken` retrieves cached token or initiates refresh/interactive login | PASS |
+| `interactiveLogin` opens browser and starts loopback listener on random port | PASS |
+| Loopback listener captures authorization code and state via HTTP handler | PASS |
+| `exchangeCode` exchanges code for token via Google token endpoint | PASS |
+| `refreshToken` uses refresh token; deletes stale token on failure | PASS |
+| Token persisted to credential store after acquisition | PASS |
+| 5-minute timeout enforced on authentication flow | PASS |
+| State parameter validated for CSRF protection | PASS |
+| Unit tests pass for PKCE generation, state generation, and token expiry | PASS |
+| `go build ./...` compiles without errors | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go build ./...          # exit 0, no output
+go test ./auth/... -v   # exit 0, all 5 tests PASS
+make lint               # exit 0, no issues
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met. Build, tests, and lint pass cleanly.
