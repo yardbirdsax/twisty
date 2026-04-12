@@ -230,3 +230,62 @@ Expected output shows `--maps-url` and `--out` flags.
 - Import paths are `github.com/yardbirdsax/twisty/auth` and `github.com/yardbirdsax/twisty/gpx` — no `internal/` prefix.
 - Per project convention (see existing commands), errors are printed to stderr before the process exits. Cobra handles this when `RunE` returns an error, so `runGpx` should return errors rather than printing them directly.
 - Built-in credentials can be left empty for development and set via ldflags in CI/release builds.
+
+---
+
+# Task 006 Review: Integrate Components and Implement Command Handler
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-04-11
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Wires authentication, Maps API client, and GPX generation into `gpx/service.go` and `main.go`'s `runGpx()` / `newGpxCmd()`.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `gpx/service.go` | Reviewed |
+| `gpx/service_test.go` | Reviewed |
+| `main.go` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `gpx/service.go` implements `Service` with `ConvertToFile(ctx, mapsURL, outPath)` | PASS |
+| `newGpxCmd()` calls `runGpx()` via `RunE` | PASS |
+| `runGpx()` initializes credential store, authenticator, and service in sequence | PASS |
+| Built-in OAuth vars overridable via ldflags | PASS |
+| Errors returned, not printed, in `runGpx` | PASS |
+| Success message printed to stderr after file write | PASS |
+| `go build ./...` compiles without errors | PASS |
+| `go run . gpx --help` shows `--maps-url` and `--out` flags | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+make test   # All packages pass: ok github.com/yardbirdsax/twisty/gpx 1.074s
+go vet ./.. # Clean, no output
+make lint   # Failed with sandbox filesystem permission error (not a code issue)
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+All acceptance criteria met. Tests pass. `go vet` is clean. `make lint` failed with a filesystem sandbox permission error unrelated to code quality.

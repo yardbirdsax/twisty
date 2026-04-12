@@ -15,12 +15,21 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/yardbirdsax/twisty/auth"
 	"github.com/yardbirdsax/twisty/geo"
 	"github.com/yardbirdsax/twisty/geocode"
 	"github.com/yardbirdsax/twisty/gpx"
 	"github.com/yardbirdsax/twisty/quality"
 	"github.com/yardbirdsax/twisty/route"
 	"github.com/yardbirdsax/twisty/waypoint"
+)
+
+// builtInGoogleClientID and builtInGoogleClientSecret are the OAuth credentials
+// for the twisty Google Cloud project. These can be overridden at build time via
+// -ldflags "-X main.builtInGoogleClientID=<id> -X main.builtInGoogleClientSecret=<secret>"
+var (
+	builtInGoogleClientID     = ""
+	builtInGoogleClientSecret = ""
 )
 
 func main() {
@@ -1231,11 +1240,13 @@ func newGpxCmd() *cobra.Command {
 		Long: `Export a driving route from a Google Maps shared link as a GPX file
 for use in offline navigation applications like OSMAnd.
 
+The first time you run this command, you will be prompted to authenticate
+with Google. Your credentials are stored securely and reused automatically.
+
 Example:
   twisty gpx --maps-url https://maps.app.goo.gl/... --out route.gpx`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// TODO: Implement in Task 006
-			return fmt.Errorf("not implemented")
+			return runGpx(cmd.Context(), mapsURL, outPath)
 		},
 	}
 
@@ -1245,4 +1256,27 @@ Example:
 	cmd.MarkFlagRequired("out")      //nolint:errcheck
 
 	return cmd
+}
+
+func runGpx(ctx context.Context, mapsURL, outPath string) error {
+	store, err := auth.NewCredentialStore("twisty-maps")
+	if err != nil {
+		return fmt.Errorf("failed to initialize credential store: %w", err)
+	}
+
+	oauthConfig := auth.DefaultGoogleMapsOAuthConfig()
+	oauthConfig.ClientID = builtInGoogleClientID
+	oauthConfig.ClientSecret = builtInGoogleClientSecret
+
+	authenticator := auth.NewAuthenticator(oauthConfig, store)
+	service := gpx.NewService(authenticator)
+
+	fmt.Fprintln(os.Stderr, "Converting Google Maps route to GPX...")
+
+	if err := service.ConvertToFile(ctx, mapsURL, outPath); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "Route exported: %s\n", outPath)
+	return nil
 }
