@@ -37,6 +37,9 @@ twisty
 # Local Overpass API data
 .overpass/
 
+# Build output
+bin/
+
 # Benchmark data
 .benchmark-data/
 

@@ -11,6 +11,34 @@ test-integration:
 lint:
 	go vet ./...
 
+# --- Build ---
+
+# Keychain keys used to retrieve built-in Google OAuth2 credentials at build time.
+# Store them once with:
+#   security add-generic-password -s twisty/build/google/client-id     -a twisty -w '<value>'
+#   security add-generic-password -s twisty/build/google/client-secret -a twisty -w '<value>'
+GOOGLE_CLIENT_ID     ?= $(shell security find-generic-password -s twisty/build/google/client-id     -a twisty -w 2>/dev/null)
+GOOGLE_CLIENT_SECRET ?= $(shell security find-generic-password -s twisty/build/google/client-secret -a twisty -w 2>/dev/null)
+
+GOOGLE_LDFLAGS = \
+  -X main.builtInGoogleClientID=$(GOOGLE_CLIENT_ID) \
+  -X main.builtInGoogleClientSecret=$(GOOGLE_CLIENT_SECRET)
+
+.PHONY: build
+build: ## Build the twisty binary with Google OAuth2 credentials injected from the macOS keychain.
+	@if [ -z "$(GOOGLE_CLIENT_ID)" ]; then \
+		echo "ERROR: twisty/build/google/client-id not found in keychain."; \
+		echo "  security add-generic-password -s twisty/build/google/client-id -a twisty -w '<value>'"; \
+		exit 1; \
+	fi
+	@if [ -z "$(GOOGLE_CLIENT_SECRET)" ]; then \
+		echo "ERROR: twisty/build/google/client-secret not found in keychain."; \
+		echo "  security add-generic-password -s twisty/build/google/client-secret -a twisty -w '<value>'"; \
+		exit 1; \
+	fi
+	@mkdir -p bin
+	go build -ldflags "$(GOOGLE_LDFLAGS)" -o bin/twisty .
+
 # --- Local Overpass API ---
 OVERPASS_ARGS ?=
 

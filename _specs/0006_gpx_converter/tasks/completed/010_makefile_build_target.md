@@ -96,3 +96,73 @@ GOOGLE_CLIENT_ID= GOOGLE_CLIENT_SECRET= make build
 - The `?=` assignment allows `GOOGLE_CLIENT_ID=foo GOOGLE_CLIENT_SECRET=bar make build` to work without the Keychain, which is useful in CI environments that inject secrets via environment variables.
 - The output binary goes to `bin/twisty` (not the repo root) to keep the root clean. `bin/` is presumed to already be in `.gitignore`.
 - Do not add an `install` target in this task — keep scope minimal.
+
+---
+# Task 010 Review: Add Makefile Build Target with Keychain Credential Injection
+
+**Reviewer:** Claude Sonnet 4.6
+**Date:** 2026-04-12
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+Adds a `build` Makefile target that retrieves Google OAuth2 credentials from the macOS Keychain via `security find-generic-password`, injects them into the binary at link time via `-ldflags`, and validates their presence before building.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `Makefile` | Reviewed |
+| `.gitignore` | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` read from Keychain with correct service/account names | PASS |
+| Both variables use `?=` | PASS |
+| `GOOGLE_LDFLAGS` injects `-X main.builtInGoogleClientID` and `-X main.builtInGoogleClientSecret` | PASS |
+| `build` validates `GOOGLE_CLIENT_ID` non-empty, prints command, exits non-zero | PASS |
+| `build` validates `GOOGLE_CLIENT_SECRET` non-empty, prints command, exits non-zero | PASS |
+| `build` creates `bin/` if absent | PASS |
+| `build` produces `bin/twisty` | PASS |
+| No existing Makefile targets are modified | PASS |
+| `bin/` in `.gitignore` | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+GOOGLE_CLIENT_ID="" GOOGLE_CLIENT_SECRET="" make build
+# Result: ERROR message printed, exit 2 — correct behavior
+
+make test
+# All packages pass; root package fails with "operation not permitted" on go-build cache — sandbox restriction, not a code issue
+
+make lint
+# Fails with same sandbox restriction on go-build cache — not a code issue
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+Both previously flagged issues are resolved: the original `.PHONY` line is unchanged, `build` has its own standalone `.PHONY: build` declaration, and `bin/` is present in `.gitignore`. All acceptance criteria pass.
+
+---
+
+## Verdict Definitions
+
+- **APPROVED**: All acceptance criteria met, no issues found. Ready to merge.
+- **NEEDS REVISION**: One or more issues found. Address all MUST FIX items before re-review.
