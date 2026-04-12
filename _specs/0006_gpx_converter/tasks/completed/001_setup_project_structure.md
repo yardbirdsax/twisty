@@ -176,3 +176,61 @@ Expected output should show the `gpx` command with `--maps-url` and `--out` flag
 - The `gpx/` package already exists — new types added in this task must not conflict with existing types (`Waypoint`, `Track`, `TrackSeg`, `TrackPoint`, `GPX`).
 - The command is `twisty gpx --maps-url <url> --out <file>` — there is NO `convert` subcommand.
 - The `auth/` package is a new package; subsequent tasks will add implementations to it.
+
+---
+
+# Task 001 Review: Set Up Project Structure and Cobra Command Skeleton
+
+**Reviewer:** Principal Engineer
+**Date:** 2026-04-11
+**Verdict:** APPROVED
+
+---
+
+## Summary
+
+This task implements the foundational scaffolding for the GPX converter feature: the `auth/` package with a `CredentialStore` interface, route data types in `gpx/route.go`, and a `gpx` Cobra command skeleton in `main.go`. All three files match the spec exactly.
+
+### Files Reviewed
+
+| File | Status |
+|------|--------|
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/auth/store.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/gpx/route.go` | Reviewed |
+| `/Users/joshuafeierman/repos/yardbirdsax/twisty/main.go` (newGpxCmd, newRootCmd) | Reviewed |
+
+### Acceptance Criteria Verification
+
+| Criterion | Result |
+|-----------|--------|
+| `auth/store.go` defines `CredentialStore` interface with `Get`, `Set`, `Delete` methods and `ErrNotFound` error | PASS |
+| `gpx/route.go` defines `RouteData`, `RouteWaypoint`, and `TrackCoord` types | PASS |
+| `newGpxCmd()` function added to `main.go` with `--maps-url` and `--out` flags (both required) | PASS |
+| `newGpxCmd()` registered in `newRootCmd()` in `main.go` | PASS |
+| `go build ./...` compiles without errors | PASS |
+| `go run . gpx --help` displays help text with `--maps-url` and `--out` flags | PASS |
+
+---
+
+## MUST FIX
+
+No blocking issues found.
+
+---
+
+## Verification Commands Run
+
+```bash
+go build ./...           # Clean build, no errors
+go run . gpx --help      # Displays correct help with --maps-url and --out flags
+make test                # All tests pass (auth has no test files, as expected for an interface-only package)
+make lint                # Blocked by sandbox filesystem permissions (go build cache), not a code issue
+```
+
+---
+
+## Final Verdict
+
+**APPROVED**
+
+The implementation matches the task specification exactly. All three new files (`auth/store.go`, `gpx/route.go`, and the `newGpxCmd()` addition to `main.go`) are correct, the project builds cleanly, existing tests continue to pass, and the `gpx --help` output shows the expected flags.

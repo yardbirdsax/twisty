@@ -44,6 +44,7 @@ func newRootCmd() *cobra.Command {
 		newScoreCmd(),
 		newRandomCmd(),
 		newOverpassCmd(),
+		newGpxCmd(),
 	)
 	return cmd
 }
@@ -1218,4 +1219,30 @@ func printSummary(routes []route.Route, selectedIdx int, outPath string, showAll
 		len(selected.Points),
 	)
 	fmt.Printf("GPX written to %s\n", outPath)
+}
+
+func newGpxCmd() *cobra.Command {
+	var mapsURL string
+	var outPath string
+
+	cmd := &cobra.Command{
+		Use:   "gpx",
+		Short: "Convert a Google Maps shared link to a GPX file",
+		Long: `Export a driving route from a Google Maps shared link as a GPX file
+for use in offline navigation applications like OSMAnd.
+
+Example:
+  twisty gpx --maps-url https://maps.app.goo.gl/... --out route.gpx`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// TODO: Implement in Task 006
+			return fmt.Errorf("not implemented")
+		},
+	}
+
+	cmd.Flags().StringVar(&mapsURL, "maps-url", "", "Google Maps shared link URL (required)")
+	cmd.Flags().StringVar(&outPath, "out", "", "Output GPX file path (required)")
+	cmd.MarkFlagRequired("maps-url") //nolint:errcheck
+	cmd.MarkFlagRequired("out")      //nolint:errcheck
+
+	return cmd
 }
