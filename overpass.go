@@ -225,7 +225,7 @@ func runOverpassStart(regions string, port int, dataDir string, stderr io.Writer
 			pbfPaths = append(pbfPaths, filepath.Join(pbfDir, filename))
 		}
 		fmt.Fprintf(stderr, "Converting %d PBF file(s) to BZ2...\n", len(pbfPaths))
-		if err := convertPBFsToBZ2(pbfPaths, mergedBZ2, osmconv.NoopConvertProgress{}); err != nil {
+		if err := convertPBFsToBZ2(pbfPaths, mergedBZ2, newConvertProgress(os.Stderr)); err != nil {
 			return fmt.Errorf("converting PBF to BZ2: %w", err)
 		}
 	} else {
