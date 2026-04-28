@@ -1202,6 +1202,167 @@ func newConvertProgress(w *os.File) osmconv.ConvertProgress {
 	return &logConvertProgress{w: w}
 }
 
+// termDownloadBar is an in-place terminal progress bar for PBF file downloads.
+// It implements DownloadProgress.
+type termDownloadBar struct {
+	mu              sync.Mutex
+	w               io.Writer
+	fileName        string
+	fileIndex       int
+	totalFiles      int
+	totalBytes      int64
+	downloaded      int64
+	totalDownloaded int64
+	startTime       time.Time
+	lastRender      time.Time
+}
+
+func (b *termDownloadBar) StartFile(name string, fileIndex int, totalFiles int, totalBytes int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.fileName = name
+	b.fileIndex = fileIndex
+	b.totalFiles = totalFiles
+	b.totalBytes = totalBytes
+	b.downloaded = 0
+	if b.startTime.IsZero() {
+		b.startTime = time.Now()
+	}
+}
+
+func (b *termDownloadBar) BytesDownloaded(n int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.downloaded += n
+	b.totalDownloaded += n
+	if time.Since(b.lastRender) >= 100*time.Millisecond {
+		b.render()
+	}
+}
+
+func (b *termDownloadBar) FileComplete() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.render()
+}
+
+func (b *termDownloadBar) Done() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	elapsed := time.Since(b.startTime)
+	fmt.Fprintf(b.w, "\rDownloads complete: %d files, %.1f MB, %s\n",
+		b.totalFiles, float64(b.totalDownloaded)/(1024*1024), formatElapsed(elapsed))
+}
+
+func (b *termDownloadBar) render() {
+	const width = 30
+	label := fmt.Sprintf("%s (%d/%d)", b.fileName, b.fileIndex+1, b.totalFiles)
+	elapsed := time.Since(b.startTime)
+
+	if b.totalBytes < 0 {
+		// No Content-Length: show bytes downloaded without percentage.
+		fmt.Fprintf(b.w, "\rDownloading %s: %.1f MB | %s",
+			label, float64(b.downloaded)/(1024*1024), formatElapsed(elapsed))
+		b.lastRender = time.Now()
+		return
+	}
+
+	var pct int
+	if b.totalBytes > 0 {
+		pct = int(b.downloaded * 100 / b.totalBytes)
+		if pct > 100 {
+			pct = 100
+		}
+	}
+	filled := width * pct / 100
+	var bar string
+	if filled == 0 {
+		bar = strings.Repeat(" ", width)
+	} else {
+		bar = strings.Repeat("=", filled-1) + ">" + strings.Repeat(" ", width-filled)
+	}
+
+	downloadedMB := float64(b.downloaded) / (1024 * 1024)
+	totalMB := float64(b.totalBytes) / (1024 * 1024)
+	fmt.Fprintf(b.w, "\rDownloading %s: [%s] %d%% | %.1f / %.1f MB | %s",
+		label, bar, pct, downloadedMB, totalMB, formatElapsed(elapsed))
+	b.lastRender = time.Now()
+}
+
+var _ DownloadProgress = &termDownloadBar{}
+
+// logDownloadProgress is a fallback DownloadProgress for non-terminal stderr that
+// prints a line every 10 MB.
+type logDownloadProgress struct {
+	mu              sync.Mutex
+	w               io.Writer
+	downloaded      int64
+	lastReport      int64
+	totalDownloaded int64
+	fileName        string
+	totalBytes      int64
+	startTime       time.Time
+	totalFiles      int
+}
+
+func (p *logDownloadProgress) StartFile(name string, _ int, totalFiles int, totalBytes int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.fileName = name
+	p.totalBytes = totalBytes
+	p.downloaded = 0
+	p.lastReport = 0
+	p.totalFiles = totalFiles
+	if p.startTime.IsZero() {
+		p.startTime = time.Now()
+	}
+}
+
+func (p *logDownloadProgress) BytesDownloaded(n int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.downloaded += n
+	p.totalDownloaded += n
+	const tenMB = 10 * 1024 * 1024
+	if p.downloaded-p.lastReport >= tenMB {
+		p.lastReport = p.downloaded
+		downloadedMB := float64(p.downloaded) / (1024 * 1024)
+		if p.totalBytes > 0 {
+			totalMB := float64(p.totalBytes) / (1024 * 1024)
+			pct := int(p.downloaded * 100 / p.totalBytes)
+			fmt.Fprintf(p.w, "  downloaded %.1f MB / %.1f MB (%d%%)\n", downloadedMB, totalMB, pct)
+		} else {
+			fmt.Fprintf(p.w, "  downloaded %.1f MB\n", downloadedMB)
+		}
+	}
+}
+
+func (p *logDownloadProgress) FileComplete() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	downloadedMB := float64(p.downloaded) / (1024 * 1024)
+	fmt.Fprintf(p.w, "  done (%.1f MB)\n", downloadedMB)
+}
+
+func (p *logDownloadProgress) Done() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	elapsed := time.Since(p.startTime)
+	fmt.Fprintf(p.w, "Downloads complete: %d files, %.1f MB, %s\n",
+		p.totalFiles, float64(p.totalDownloaded)/(1024*1024), formatElapsed(elapsed))
+}
+
+var _ DownloadProgress = &logDownloadProgress{}
+
+// newDownloadProgress returns a terminal progress bar if w is a terminal,
+// otherwise a log-line fallback.
+func newDownloadProgress(w *os.File) DownloadProgress {
+	if isTerminal(w) {
+		return &termDownloadBar{w: w}
+	}
+	return &logDownloadProgress{w: w}
+}
+
 // formatInt formats n with comma separators (e.g. 1,234,567).
 func formatInt(n int) string {
 	s := strconv.Itoa(n)

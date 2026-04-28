@@ -1,0 +1,14 @@
+{
+  "current_task": "007_download_terminal_progress_bar.md",
+  "step": "review",
+  "review_round": 1,
+  "retry_count": 0,
+  "completed_tasks": [
+    "001_convert_progress_interface.md",
+    "002_counting_reader.md",
+    "003_update_convert_options.md",
+    "004_conversion_terminal_progress_bar.md",
+    "005_wire_conversion_progress.md",
+    "006_download_progress_interface.md"
+  ]
+}

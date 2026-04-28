@@ -203,7 +203,7 @@ func runOverpassStart(regions string, port int, dataDir string, stderr io.Writer
 	}
 
 	// Download any missing PBF files.
-	downloadProgress := NoopDownloadProgress{}
+	downloadProgress := newDownloadProgress(os.Stderr)
 	for i, region := range allRegions {
 		filename := pbfFilename(region)
 		destPath := filepath.Join(pbfDir, filename)
