@@ -13,6 +13,89 @@ import (
 	"time"
 )
 
+// recordingDownloadProgress records calls to each DownloadProgress method in order.
+type recordingDownloadProgress struct {
+	calls []string
+}
+
+func (r *recordingDownloadProgress) StartFile(name string, fileIndex int, totalFiles int, totalBytes int64) {
+	r.calls = append(r.calls, "StartFile")
+}
+func (r *recordingDownloadProgress) BytesDownloaded(n int64) {
+	r.calls = append(r.calls, "BytesDownloaded")
+}
+func (r *recordingDownloadProgress) FileComplete() {
+	r.calls = append(r.calls, "FileComplete")
+}
+func (r *recordingDownloadProgress) Done() {
+	r.calls = append(r.calls, "Done")
+}
+
+func TestDownloadPBF_CallsProgressInOrder(t *testing.T) {
+	const body = "fake pbf content"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	destPath := filepath.Join(dir, "test.osm.pbf")
+
+	rec := &recordingDownloadProgress{}
+	if err := downloadPBF(srv.URL+"/test.osm.pbf", destPath, rec, 0, 1); err != nil {
+		t.Fatalf("downloadPBF returned error: %v", err)
+	}
+
+	// Verify the file was actually written.
+	if _, err := os.Stat(destPath); err != nil {
+		t.Fatalf("dest file not created: %v", err)
+	}
+
+	// Verify method call order: StartFile first, BytesDownloaded in the middle, FileComplete last.
+	if len(rec.calls) < 3 {
+		t.Fatalf("expected at least 3 progress calls, got %d: %v", len(rec.calls), rec.calls)
+	}
+	if rec.calls[0] != "StartFile" {
+		t.Errorf("first call should be StartFile, got %q", rec.calls[0])
+	}
+	last := rec.calls[len(rec.calls)-1]
+	if last != "FileComplete" {
+		t.Errorf("last call should be FileComplete, got %q", last)
+	}
+	// All middle calls should be BytesDownloaded.
+	for i := 1; i < len(rec.calls)-1; i++ {
+		if rec.calls[i] != "BytesDownloaded" {
+			t.Errorf("call[%d] should be BytesDownloaded, got %q", i, rec.calls[i])
+		}
+	}
+}
+
+func TestDownloadPBF_ReturnsError_WhenServerReturnsNonOK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	destPath := filepath.Join(dir, "test.osm.pbf")
+
+	err := downloadPBF(srv.URL+"/test.osm.pbf", destPath, NoopDownloadProgress{}, 0, 1)
+	if err == nil {
+		t.Fatal("expected error for non-200 response, got nil")
+	}
+}
+
+func TestDownloadPBF_ReturnsError_WhenURLUnreachable(t *testing.T) {
+	dir := t.TempDir()
+	destPath := filepath.Join(dir, "test.osm.pbf")
+
+	err := downloadPBF("http://127.0.0.1:1/test.osm.pbf", destPath, NoopDownloadProgress{}, 0, 1)
+	if err == nil {
+		t.Fatal("expected error for unreachable URL, got nil")
+	}
+}
+
 func TestDockerCmdStreaming_Success(t *testing.T) {
 	err := dockerCmdStreaming("echo", "hello")
 	if err != nil {

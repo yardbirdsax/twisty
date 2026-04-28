@@ -203,19 +203,21 @@ func runOverpassStart(regions string, port int, dataDir string, stderr io.Writer
 	}
 
 	// Download any missing PBF files.
-	for _, region := range allRegions {
+	downloadProgress := NoopDownloadProgress{}
+	for i, region := range allRegions {
 		filename := pbfFilename(region)
 		destPath := filepath.Join(pbfDir, filename)
 		if _, err := os.Stat(destPath); os.IsNotExist(err) {
 			url := geofabrikBaseURL + "/" + region + "-latest.osm.pbf"
 			fmt.Fprintf(stderr, "Downloading %s -> %s\n", url, destPath)
-			if err := downloadPBF(url, destPath); err != nil {
+			if err := downloadPBF(url, destPath, downloadProgress, i, len(allRegions)); err != nil {
 				return fmt.Errorf("downloading %s: %w", url, err)
 			}
 		} else {
 			fmt.Fprintf(stderr, "PBF already exists: %s\n", destPath)
 		}
 	}
+	downloadProgress.Done()
 
 	// Convert PBF files directly to BZ2 (merge + convert in one pass).
 	if _, err := os.Stat(mergedBZ2); os.IsNotExist(err) {
@@ -527,8 +529,8 @@ func overpassImageBuildArgs(buildContext string) []string {
 }
 
 // downloadPBF downloads the file at url to destPath atomically via a temp file,
-// printing progress to stderr.
-func downloadPBF(url, destPath string) error {
+// reporting progress via the provided DownloadProgress.
+func downloadPBF(url, destPath string, progress DownloadProgress, fileIndex, totalFiles int) error {
 	resp, err := http.Get(url) //nolint:noctx
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", url, err)
@@ -539,6 +541,7 @@ func downloadPBF(url, destPath string) error {
 	}
 
 	total := resp.ContentLength // -1 if unknown
+	progress.StartFile(destPath, fileIndex, totalFiles, total)
 
 	// Write to a temp file in the same directory then rename for atomicity.
 	dir := filepath.Dir(destPath)
@@ -552,10 +555,6 @@ func downloadPBF(url, destPath string) error {
 		os.Remove(tmpName) // no-op if rename succeeded
 	}()
 
-	const progressInterval = 10 * 1024 * 1024 // 10 MB
-	var downloaded int64
-	var nextThreshold int64 = progressInterval
-
 	buf := make([]byte, 32*1024)
 	for {
 		n, readErr := resp.Body.Read(buf)
@@ -563,20 +562,7 @@ func downloadPBF(url, destPath string) error {
 			if _, writeErr := tmp.Write(buf[:n]); writeErr != nil {
 				return fmt.Errorf("writing temp file: %w", writeErr)
 			}
-			downloaded += int64(n)
-			if downloaded >= nextThreshold {
-				if total > 0 {
-					pct := float64(downloaded) / float64(total) * 100
-					fmt.Fprintf(os.Stderr, "  downloaded %.1f MB / %.1f MB (%.0f%%)\n",
-						float64(downloaded)/1024/1024, float64(total)/1024/1024, pct)
-					// Advance threshold by ~5% or 10 MB, whichever is larger.
-					step := max(int64(float64(total)*0.05), progressInterval)
-					nextThreshold = downloaded + step
-				} else {
-					fmt.Fprintf(os.Stderr, "  downloaded %.1f MB\n", float64(downloaded)/1024/1024)
-					nextThreshold = downloaded + progressInterval
-				}
-			}
+			progress.BytesDownloaded(int64(n))
 		}
 		if readErr == io.EOF {
 			break
@@ -592,7 +578,7 @@ func downloadPBF(url, destPath string) error {
 	if err := os.Rename(tmpName, destPath); err != nil {
 		return fmt.Errorf("renaming temp file: %w", err)
 	}
-	fmt.Fprintf(os.Stderr, "  done (%.1f MB)\n", float64(downloaded)/1024/1024)
+	progress.FileComplete()
 	return nil
 }
 
