@@ -2,19 +2,22 @@ package osmconv
 
 import (
 	"fmt"
-	"io"
 )
 
 // ConvertOptions configures the conversion pipeline.
 type ConvertOptions struct {
 	Scanners []ObjectScanner
 	Writer   ObjectWriter
-	Progress io.Writer // optional; nil disables progress
+	Progress ConvertProgress // optional; nil defaults to NoopConvertProgress
 }
 
 // Convert reads from scanners, merges them in sorted order, and writes
 // through the provided writer.
 func Convert(opts ConvertOptions) error {
+	if opts.Progress == nil {
+		opts.Progress = NoopConvertProgress{}
+	}
+
 	merged := MergeScanners(opts.Scanners...)
 
 	if err := opts.Writer.WriteHeader(); err != nil {
@@ -22,15 +25,21 @@ func Convert(opts ConvertOptions) error {
 	}
 
 	var count int64
+	var batch int
 	for merged.Next() {
 		obj := merged.Object()
 		if err := opts.Writer.WriteObject(obj); err != nil {
 			return fmt.Errorf("writing object: %w", err)
 		}
 		count++
-		if opts.Progress != nil && count%100000 == 0 {
-			fmt.Fprintf(opts.Progress, "  %d objects written\n", count)
+		batch++
+		if count%100000 == 0 {
+			opts.Progress.ObjectsWritten(batch)
+			batch = 0
 		}
+	}
+	if batch > 0 {
+		opts.Progress.ObjectsWritten(batch)
 	}
 	if err := merged.Err(); err != nil {
 		return fmt.Errorf("scanning: %w", err)
@@ -40,9 +49,7 @@ func Convert(opts ConvertOptions) error {
 		return fmt.Errorf("closing writer: %w", err)
 	}
 
-	if opts.Progress != nil {
-		fmt.Fprintf(opts.Progress, "  done: %d objects written\n", count)
-	}
+	opts.Progress.Done()
 
 	return nil
 }

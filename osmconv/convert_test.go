@@ -9,6 +9,19 @@ import (
 	pb "github.com/yardbirdsax/twisty/osmconv/internal/osmpbf"
 )
 
+// spyProgress is a ConvertProgress spy for convert tests.
+type spyProgress struct {
+	objectsWrittenCalls []int
+	doneCalled          bool
+}
+
+func (s *spyProgress) SetFiles([]string, []int64) {}
+func (s *spyProgress) BytesRead(int, int64)        {}
+func (s *spyProgress) ObjectsWritten(n int)        { s.objectsWrittenCalls = append(s.objectsWrittenCalls, n) }
+func (s *spyProgress) Done()                       { s.doneCalled = true }
+
+var _ ConvertProgress = &spyProgress{}
+
 func TestConvert_SinglePBF(t *testing.T) {
 	granularity := int32(100)
 	latOffset := int64(0)
@@ -178,5 +191,89 @@ func TestConvert_NoScanners(t *testing.T) {
 	}
 	if !strings.Contains(result, "</osm>") {
 		t.Error("missing closing osm element")
+	}
+}
+
+func TestConvert_CallsObjectsWrittenAndDone(t *testing.T) {
+	granularity := int32(100)
+	latOffset := int64(0)
+	lonOffset := int64(0)
+
+	// Build a PBF with 2 nodes so ObjectsWritten can be verified.
+	block := &pb.PrimitiveBlock{
+		Stringtable: &pb.StringTable{S: [][]byte{[]byte("")}},
+		Primitivegroup: []*pb.PrimitiveGroup{
+			{Dense: &pb.DenseNodes{
+				Id:  []int64{1, 1},
+				Lat: []int64{515074000, 0},
+				Lon: []int64{-1278000, 0},
+			}},
+		},
+		Granularity: &granularity, LatOffset: &latOffset, LonOffset: &lonOffset,
+	}
+	header := &pb.HeaderBlock{RequiredFeatures: []string{"OsmSchema-V0.6", "DenseNodes"}}
+	pbfData := buildPBF(t, header, block)
+
+	scanner := NewPBFScanner(bytes.NewReader(pbfData))
+	var out bytes.Buffer
+	writer := NewXMLWriter(&out)
+	spy := &spyProgress{}
+
+	err := Convert(ConvertOptions{
+		Scanners: []ObjectScanner{scanner},
+		Writer:   writer,
+		Progress: spy,
+	})
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+
+	if !spy.doneCalled {
+		t.Error("Done() was not called after successful conversion")
+	}
+
+	if len(spy.objectsWrittenCalls) == 0 {
+		t.Error("ObjectsWritten() was never called")
+	}
+	var total int
+	for _, n := range spy.objectsWrittenCalls {
+		total += n
+	}
+	if total != 2 {
+		t.Errorf("ObjectsWritten total = %d, want 2", total)
+	}
+}
+
+func TestConvert_NilProgressDefaultsToNoop(t *testing.T) {
+	granularity := int32(100)
+	latOffset := int64(0)
+	lonOffset := int64(0)
+
+	block := &pb.PrimitiveBlock{
+		Stringtable: &pb.StringTable{S: [][]byte{[]byte("")}},
+		Primitivegroup: []*pb.PrimitiveGroup{
+			{Dense: &pb.DenseNodes{
+				Id:  []int64{1},
+				Lat: []int64{515074000},
+				Lon: []int64{-1278000},
+			}},
+		},
+		Granularity: &granularity, LatOffset: &latOffset, LonOffset: &lonOffset,
+	}
+	header := &pb.HeaderBlock{RequiredFeatures: []string{"OsmSchema-V0.6", "DenseNodes"}}
+	pbfData := buildPBF(t, header, block)
+
+	scanner := NewPBFScanner(bytes.NewReader(pbfData))
+	var out bytes.Buffer
+	writer := NewXMLWriter(&out)
+
+	// nil Progress must not panic
+	err := Convert(ConvertOptions{
+		Scanners: []ObjectScanner{scanner},
+		Writer:   writer,
+		Progress: nil,
+	})
+	if err != nil {
+		t.Fatalf("Convert with nil progress: %v", err)
 	}
 }

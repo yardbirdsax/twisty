@@ -225,7 +225,7 @@ func runOverpassStart(regions string, port int, dataDir string, stderr io.Writer
 			pbfPaths = append(pbfPaths, filepath.Join(pbfDir, filename))
 		}
 		fmt.Fprintf(stderr, "Converting %d PBF file(s) to BZ2...\n", len(pbfPaths))
-		if err := convertPBFsToBZ2(pbfPaths, mergedBZ2, stderr); err != nil {
+		if err := convertPBFsToBZ2(pbfPaths, mergedBZ2, osmconv.NoopConvertProgress{}); err != nil {
 			return fmt.Errorf("converting PBF to BZ2: %w", err)
 		}
 	} else {
@@ -637,7 +637,18 @@ func resolveOverpassDataDir(dir string) string {
 
 // convertPBFsToBZ2 reads one or more PBF files, merges them in sorted order,
 // and writes bzip2-compressed OSM XML.
-func convertPBFsToBZ2(pbfPaths []string, bz2Path string, progress io.Writer) error {
+func convertPBFsToBZ2(pbfPaths []string, bz2Path string, progress osmconv.ConvertProgress) error {
+	// Gather file names and sizes for progress reporting.
+	names := make([]string, len(pbfPaths))
+	sizes := make([]int64, len(pbfPaths))
+	for i, p := range pbfPaths {
+		names[i] = p
+		if info, err := os.Stat(p); err == nil {
+			sizes[i] = info.Size()
+		}
+	}
+	progress.SetFiles(names, sizes)
+
 	scanners := make([]osmconv.ObjectScanner, len(pbfPaths))
 	closers := make([]io.Closer, len(pbfPaths))
 	for i, p := range pbfPaths {
@@ -650,7 +661,8 @@ func convertPBFsToBZ2(pbfPaths []string, bz2Path string, progress io.Writer) err
 			return fmt.Errorf("opening %s: %w", p, err)
 		}
 		closers[i] = f
-		scanners[i] = osmconv.NewPBFScanner(f)
+		cr := osmconv.NewCountingReader(f, i, progress)
+		scanners[i] = osmconv.NewPBFScanner(cr)
 	}
 	defer func() {
 		for _, c := range closers {

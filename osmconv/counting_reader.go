@@ -2,17 +2,25 @@ package osmconv
 
 import "io"
 
-type countingReader struct {
+// CountingReader wraps an io.Reader and reports bytes read to a ConvertProgress.
+type CountingReader struct {
 	r         io.Reader
 	fileIndex int
 	progress  ConvertProgress
 }
 
-func newCountingReader(r io.Reader, fileIndex int, progress ConvertProgress) *countingReader {
-	return &countingReader{r: r, fileIndex: fileIndex, progress: progress}
+// NewCountingReader wraps r so that each Read call reports the number of bytes
+// read to progress.BytesRead(fileIndex, n).
+func NewCountingReader(r io.Reader, fileIndex int, progress ConvertProgress) *CountingReader {
+	return &CountingReader{r: r, fileIndex: fileIndex, progress: progress}
 }
 
-func (cr *countingReader) Read(p []byte) (int, error) {
+// newCountingReader is an unexported alias kept for internal tests.
+func newCountingReader(r io.Reader, fileIndex int, progress ConvertProgress) *CountingReader {
+	return NewCountingReader(r, fileIndex, progress)
+}
+
+func (cr *CountingReader) Read(p []byte) (int, error) {
 	n, err := cr.r.Read(p)
 	if n > 0 {
 		cr.progress.BytesRead(cr.fileIndex, int64(n))
