@@ -18,6 +18,7 @@ import (
 	"github.com/yardbirdsax/twisty/geo"
 	"github.com/yardbirdsax/twisty/geocode"
 	"github.com/yardbirdsax/twisty/gpx"
+	"github.com/yardbirdsax/twisty/osmconv"
 	"github.com/yardbirdsax/twisty/quality"
 	"github.com/yardbirdsax/twisty/route"
 	"github.com/yardbirdsax/twisty/waypoint"
@@ -1077,6 +1078,158 @@ func (b *termProgressBar) statsString() string {
 		parts = append(parts, fmt.Sprintf("avg: %.1fs", avg.Seconds()))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// termConvertBar is an in-place terminal progress bar for PBF-to-BZ2 conversion.
+// It implements osmconv.ConvertProgress.
+type termConvertBar struct {
+	mu          sync.Mutex
+	w           io.Writer
+	fileNames   []string
+	fileSizes   []int64
+	bytesRead   []int64
+	totalSize   int64
+	totalRead   int64
+	objectCount int
+	startTime   time.Time
+	lastRender  time.Time
+	currentFile int
+}
+
+func (b *termConvertBar) SetFiles(names []string, sizes []int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.fileNames = names
+	b.fileSizes = sizes
+	b.bytesRead = make([]int64, len(sizes))
+	b.totalSize = 0
+	for _, s := range sizes {
+		b.totalSize += s
+	}
+	b.startTime = time.Now()
+}
+
+func (b *termConvertBar) BytesRead(fileIndex int, n int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if fileIndex >= 0 && fileIndex < len(b.bytesRead) {
+		b.bytesRead[fileIndex] += n
+		b.currentFile = fileIndex
+		b.totalRead += n
+	}
+	if time.Since(b.lastRender) >= 100*time.Millisecond {
+		b.render()
+	}
+}
+
+func (b *termConvertBar) ObjectsWritten(n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.objectCount += n
+}
+
+func (b *termConvertBar) Done() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	elapsed := time.Since(b.startTime)
+	fmt.Fprintf(b.w, "\rConversion complete: %s objects written, %s\n",
+		formatInt(b.objectCount), formatElapsed(elapsed))
+}
+
+func (b *termConvertBar) render() {
+	const width = 30
+	var pct int
+	if b.totalSize > 0 {
+		pct = int(b.totalRead * 100 / b.totalSize)
+		if pct > 100 {
+			pct = 100
+		}
+	}
+	filled := width * pct / 100
+	var bar string
+	if filled == 0 {
+		bar = strings.Repeat(" ", width)
+	} else {
+		bar = strings.Repeat("=", filled-1) + ">" + strings.Repeat(" ", width-filled)
+	}
+
+	label := ""
+	total := len(b.fileNames)
+	if total > 0 && b.currentFile < total {
+		label = fmt.Sprintf("%s (%d/%d)", b.fileNames[b.currentFile], b.currentFile+1, total)
+	}
+
+	elapsed := time.Since(b.startTime)
+	fmt.Fprintf(b.w, "\rConverting %s: [%s] %d%% | %s objects | %s",
+		label, bar, pct, formatInt(b.objectCount), formatElapsed(elapsed))
+	b.lastRender = time.Now()
+}
+
+// logConvertProgress is a fallback ConvertProgress for non-terminal stderr that
+// prints a line every 100,000 objects.
+type logConvertProgress struct {
+	mu          sync.Mutex
+	w           io.Writer
+	objectCount int
+	lastReport  int
+}
+
+func (p *logConvertProgress) SetFiles([]string, []int64) {}
+func (p *logConvertProgress) BytesRead(int, int64)       {}
+
+func (p *logConvertProgress) ObjectsWritten(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.objectCount += n
+	if p.objectCount-p.lastReport >= 100000 {
+		fmt.Fprintf(p.w, "  %s objects written\n", formatInt(p.objectCount))
+		p.lastReport = p.objectCount
+	}
+}
+
+func (p *logConvertProgress) Done() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	fmt.Fprintf(p.w, "  %s objects written\n", formatInt(p.objectCount))
+}
+
+// newConvertProgress returns a terminal progress bar if w is a terminal,
+// otherwise a log-line fallback.
+func newConvertProgress(w *os.File) osmconv.ConvertProgress {
+	if isTerminal(w) {
+		return &termConvertBar{w: w}
+	}
+	return &logConvertProgress{w: w}
+}
+
+// formatInt formats n with comma separators (e.g. 1,234,567).
+func formatInt(n int) string {
+	s := strconv.Itoa(n)
+	if len(s) <= 3 {
+		return s
+	}
+	var b strings.Builder
+	start := len(s) % 3
+	if start == 0 {
+		start = 3
+	}
+	b.WriteString(s[:start])
+	for i := start; i < len(s); i += 3 {
+		b.WriteByte(',')
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
+}
+
+// formatElapsed formats a duration as "Xm Ys" or "Xs".
+func formatElapsed(d time.Duration) string {
+	d = d.Round(time.Second)
+	m := int(d.Minutes())
+	s := int(d.Seconds()) % 60
+	if m > 0 {
+		return fmt.Sprintf("%dm%ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
 }
 
 // isTerminal reports whether the given file is connected to a terminal.

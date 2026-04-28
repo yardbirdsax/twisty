@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/yardbirdsax/twisty/osmconv"
 	"github.com/yardbirdsax/twisty/quality"
 )
 
@@ -746,5 +747,158 @@ func TestRunRandomE2EWithSyntheticCache(t *testing.T) {
 	scoreCacheDir := filepath.Join(filepath.Dir(cacheDir), "scores")
 	if _, err := os.Stat(scoreCacheDir); err != nil {
 		t.Errorf("score cache directory not created at %s: %v", scoreCacheDir, err)
+	}
+}
+
+func TestTermConvertBar(t *testing.T) {
+	t.Run("SetFiles stores sizes and computes totalSize", func(t *testing.T) {
+		var buf bytes.Buffer
+		b := &termConvertBar{w: &buf}
+		b.SetFiles([]string{"a.pbf", "b.pbf"}, []int64{100, 200})
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.totalSize != 300 {
+			t.Errorf("totalSize = %d, want 300", b.totalSize)
+		}
+		if len(b.bytesRead) != 2 {
+			t.Errorf("len(bytesRead) = %d, want 2", len(b.bytesRead))
+		}
+	})
+
+	t.Run("BytesRead updates totals", func(t *testing.T) {
+		var buf bytes.Buffer
+		b := &termConvertBar{w: &buf}
+		b.SetFiles([]string{"a.pbf"}, []int64{1000})
+		// Force lastRender to zero so render is triggered.
+		b.mu.Lock()
+		b.lastRender = time.Time{}
+		b.mu.Unlock()
+		b.BytesRead(0, 500)
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.totalRead != 500 {
+			t.Errorf("totalRead = %d, want 500", b.totalRead)
+		}
+		if b.bytesRead[0] != 500 {
+			t.Errorf("bytesRead[0] = %d, want 500", b.bytesRead[0])
+		}
+	})
+
+	t.Run("Done outputs Conversion complete with object count", func(t *testing.T) {
+		var buf bytes.Buffer
+		b := &termConvertBar{w: &buf}
+		b.SetFiles([]string{"a.pbf"}, []int64{100})
+		b.mu.Lock()
+		b.objectCount = 1234567
+		b.mu.Unlock()
+		b.Done()
+		got := buf.String()
+		if !strings.Contains(got, "Conversion complete") {
+			t.Errorf("Done() output %q missing 'Conversion complete'", got)
+		}
+		if !strings.Contains(got, "1,234,567") {
+			t.Errorf("Done() output %q missing formatted object count '1,234,567'", got)
+		}
+	})
+
+	t.Run("BytesRead rate-limits rendering", func(t *testing.T) {
+		var buf bytes.Buffer
+		b := &termConvertBar{w: &buf}
+		b.SetFiles([]string{"a.pbf"}, []int64{1000})
+		b.BytesRead(0, 100) // first call renders (lastRender is zero)
+		buf.Reset()
+		b.BytesRead(0, 100) // immediate second call must be throttled
+		if buf.Len() != 0 {
+			t.Error("expected second BytesRead within 100ms to be throttled")
+		}
+	})
+
+	// Compile-time check that termConvertBar implements osmconv.ConvertProgress.
+	var _ osmconv.ConvertProgress = &termConvertBar{}
+}
+
+func TestLogConvertProgress(t *testing.T) {
+	t.Run("prints at 100000 object intervals", func(t *testing.T) {
+		var buf bytes.Buffer
+		p := &logConvertProgress{w: &buf}
+		p.ObjectsWritten(99999)
+		if buf.Len() != 0 {
+			t.Errorf("expected no output before 100000, got %q", buf.String())
+		}
+		p.ObjectsWritten(1)
+		if !strings.Contains(buf.String(), "100,000") {
+			t.Errorf("expected output containing '100,000' after crossing boundary, got %q", buf.String())
+		}
+		buf.Reset()
+		p.ObjectsWritten(100000)
+		if !strings.Contains(buf.String(), "200,000") {
+			t.Errorf("expected output containing '200,000', got %q", buf.String())
+		}
+	})
+
+	t.Run("Done prints final count", func(t *testing.T) {
+		var buf bytes.Buffer
+		p := &logConvertProgress{w: &buf}
+		p.ObjectsWritten(42)
+		buf.Reset()
+		p.Done()
+		got := buf.String()
+		if !strings.Contains(got, "42") {
+			t.Errorf("Done() output %q missing count '42'", got)
+		}
+	})
+
+	// Compile-time check that logConvertProgress implements osmconv.ConvertProgress.
+	var _ osmconv.ConvertProgress = &logConvertProgress{}
+}
+
+func TestFormatInt(t *testing.T) {
+	tests := []struct {
+		n    int
+		want string
+	}{
+		{0, "0"},
+		{999, "999"},
+		{1000, "1,000"},
+		{1234567, "1,234,567"},
+		{100000, "100,000"},
+	}
+	for _, tc := range tests {
+		got := formatInt(tc.n)
+		if got != tc.want {
+			t.Errorf("formatInt(%d) = %q, want %q", tc.n, got, tc.want)
+		}
+	}
+}
+
+func TestFormatElapsed(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{5 * time.Second, "5s"},
+		{65 * time.Second, "1m5s"},
+		{492 * time.Second, "8m12s"},
+	}
+	for _, tc := range tests {
+		got := formatElapsed(tc.d)
+		if got != tc.want {
+			t.Errorf("formatElapsed(%v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}
+
+func TestNewConvertProgressNonTerminal(t *testing.T) {
+	// os.Stderr in a test environment is not a terminal, so we get logConvertProgress.
+	f, err := os.CreateTemp("", "test-progress-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+
+	p := newConvertProgress(f)
+	if _, ok := p.(*logConvertProgress); !ok {
+		t.Errorf("newConvertProgress(non-terminal) returned %T, want *logConvertProgress", p)
 	}
 }
