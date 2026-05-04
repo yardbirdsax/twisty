@@ -16,9 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dsnet/compress/bzip2"
 	"github.com/spf13/cobra"
-	"github.com/yardbirdsax/twisty/osmconv"
 )
 
 const (
@@ -633,69 +631,4 @@ func resolveOverpassDataDir(dir string) string {
 		log.Fatalf("cannot determine home directory: %v", err)
 	}
 	return filepath.Join(home, ".twisty", "overpass")
-}
-
-// convertPBFsToBZ2 reads one or more PBF files, merges them in sorted order,
-// and writes bzip2-compressed OSM XML.
-func convertPBFsToBZ2(pbfPaths []string, bz2Path string, progress osmconv.ConvertProgress) error {
-	// Gather file names and sizes for progress reporting.
-	names := make([]string, len(pbfPaths))
-	sizes := make([]int64, len(pbfPaths))
-	for i, p := range pbfPaths {
-		names[i] = p
-		if info, err := os.Stat(p); err == nil {
-			sizes[i] = info.Size()
-		}
-	}
-	progress.SetFiles(names, sizes)
-
-	scanners := make([]osmconv.ObjectScanner, len(pbfPaths))
-	closers := make([]io.Closer, len(pbfPaths))
-	for i, p := range pbfPaths {
-		f, err := os.Open(p)
-		if err != nil {
-			// Close any already-opened files
-			for j := 0; j < i; j++ {
-				closers[j].Close()
-			}
-			return fmt.Errorf("opening %s: %w", p, err)
-		}
-		closers[i] = f
-		cr := osmconv.NewCountingReader(f, i, progress)
-		scanners[i] = osmconv.NewPBFScanner(cr)
-	}
-	defer func() {
-		for _, c := range closers {
-			if c != nil {
-				c.Close()
-			}
-		}
-	}()
-
-	outFile, err := os.Create(bz2Path)
-	if err != nil {
-		return fmt.Errorf("creating %s: %w", bz2Path, err)
-	}
-	defer outFile.Close()
-
-	bz2w, err := bzip2.NewWriter(outFile, nil)
-	if err != nil {
-		return fmt.Errorf("creating bzip2 writer: %w", err)
-	}
-
-	xmlw := osmconv.NewXMLWriter(bz2w)
-
-	if err := osmconv.Convert(osmconv.ConvertOptions{
-		Scanners: scanners,
-		Writer:   xmlw,
-		Progress: progress,
-	}); err != nil {
-		bz2w.Close()
-		return err
-	}
-
-	if err := bz2w.Close(); err != nil {
-		return fmt.Errorf("closing bzip2 writer: %w", err)
-	}
-	return outFile.Close()
 }
