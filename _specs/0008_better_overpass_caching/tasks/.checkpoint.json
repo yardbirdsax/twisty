@@ -1,5 +1,5 @@
 {
-  "current_task": "005_implement_per_region_cache.md",
+  "current_task": "007_implement_incremental_orchestrator.md",
   "step": "review",
   "review_round": 1,
   "retry_count": 0,
@@ -7,6 +7,8 @@
     "001_add_cpuprofile_flag.md",
     "002_run_profiling_and_document_findings.md",
     "003_design_incremental_caching_strategy.md",
-    "004_implement_gzip_xml_scanner.md"
+    "004_implement_gzip_xml_scanner.md",
+    "005_implement_per_region_cache.md",
+    "006_implement_parallel_bz2_writer.md"
   ]
 }

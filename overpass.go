@@ -222,14 +222,8 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 	}
 	downloadProgress.Done()
 
-	// Convert PBF files directly to BZ2 (merge + convert in one pass).
+	// Convert PBF files to per-region caches and merge into BZ2.
 	if _, err := os.Stat(mergedBZ2); os.IsNotExist(err) {
-		var pbfPaths []string
-		for _, region := range allRegions {
-			filename := pbfFilename(region)
-			pbfPaths = append(pbfPaths, filepath.Join(pbfDir, filename))
-		}
-
 		// Start CPU profiling if requested.
 		if cpuprofile != "" {
 			profFile, err := os.Create(cpuprofile)
@@ -247,9 +241,8 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 			}()
 		}
 
-		fmt.Fprintf(stderr, "Converting %d PBF file(s) to BZ2...\n", len(pbfPaths))
-		if err := convertPBFsToBZ2(pbfPaths, mergedBZ2, newConvertProgress(os.Stderr)); err != nil {
-			return fmt.Errorf("converting PBF to BZ2: %w", err)
+		if err := convertRegionsIncremental(allRegions, dataDir, newConvertProgress(os.Stderr), stderr); err != nil {
+			return fmt.Errorf("converting regions: %w", err)
 		}
 	} else {
 		fmt.Fprintf(stderr, "BZ2 already exists: %s\n", mergedBZ2)
