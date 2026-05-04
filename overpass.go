@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"sort"
 	"strings"
 	"syscall"
@@ -49,9 +50,10 @@ func newOverpassCmd() *cobra.Command {
 
 func newOverpassStartCmd() *cobra.Command {
 	var (
-		regions string
-		port    int
-		dataDir string
+		regions    string
+		port       int
+		dataDir    string
+		cpuprofile string
 	)
 	cmd := &cobra.Command{
 		Use:           "start",
@@ -59,13 +61,14 @@ func newOverpassStartCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runOverpassStart(regions, port, dataDir, cmd.ErrOrStderr())
+			return runOverpassStart(regions, port, dataDir, cpuprofile, cmd.ErrOrStderr())
 		},
 	}
 	f := cmd.Flags()
 	f.StringVar(&regions, "regions", "", "Comma-separated Geofabrik region paths (e.g. north-america/us/new-york)")
 	f.IntVar(&port, "port", defaultOverpassPort, "Port to expose the Overpass API on")
 	f.StringVar(&dataDir, "data-dir", "", "Directory for Overpass data files")
+	f.StringVar(&cpuprofile, "cpuprofile", "", "Write CPU profile to this path (scoped to PBF conversion)")
 	return cmd
 }
 
@@ -138,7 +141,7 @@ func newOverpassBuildCmd() *cobra.Command {
 	return cmd
 }
 
-func runOverpassStart(regions string, port int, dataDir string, stderr io.Writer) error {
+func runOverpassStart(regions string, port int, dataDir string, cpuprofile string, stderr io.Writer) error {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
@@ -226,6 +229,24 @@ func runOverpassStart(regions string, port int, dataDir string, stderr io.Writer
 			filename := pbfFilename(region)
 			pbfPaths = append(pbfPaths, filepath.Join(pbfDir, filename))
 		}
+
+		// Start CPU profiling if requested.
+		if cpuprofile != "" {
+			profFile, err := os.Create(cpuprofile)
+			if err != nil {
+				return fmt.Errorf("creating CPU profile file: %w", err)
+			}
+			if err := pprof.StartCPUProfile(profFile); err != nil {
+				profFile.Close()
+				return fmt.Errorf("starting CPU profile: %w", err)
+			}
+			defer func() {
+				pprof.StopCPUProfile()
+				profFile.Close()
+				fmt.Fprintf(stderr, "CPU profile written to %s\n", cpuprofile)
+			}()
+		}
+
 		fmt.Fprintf(stderr, "Converting %d PBF file(s) to BZ2...\n", len(pbfPaths))
 		if err := convertPBFsToBZ2(pbfPaths, mergedBZ2, newConvertProgress(os.Stderr)); err != nil {
 			return fmt.Errorf("converting PBF to BZ2: %w", err)
