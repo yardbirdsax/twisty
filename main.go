@@ -69,6 +69,7 @@ type execScoreParams struct {
 	tileSize        float64
 	cacheDir        string
 	noCache         bool
+	clearCache      bool
 	clearScoreCache bool
 	verbose         bool
 	outPath         string
@@ -133,6 +134,20 @@ func execScore(p execScoreParams) error {
 
 	if err := scoreCache.EnsureDir(); err != nil {
 		return fmt.Errorf("creating score cache dir: %w", err)
+	}
+
+	if p.clearCache {
+		logger.Info("clearing tile cache", "dir", cacheDir)
+		if err := tileCache.ClearAll(); err != nil {
+			return fmt.Errorf("clearing tile cache: %w", err)
+		}
+		fmt.Fprintln(stderr, "Tile cache cleared.")
+
+		logger.Info("clearing score cache", "dir", scoreCacheDir)
+		if err := scoreCache.ClearAll(); err != nil {
+			return fmt.Errorf("clearing score cache: %w", err)
+		}
+		fmt.Fprintln(stderr, "Score cache cleared.")
 	}
 
 	if p.clearScoreCache {
@@ -275,6 +290,7 @@ func newScoreCmd() *cobra.Command {
 		tileSize        float64
 		cacheDir        string
 		noCache         bool
+		clearCache      bool
 		clearScoreCache bool
 		verbose         bool
 		outPath         string
@@ -295,6 +311,7 @@ func newScoreCmd() *cobra.Command {
 				tileSize:        tileSize,
 				cacheDir:        cacheDir,
 				noCache:         noCache,
+				clearCache:      clearCache,
 				clearScoreCache: clearScoreCache,
 				verbose:         verbose,
 				outPath:         outPath,
@@ -312,6 +329,7 @@ func newScoreCmd() *cobra.Command {
 	f.Float64Var(&tileSize, "tile-size", 0.1, "Tile size in degrees")
 	f.StringVar(&cacheDir, "cache-dir", "", "Overpass tile cache directory (default: ~/.twisty/cache/overpass/)")
 	f.BoolVar(&noCache, "no-cache", false, "Skip score cache reads (still writes)")
+	f.BoolVar(&clearCache, "clear-cache", false, "Delete all cached tiles and score cache entries before running")
 	f.BoolVar(&clearScoreCache, "clear-score-cache", false, "Delete all score cache entries before running")
 	f.BoolVar(&verbose, "v", false, "Enable verbose logging to stderr")
 	f.StringVar(&outPath, "out", "", "Output KML file path (required)")

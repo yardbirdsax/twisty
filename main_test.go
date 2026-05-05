@@ -888,6 +888,90 @@ func TestFormatElapsed(t *testing.T) {
 	}
 }
 
+// TestScoreClearCacheFlag verifies that --clear-cache empties both the tile cache
+// and score cache directories before running. Geocoding is bypassed by passing
+// coordinates; Overpass is stubbed so no network calls are made.
+func TestScoreClearCacheFlag(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	// Stub Overpass: return empty result so the pipeline exits quickly.
+	overpassStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"elements":[]}`))
+	}))
+	defer overpassStub.Close()
+
+	// Create a tile cache directory with a dummy file.
+	cacheDir := t.TempDir()
+	tileCache := &quality.TileCache{Dir: cacheDir, Precision: 3}
+	if err := tileCache.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir tile cache: %v", err)
+	}
+	dummyTileFile := filepath.Join(cacheDir, "dummy_tile.json")
+	if err := os.WriteFile(dummyTileFile, []byte(`{"elements":[]}`), 0o644); err != nil {
+		t.Fatalf("writing dummy tile file: %v", err)
+	}
+
+	// Create the score cache directory with a dummy file.
+	scoreCacheDir := filepath.Join(filepath.Dir(cacheDir), "scores")
+	if err := os.MkdirAll(scoreCacheDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll score cache: %v", err)
+	}
+	dummyScoreFile := filepath.Join(scoreCacheDir, "dummy_score.json")
+	if err := os.WriteFile(dummyScoreFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("writing dummy score file: %v", err)
+	}
+
+	outPath := filepath.Join(t.TempDir(), "output.kml")
+	var stderr bytes.Buffer
+	err := execScore(execScoreParams{
+		address:     "35.0,-82.0",
+		radius:      1.0,
+		tileSize:    0.05,
+		cacheDir:    cacheDir,
+		outPath:     outPath,
+		clearCache:  true,
+		overpassURL: overpassStub.URL,
+		stderr:      &stderr,
+	})
+	if err != nil {
+		t.Fatalf("execScore returned error: %v\nstderr: %s", err, stderr.String())
+	}
+
+	// Both cache directories must be empty (ClearAll removes and recreates them).
+	tileEntries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatalf("reading tile cache dir after clear: %v", err)
+	}
+	// Only score cache files may remain; tile cache must be empty of the dummy file.
+	for _, e := range tileEntries {
+		if e.Name() == "dummy_tile.json" {
+			t.Errorf("tile cache still contains dummy_tile.json after --clear-cache")
+		}
+	}
+
+	scoreEntries, err := os.ReadDir(scoreCacheDir)
+	if err != nil {
+		t.Fatalf("reading score cache dir after clear: %v", err)
+	}
+	for _, e := range scoreEntries {
+		if e.Name() == "dummy_score.json" {
+			t.Errorf("score cache still contains dummy_score.json after --clear-cache")
+		}
+	}
+
+	// Verify confirmation messages were printed to stderr.
+	stderrStr := stderr.String()
+	if !strings.Contains(stderrStr, "Tile cache cleared.") {
+		t.Errorf("stderr missing 'Tile cache cleared.'; got: %s", stderrStr)
+	}
+	if !strings.Contains(stderrStr, "Score cache cleared.") {
+		t.Errorf("stderr missing 'Score cache cleared.'; got: %s", stderrStr)
+	}
+}
+
 func TestNewConvertProgressNonTerminal(t *testing.T) {
 	// os.Stderr in a test environment is not a terminal, so we get logConvertProgress.
 	f, err := os.CreateTemp("", "test-progress-*")
