@@ -608,3 +608,69 @@ func TestWriteKML_LowScoreLongLengthExcludedByMinScore(t *testing.T) {
 		t.Errorf("expected 'High Score Long', got %q", kml.Doc.Folders[0].Name)
 	}
 }
+
+func TestWriteKML_MinSpeedFilter(t *testing.T) {
+	fastRoad := makeCollection("Fast Road", 500.0, 5000.0, 100.0, []string{"secondary"}, []int64{1}, simpleSegments())
+	fastRoad.WaySpeeds = []WaySpeedInfo{
+		{SpeedMPH: 55, HasSpeed: true, LengthM: 5000},
+	}
+
+	slowRoad := makeCollection("Slow Road", 500.0, 5000.0, 100.0, []string{"residential"}, []int64{2}, simpleSegments())
+	slowRoad.WaySpeeds = []WaySpeedInfo{
+		{SpeedMPH: 25, HasSpeed: true, LengthM: 5000},
+	}
+
+	noSpeedRoad := makeCollection("No Speed Road", 500.0, 5000.0, 100.0, []string{"tertiary"}, []int64{3}, simpleSegments())
+	// No WaySpeeds set — no data means road passes through filter
+
+	var buf bytes.Buffer
+	err := WriteKML(&buf, []RoadCollection{fastRoad, slowRoad, noSpeedRoad}, 0, 35)
+	if err != nil {
+		t.Fatalf("WriteKML returned error: %v", err)
+	}
+
+	var kml KMLDocument
+	if err := xml.Unmarshal([]byte(buf.String()[len(xml.Header):]), &kml); err != nil {
+		t.Fatalf("invalid XML: %v", err)
+	}
+
+	if len(kml.Doc.Folders) != 2 {
+		t.Fatalf("expected 2 folders (fast road + no speed data road), got %d", len(kml.Doc.Folders))
+	}
+	if kml.Doc.Folders[0].Name != "Fast Road" {
+		t.Errorf("expected 'Fast Road' first, got %q", kml.Doc.Folders[0].Name)
+	}
+	if kml.Doc.Folders[1].Name != "No Speed Road" {
+		t.Errorf("expected 'No Speed Road' second, got %q", kml.Doc.Folders[1].Name)
+	}
+}
+
+func TestWriteKMLSingleColor_MinSpeedFilter(t *testing.T) {
+	fastRoad := makeCollection("Fast Road", 500.0, 5000.0, 100.0, []string{"secondary"}, []int64{1}, simpleSegments())
+	fastRoad.WaySpeeds = []WaySpeedInfo{
+		{SpeedMPH: 55, HasSpeed: true, LengthM: 5000},
+	}
+
+	slowRoad := makeCollection("Slow Road", 500.0, 5000.0, 100.0, []string{"residential"}, []int64{2}, simpleSegments())
+	slowRoad.WaySpeeds = []WaySpeedInfo{
+		{SpeedMPH: 25, HasSpeed: true, LengthM: 5000},
+	}
+
+	var buf bytes.Buffer
+	err := WriteKMLSingleColor(&buf, []RoadCollection{fastRoad, slowRoad}, 0, 35)
+	if err != nil {
+		t.Fatalf("WriteKMLSingleColor returned error: %v", err)
+	}
+
+	var kml KMLDocument
+	if err := xml.Unmarshal([]byte(buf.String()[len(xml.Header):]), &kml); err != nil {
+		t.Fatalf("invalid XML: %v", err)
+	}
+
+	if len(kml.Doc.Folders) != 1 {
+		t.Fatalf("expected 1 folder, got %d", len(kml.Doc.Folders))
+	}
+	if kml.Doc.Folders[0].Name != "Fast Road" {
+		t.Errorf("expected 'Fast Road', got %q", kml.Doc.Folders[0].Name)
+	}
+}

@@ -125,10 +125,13 @@ func MergeTierRuns(segments []ScoredSegment) []tierRun {
 
 // filterAndSortCollections filters collections by minScore and MinRoadLengthM,
 // then sorts them by penalized score descending.
-func filterAndSortCollections(cols []RoadCollection, minScore, minLength float64) []RoadCollection {
+func filterAndSortCollections(cols []RoadCollection, minScore, minLength, minSpeedMPH float64) []RoadCollection {
 	var filtered []RoadCollection
 	for _, c := range cols {
 		if c.PenalizedScore < minScore || c.TotalLength < minLength {
+			continue
+		}
+		if minSpeedMPH > 0 && SpeedPassingFraction(c.WaySpeeds, c.TotalLength, minSpeedMPH) < 0.5 {
 			continue
 		}
 		filtered = append(filtered, c)
@@ -158,8 +161,12 @@ func formatCoordinates(segments []ScoredSegment) string {
 // Collections are sorted by penalized score descending.
 // Collections with penalized score below minScore or total length below
 // MinRoadLengthM are excluded.
-func WriteKML(w io.Writer, collections []RoadCollection, minScore float64) error {
-	filtered := filterAndSortCollections(collections, minScore, MinRoadLengthM)
+func WriteKML(w io.Writer, collections []RoadCollection, minScore float64, minSpeedMPH ...float64) error {
+	speed := 0.0
+	if len(minSpeedMPH) > 0 {
+		speed = minSpeedMPH[0]
+	}
+	filtered := filterAndSortCollections(collections, minScore, MinRoadLengthM, speed)
 
 	// Build style definitions
 	styles := make([]KMLStyle, 0, len(TierColors))
@@ -258,8 +265,12 @@ func GradientColor(level int) string {
 //
 // TotalScore (not PenalizedScore) is used for the color because the visual should
 // reflect actual road geometry, while PenalizedScore is used for filtering and sort order.
-func WriteKMLSingleColor(w io.Writer, collections []RoadCollection, minScore float64) error {
-	filtered := filterAndSortCollections(collections, minScore, MinRoadLengthM)
+func WriteKMLSingleColor(w io.Writer, collections []RoadCollection, minScore float64, minSpeedMPH ...float64) error {
+	speed := 0.0
+	if len(minSpeedMPH) > 0 {
+		speed = minSpeedMPH[0]
+	}
+	filtered := filterAndSortCollections(collections, minScore, MinRoadLengthM, speed)
 
 	// Build folders — one per collection, one placemark per road
 	folders := make([]KMLSingleColorFolder, 0, len(filtered))

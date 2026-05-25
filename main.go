@@ -74,6 +74,7 @@ type execScoreParams struct {
 	verbose         bool
 	outPath         string
 	minScore        float64
+	minSpeed        float64
 	multiColor      bool
 	overpassURL     string
 	fetchDelay      string
@@ -220,9 +221,9 @@ func execScore(p execScoreParams) error {
 		}
 		defer f.Close()
 		if p.multiColor {
-			return quality.WriteKML(f, nil, p.minScore)
+			return quality.WriteKML(f, nil, p.minScore, p.minSpeed)
 		}
-		return quality.WriteKMLSingleColor(f, nil, p.minScore)
+		return quality.WriteKMLSingleColor(f, nil, p.minScore, p.minSpeed)
 	}
 
 	fmt.Fprintln(stderr, "Score complete.")
@@ -239,28 +240,36 @@ func execScore(p execScoreParams) error {
 	defer f.Close()
 
 	if p.multiColor {
-		if err := quality.WriteKML(f, collections, p.minScore); err != nil {
+		if err := quality.WriteKML(f, collections, p.minScore, p.minSpeed); err != nil {
 			return fmt.Errorf("writing KML: %w", err)
 		}
 	} else {
-		if err := quality.WriteKMLSingleColor(f, collections, p.minScore); err != nil {
+		if err := quality.WriteKMLSingleColor(f, collections, p.minScore, p.minSpeed); err != nil {
 			return fmt.Errorf("writing KML: %w", err)
 		}
 	}
 
-	// Count collections that pass both the min-score and min-length filters.
+	// Count collections that pass the min-score, min-length, and min-speed filters.
 	inOutput := 0
 	for _, c := range collections {
-		if c.PenalizedScore >= p.minScore && c.TotalLength >= quality.MinRoadLengthM {
-			inOutput++
+		if c.PenalizedScore < p.minScore || c.TotalLength < quality.MinRoadLengthM {
+			continue
 		}
+		if p.minSpeed > 0 && quality.SpeedPassingFraction(c.WaySpeeds, c.TotalLength, p.minSpeed) < 0.5 {
+			continue
+		}
+		inOutput++
 	}
 
 	if inOutput == 0 {
-		fmt.Fprintf(stderr, "WARNING: No road collections passed the min-score (%.0f) and min-length (%.0f m) filters. KML output is empty.\n", p.minScore, quality.MinRoadLengthM)
+		fmt.Fprintf(stderr, "WARNING: No road collections passed the output filters. KML output is empty.\n")
 	}
 
-	fmt.Fprintf(stderr, "Aggregated %d road collections (%d in output after min-score %.0f and min-length %.0f m filters).\n", len(collections), inOutput, p.minScore, quality.MinRoadLengthM)
+	filterDesc := fmt.Sprintf("min-score %.0f, min-length %.0f m", p.minScore, quality.MinRoadLengthM)
+	if p.minSpeed > 0 {
+		filterDesc += fmt.Sprintf(", min-speed %.0f mph", p.minSpeed)
+	}
+	fmt.Fprintf(stderr, "Aggregated %d road collections (%d in output after %s filters).\n", len(collections), inOutput, filterDesc)
 
 	// Top 5 roads by penalized score (sorted descending)
 	topN := min(5, len(collections))
@@ -295,6 +304,7 @@ func newScoreCmd() *cobra.Command {
 		verbose         bool
 		outPath         string
 		minScore        float64
+		minSpeed        float64
 		multiColor      bool
 		overpassURL     string
 		fetchDelay      string
@@ -316,6 +326,7 @@ func newScoreCmd() *cobra.Command {
 				verbose:         verbose,
 				outPath:         outPath,
 				minScore:        minScore,
+				minSpeed:        minSpeed,
 				multiColor:      multiColor,
 				overpassURL:     overpassURL,
 				fetchDelay:      fetchDelay,
@@ -334,6 +345,7 @@ func newScoreCmd() *cobra.Command {
 	f.BoolVar(&verbose, "v", false, "Enable verbose logging to stderr")
 	f.StringVar(&outPath, "out", "", "Output KML file path (required)")
 	f.Float64Var(&minScore, "min-score", 0, "Minimum penalized score to include in output")
+	f.Float64Var(&minSpeed, "min-speed", 0, "Minimum speed limit in mph; exclude roads where majority of length is below this")
 	f.BoolVar(&multiColor, "multi-color", false, "Use per-segment tier coloring instead of single-color per-road")
 	f.StringVar(&overpassURL, "overpass-url", quality.OverpassBaseURL, "Overpass API endpoint URL")
 	f.StringVar(&fetchDelay, "fetch-delay", "", "delay between tile fetches in Go duration format (e.g. 500ms, 2s); default 1s")

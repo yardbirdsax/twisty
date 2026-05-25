@@ -1353,6 +1353,41 @@ func TestOrderWays_Deterministic(t *testing.T) {
 	}
 }
 
+func TestBuildRoadCollection_WaySpeeds(t *testing.T) {
+	seg1 := ScoredSegment{WayID: 1, Length: 1000}
+	seg2 := ScoredSegment{WayID: 1, Length: 500}
+	seg3 := ScoredSegment{WayID: 2, Length: 2000}
+
+	wayByID := map[int64]ScoredWay{
+		1: {WayID: 1, Tags: map[string]string{"maxspeed": "55 mph", "highway": "secondary"}},
+		2: {WayID: 2, Tags: map[string]string{"highway": "tertiary"}}, // no maxspeed
+	}
+
+	rc := BuildRoadCollection("Test Road", wayByID, []ScoredSegment{seg1, seg2, seg3})
+
+	if len(rc.WaySpeeds) != 2 {
+		t.Fatalf("WaySpeeds length = %d, want 2", len(rc.WaySpeeds))
+	}
+
+	// Way 1: has maxspeed 55, total length 1500m
+	ws0 := rc.WaySpeeds[0]
+	if !ws0.HasSpeed || ws0.SpeedMPH != 55 {
+		t.Errorf("WaySpeeds[0] = {HasSpeed:%v, SpeedMPH:%.0f}, want {true, 55}", ws0.HasSpeed, ws0.SpeedMPH)
+	}
+	if ws0.LengthM != 1500 {
+		t.Errorf("WaySpeeds[0].LengthM = %v, want 1500", ws0.LengthM)
+	}
+
+	// Way 2: no maxspeed, length 2000m
+	ws1 := rc.WaySpeeds[1]
+	if ws1.HasSpeed {
+		t.Errorf("WaySpeeds[1].HasSpeed = true, want false")
+	}
+	if ws1.LengthM != 2000 {
+		t.Errorf("WaySpeeds[1].LengthM = %v, want 2000", ws1.LengthM)
+	}
+}
+
 func TestFindConnectedComponents_StableOrder(t *testing.T) {
 	t.Parallel()
 	// Cluster A — Vermont area

@@ -21,6 +21,8 @@ type RoadCollection struct {
 	TotalLength float64 // meters
 	ScorePerKm  float64
 
+	WaySpeeds []WaySpeedInfo
+
 	// Populated by penalty stage (stage 6)
 	HighwayPenaltyFactor float64
 	PenalizedScore       float64
@@ -565,8 +567,14 @@ func BuildRoadCollection(name string, wayByID map[int64]ScoredWay, segs []Scored
 		Segments: segs,
 	}
 
-	// Derive WayIDs and HighwayTypes only from the ways whose segments appear
-	// in this collection, preserving first-seen order.
+	// Accumulate per-way segment length.
+	wayLengthM := make(map[int64]float64)
+	for _, seg := range segs {
+		wayLengthM[seg.WayID] += seg.Length
+	}
+
+	// Derive WayIDs, HighwayTypes, and WaySpeeds only from the ways whose
+	// segments appear in this collection, preserving first-seen order.
 	seenWay := make(map[int64]bool)
 	seenHighway := make(map[string]bool)
 	for _, seg := range segs {
@@ -578,6 +586,12 @@ func BuildRoadCollection(name string, wayByID map[int64]ScoredWay, segs []Scored
 					seenHighway[hw] = true
 					rc.HighwayTypes = append(rc.HighwayTypes, hw)
 				}
+				mph, hasSpeed := ParseMaxspeed(w.Tags["maxspeed"])
+				rc.WaySpeeds = append(rc.WaySpeeds, WaySpeedInfo{
+					SpeedMPH: mph,
+					HasSpeed: hasSpeed,
+					LengthM:  wayLengthM[seg.WayID],
+				})
 			}
 		}
 	}
