@@ -27,10 +27,10 @@
             "Bash(git diff:*)",
             "Bash(git log:*)",
             "Bash(git show:*)",
-            "Bash(go build:*)",
-            "Bash(go get:*)",
-            "Bash(go mod:*)",
-            "Bash(go test:*)",
+            "Bash(rtk go build:*)",
+            "Bash(rtk go get:*)",
+            "Bash(rtk go mod:*)",
+            "Bash(rtk *)",
             "Bash(go vet:*)",
             "Edit",
             "Read",
@@ -43,9 +43,14 @@
     "sandbox": {
         "autoAllowBashIfSandboxed": true,
         "enabled": true,
+        "excludedCommands": [
+            "go test*",
+            "rtk *"
+        ],
         "filesystem": {
             "allowWrite": [
-                "~/go/pkg/mod/cache/**"
+                "~/go/**",
+                "~/Library/Caches/go-build"
             ],
             "allowRead": [
                 "~/.twisty/**"
