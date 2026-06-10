@@ -57,6 +57,7 @@ func newRootCmd() *cobra.Command {
 		newRandomCmd(),
 		newOverpassCmd(),
 		newGpxCmd(),
+		newDiagCmd(),
 	)
 	return cmd
 }
@@ -1627,6 +1628,31 @@ LIMITATIONS:
 	cmd.MarkFlagRequired("maps-url") //nolint:errcheck
 	cmd.MarkFlagRequired("out")      //nolint:errcheck
 
+	return cmd
+}
+
+func newDiagCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "diag",
+		Short: "Diagnostic tools",
+	}
+	cmd.AddCommand(newDiagServeCmd())
+	return cmd
+}
+
+func newDiagServeCmd() *cobra.Command {
+	var cacheDir string
+	var port int
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Serve an interactive map of scored segments from the cache",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return diagServe(cacheDir, port)
+		},
+	}
+	cmd.Flags().StringVar(&cacheDir, "cache-dir", "", "Overpass cache directory (default ~/.twisty/cache/overpass/)")
+	cmd.Flags().IntVar(&port, "port", 7777, "Port to listen on")
 	return cmd
 }
 
