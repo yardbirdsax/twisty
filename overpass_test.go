@@ -300,3 +300,36 @@ func TestResolveOverpassDataDir_PassthroughWhenExplicit(t *testing.T) {
 		t.Errorf("resolveOverpassDataDir(\"/custom/path\") = %q, want %q", "/custom/path", got)
 	}
 }
+
+func TestRunOverpassStart_NoRegions_WithStampFile_UsesStampFileRegions(t *testing.T) {
+	region := "test/region"
+	dataDir := setupTestDataDir(t, region)
+
+	// Write a stamp file so the function knows which regions are cached.
+	stampFile := filepath.Join(dataDir, ".regions")
+	if err := os.WriteFile(stampFile, []byte(region), 0o644); err != nil {
+		t.Fatalf("writing stamp file: %v", err)
+	}
+
+	// No --regions flag; function should use stamp file regions and proceed past
+	// the old "required" guard. It will fail at Docker, but NOT at the guard.
+	err := runOverpassStart("", 8080, dataDir, "", nil)
+	if err != nil && err.Error() == "-regions is required" {
+		t.Errorf("got old 'required' error; want function to proceed using stamp file regions")
+	}
+	// Any other error (e.g. Docker not available) is acceptable — we only care that
+	// the guard is gone.
+}
+
+func TestRunOverpassStart_NoRegions_NoStampFile_ReturnsNoCachedRegionsError(t *testing.T) {
+	dataDir := t.TempDir()
+
+	err := runOverpassStart("", 8080, dataDir, "", nil)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	want := "no regions specified and no cached regions found; use --regions to specify regions"
+	if err.Error() != want {
+		t.Errorf("got error %q, want %q", err.Error(), want)
+	}
+}

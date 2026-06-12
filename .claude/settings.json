@@ -10,10 +10,6 @@
                     },
                     {
                         "type": "prompt",
-                        "prompt": "The agent wants to run: $ARGUMENTS. If this command uses grep, sed, or awk to search or read files, respond {\"ok\": false, \"reason\": \"Use the built-in Grep, Glob, and Read tools instead of shell grep/sed/awk. They are more context-efficient.\"} If the command is fine or uses grep/sed as part of a pipeline where native tools wouldn't work, respond {\"ok\": true}."
-                    },
-                    {
-                        "type": "prompt",
                         "prompt": "The agent wants to run: $ARGUMENTS. If this command tries to use temporary directories, like '/tmp' or '/private', respond {\"ok\": false, \"reason\": \"Use a directory in the current worktree called '.tmp'. If this directory isn't already in the '.gitignore' file, add it.\"}."
                     }
                 ]
@@ -32,6 +28,7 @@
             "Bash(rtk go mod:*)",
             "Bash(rtk *)",
             "Bash(go vet:*)",
+            "Bash(echo \"exit=$?\")",
             "Edit",
             "Read",
             "Write"

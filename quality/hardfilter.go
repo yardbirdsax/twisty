@@ -9,13 +9,12 @@ var unpavedSurfaces = map[string]bool{
 }
 
 var nonMotorVehicleHighways = map[string]bool{
-	"track":       true,
-	"path":        true,
-	"footway":     true,
-	"cycleway":    true,
-	"bridleway":   true,
-	"steps":       true,
-	"residential": true,
+	"track":     true,
+	"path":      true,
+	"footway":   true,
+	"cycleway":  true,
+	"bridleway": true,
+	"steps":     true,
 }
 
 // isHardFiltered returns true if a way should be removed by the hard filter.

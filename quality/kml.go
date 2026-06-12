@@ -257,6 +257,14 @@ func GradientColor(level int) string {
 	return fmt.Sprintf("FF%02X00FF", blue)
 }
 
+// GradientColorCSS returns a CSS #RRGGBB color string for the given level (0-511).
+// Converts the KML AABBGGRR output of GradientColor to CSS format.
+func GradientColorCSS(level int) string {
+	kml := GradientColor(level) // KML AABBGGRR format, e.g. level 1 → "FF00FFFF" (yellow)
+	// GradientColor always returns an 8-character string; these slices are safe.
+	return "#" + strings.ToLower(kml[6:8]+kml[4:6]+kml[2:4])
+}
+
 // WriteKMLSingleColor writes road collections as a KML file where each road is
 // rendered as a single-color polyline. The color is determined by the road's
 // TotalScore using a logarithmic gradient from yellow (low score) to red to

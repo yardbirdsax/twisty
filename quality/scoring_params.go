@@ -94,6 +94,11 @@ const DefaultMinCurvature = 0.0
 // Matches the Curvature project default of 4000.
 const DefaultMaxCurvature = 8000.0
 
+// DefaultMaxCurvaturePerKm is the score-per-km value that maps to the maximum
+// color intensity (magenta) in the build UI twistiness display.
+// A typical maximally-twisty road collection (~TotalScore=8000 over ~4km) yields ~2000/km.
+const DefaultMaxCurvaturePerKm = 2000.0
+
 // AssignTier maps a circumradius (in metres) to its curvature tier and the
 // associated score weight. Tiers are checked from tightest to widest; the
 // first threshold the radius falls below determines the tier.

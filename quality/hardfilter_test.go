@@ -36,8 +36,8 @@ func TestIsHardFiltered(t *testing.T) {
 		{name: "highway=cycleway", tags: map[string]string{"highway": "cycleway"}, want: true},
 		{name: "highway=bridleway", tags: map[string]string{"highway": "bridleway"}, want: true},
 		{name: "highway=steps", tags: map[string]string{"highway": "steps"}, want: true},
-		// Residential highways — filtered; other motor-vehicle highways — not filtered
-		{name: "highway=residential", tags: map[string]string{"highway": "residential"}, want: true},
+		// Residential highways — not filtered (scored with penalty); other motor-vehicle highways — not filtered
+		{name: "highway=residential", tags: map[string]string{"highway": "residential"}, want: false},
 		{name: "highway=secondary", tags: map[string]string{"highway": "secondary"}, want: false},
 		// Multiple disqualifying tags — filtered (OR logic)
 		{name: "surface=gravel and access=private", tags: map[string]string{"surface": "gravel", "access": "private"}, want: true},
@@ -82,7 +82,7 @@ func TestHardFilter(t *testing.T) {
 	}
 
 	// Verify correct ways are returned.
-	wantIDs := []int64{1, 5}
+	wantIDs := []int64{1, 3, 5}
 	if len(result) != len(wantIDs) {
 		t.Fatalf("HardFilter returned %d ways, want %d", len(result), len(wantIDs))
 	}

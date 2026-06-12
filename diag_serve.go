@@ -10,31 +10,7 @@ import (
 	"time"
 
 	"github.com/yardbirdsax/twisty/diag"
-	"github.com/yardbirdsax/twisty/quality"
 )
-
-type geoJSONSegmentProps struct {
-	RoadName string  `json:"road_name"`
-	Tier     int     `json:"tier"`
-	Score    float64 `json:"score"`
-	WayID    int64   `json:"way_id"`
-}
-
-type geoJSONGeometry struct {
-	Type        string       `json:"type"`
-	Coordinates [][2]float64 `json:"coordinates"`
-}
-
-type geoJSONFeature struct {
-	Type       string              `json:"type"`
-	Geometry   geoJSONGeometry     `json:"geometry"`
-	Properties geoJSONSegmentProps `json:"properties"`
-}
-
-type geoJSONFeatureCollection struct {
-	Type     string           `json:"type"`
-	Features []geoJSONFeature `json:"features"`
-}
 
 const diagHTML = `<!DOCTYPE html>
 <html lang="en">
@@ -235,56 +211,3 @@ func buildDiagMux(fcJSON []byte) (*http.ServeMux, error) {
 	return mux, nil
 }
 
-func parseBBox(s string) (west, south, east, north float64, err error) {
-	if s == "" {
-		return -180, -90, 180, 90, nil
-	}
-	_, err = fmt.Sscanf(s, "%f,%f,%f,%f", &west, &south, &east, &north)
-	return
-}
-
-func filterFeaturesByBBox(fc geoJSONFeatureCollection, west, south, east, north float64) geoJSONFeatureCollection {
-	out := geoJSONFeatureCollection{Type: "FeatureCollection", Features: []geoJSONFeature{}}
-	for _, f := range fc.Features {
-		if len(f.Geometry.Coordinates) == 0 {
-			continue
-		}
-		lon, lat := f.Geometry.Coordinates[0][0], f.Geometry.Coordinates[0][1]
-		if lon >= west && lon <= east && lat >= south && lat <= north {
-			out.Features = append(out.Features, f)
-		}
-	}
-	return out
-}
-
-func collectionsToGeoJSON(collections []quality.RoadCollection) geoJSONFeatureCollection {
-	total := 0
-	for _, c := range collections {
-		total += len(c.Segments)
-	}
-	fc := geoJSONFeatureCollection{
-		Type:     "FeatureCollection",
-		Features: make([]geoJSONFeature, 0, total),
-	}
-	for _, c := range collections {
-		for _, seg := range c.Segments {
-			fc.Features = append(fc.Features, geoJSONFeature{
-				Type: "Feature",
-				Geometry: geoJSONGeometry{
-					Type: "LineString",
-					Coordinates: [][2]float64{
-						{seg.Start.Lon, seg.Start.Lat},
-						{seg.End.Lon, seg.End.Lat},
-					},
-				},
-				Properties: geoJSONSegmentProps{
-					RoadName: c.DisplayName(),
-					Tier:     seg.Tier,
-					Score:    seg.Score,
-					WayID:    seg.WayID,
-				},
-			})
-		}
-	}
-	return fc
-}

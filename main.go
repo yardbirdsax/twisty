@@ -58,6 +58,7 @@ func newRootCmd() *cobra.Command {
 		newOverpassCmd(),
 		newGpxCmd(),
 		newDiagCmd(),
+		newBuildCmd(),
 	)
 	return cmd
 }

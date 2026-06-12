@@ -674,3 +674,21 @@ func TestWriteKMLSingleColor_MinSpeedFilter(t *testing.T) {
 		t.Errorf("expected 'Fast Road', got %q", kml.Doc.Folders[0].Name)
 	}
 }
+
+func TestGradientColorCSS(t *testing.T) {
+	tests := []struct {
+		level int
+		want  string
+	}{
+		{0, "#10e000"},   // level 0 → TierColors[0] KML "F000E010" → CSS #10e000
+		{1, "#ffff00"},   // level 1 → yellow: KML "FF00FFFF" → CSS #ffff00
+		{256, "#ff0000"}, // level 256 → red: KML "FF0000FF" → CSS #ff0000
+		{511, "#ff00ff"}, // level 511 → magenta: KML "FFFF00FF" → CSS #ff00ff
+	}
+	for _, tc := range tests {
+		got := GradientColorCSS(tc.level)
+		if got != tc.want {
+			t.Errorf("GradientColorCSS(%d) = %q, want %q", tc.level, got, tc.want)
+		}
+	}
+}

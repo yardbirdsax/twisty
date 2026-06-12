@@ -9,6 +9,7 @@ Heavily influenced by the amazing [Curvature](https://roadcurvature.com/) projec
 - `twisty score` — score roads in a region and write a KML file
 - `twisty fetch` — pre-populate the Overpass tile cache for a region
 - `twisty route` — uses the [Valhalla API](https://valhalla.openstreetmap.de/) to construct routes between two points, then picks the most twisty one
+- `twisty build` — interactively build a route on a map with live curvature scoring
 - `twisty overpass` — manage a local Overpass API instance running in Docker
 - `twisty gpx` — export a Google Maps driving route as a GPX file
 
@@ -242,6 +243,67 @@ At `twist=0.0` the fastest route wins; at `twist=1.0` the twistiest wins; interm
 ### Output
 
 The selected route is written as a GPX track to `--out`. A summary line is printed showing distance, duration, angular density, and twist score. With `--show-all`, a comparison table lists all candidates with the selected route marked.
+
+## twisty build
+
+Starts a local web server with an interactive map for building routes by clicking waypoints, with live curvature scoring as you place them.
+
+```
+twisty build --address <address> [flags]
+```
+
+### Required flags
+
+| Flag | Description |
+|------|-------------|
+| `--address string` | Center address for the initial map view |
+
+### Optional flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port int` | `8080` | Port for the local web server |
+| `--overpass-url string` | `https://overpass-api.de/api/interpreter` | Overpass API endpoint |
+| `--cache-dir string` | `~/.twisty/cache/overpass/` | Overpass tile cache directory |
+| `--tile-size float` | `0.1` | Tile size in degrees |
+| `--fetch-delay string` | `1s` | Delay between tile fetches (e.g. `500ms`, `2s`) |
+| `--v` | false | Verbose logging to stderr |
+
+### Example
+
+```bash
+twisty build --address "Asheville, NC" --port 8080
+```
+
+Then open `http://localhost:8080` in your browser. Click the map to add waypoints; each leg is routed via Valhalla and scored for curvature. Export the finished route as GPX or KML using the buttons in the UI.
+
+### How it works
+
+- Clicking the map adds a waypoint. Each new waypoint triggers a Valhalla routing call for the leg between it and the previous waypoint.
+- Road curvature data is fetched from Overpass on demand (same tile cache as `twisty score`). Tiles are fetched in the background as you pan; the score updates automatically when they arrive.
+- The "Refresh score" button clears and re-fetches all tiles in the current viewport, useful after cache staleness.
+- Routes and waypoints are saved to `localStorage` automatically so your work survives a page refresh.
+- The **Save / Load** buttons let you persist routes as `.twisty.json` files to share between sessions or machines.
+- Toggle between **Way view** (segments colored by curvature tier) and **Road view** (segments colored by aggregate road score) using the button in the stats panel.
+
+### Using with a local Overpass instance
+
+`twisty build` fetches tiles from the Overpass API on demand as you pan the map. For large or heavily-used areas, this can be slow or rate-limited. Running a local Overpass instance with `twisty overpass start` first can significantly speed up tile fetching:
+
+```bash
+# Start a local Overpass instance preloaded with the regions you need
+twisty overpass start \
+  --regions north-america/us/north-carolina,north-america/us/tennessee \
+  --port 8080
+
+# Then launch the build UI pointed at the local instance
+twisty build \
+  --address "Asheville, NC" \
+  --port 9090 \
+  --overpass-url http://localhost:8080/api/interpreter
+```
+
+This is especially worthwhile when building routes across state or country boundaries, where the tile set is large. See [twisty overpass start](#twisty-overpass-start) for how to load the required regions.
 
 ## twisty overpass
 

@@ -145,17 +145,15 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 	}
 	dataDir = resolveOverpassDataDir(dataDir)
 
-	if regions == "" {
-		return fmt.Errorf("-regions is required")
-	}
-
 	// Parse new regions from the flag.
-	parts := strings.Split(regions, ",")
 	var newRegions []string
-	for _, r := range parts {
-		r = strings.TrimSpace(r)
-		if r != "" {
-			newRegions = append(newRegions, r)
+	if regions != "" {
+		parts := strings.Split(regions, ",")
+		for _, r := range parts {
+			r = strings.TrimSpace(r)
+			if r != "" {
+				newRegions = append(newRegions, r)
+			}
 		}
 	}
 
@@ -184,6 +182,9 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 	}
 
 	allRegions := mergeRegions(existingRegions, newRegions)
+	if len(allRegions) == 0 {
+		return fmt.Errorf("no regions specified and no cached regions found; use --regions to specify regions")
+	}
 	allRegionsKey := strings.Join(allRegions, ",")
 	existingKey := strings.Join(existingRegions, ",")
 

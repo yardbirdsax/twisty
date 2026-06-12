@@ -2,6 +2,7 @@ package geocode
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -168,5 +169,48 @@ func TestGeocode_MultipleResults(t *testing.T) {
 	// Best result should be the first
 	if got.Lat != 39.7817 || got.Lon != -89.6501 {
 		t.Errorf("Result = %+v, want lat=39.7817 lon=-89.6501", got)
+	}
+}
+
+func TestReverseGeocode_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/reverse" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		lat := r.URL.Query().Get("lat")
+		lon := r.URL.Query().Get("lon")
+		if lat == "" || lon == "" {
+			t.Error("missing lat or lon query params")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"display_name":"123 Main St, Pottsville, PA"}`)
+	}))
+	defer srv.Close()
+
+	result, err := reverseGeocodeWithURL(40.1234, -76.5678, srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.DisplayName != "123 Main St, Pottsville, PA" {
+		t.Errorf("DisplayName = %q, want %q", result.DisplayName, "123 Main St, Pottsville, PA")
+	}
+	if result.Lat != 40.1234 || result.Lon != -76.5678 {
+		t.Errorf("Lat/Lon = %.4f, %.4f; want 40.1234, -76.5678", result.Lat, result.Lon)
+	}
+}
+
+func TestReverseGeocode_NoResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	}))
+	defer srv.Close()
+
+	result, err := reverseGeocodeWithURL(0, 0, srv.URL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.DisplayName != "" {
+		t.Errorf("expected empty DisplayName for no result, got %q", result.DisplayName)
 	}
 }
