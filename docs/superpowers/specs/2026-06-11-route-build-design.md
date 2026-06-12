@@ -2,12 +2,12 @@
 
 ## Overview
 
-A new subcommand `twisty route build` that serves a local web UI for interactively constructing driving routes by clicking waypoints on a map. Routes are rendered in real-time using Valhalla, and scored for curvature using the existing tile-based scoring pipeline. The user can export the final route as GPX or KML.
+A new subcommand `twisty build` that serves a local web UI for interactively constructing driving routes by clicking waypoints on a map. (Registered as a top-level command rather than under `route` to avoid breaking the existing `twisty route` leaf command.) Routes are rendered in real-time using Valhalla, and scored for curvature using the existing tile-based scoring pipeline. The user can export the final route as GPX or KML.
 
 ## Command & Flags
 
 ```
-twisty route build --address <addr> [--port 8080] [--overpass-url <url>] [--cache-dir <path>] [--tile-size 0.1] [--fetch-delay 1s]
+twisty build --address <addr> [--port 8080] [--overpass-url <url>] [--cache-dir <path>] [--tile-size 0.1] [--fetch-delay 1s]
 ```
 
 | Flag | Default | Description |
@@ -112,7 +112,7 @@ The scoring uses the full tile-based pipeline (`quality/` package) for high-fide
 2. **Cache check**: Look up each tile in `--cache-dir`
 3. **Proximity filter**: Only score OSM segments whose midpoint is within ~50m of the route polyline
 4. **Background fetch**: Missing tiles are fetched from the Overpass URL asynchronously; the frontend shows "Scoring N tiles..." and polls until complete
-5. **Aggregation**: Scored segments are run through the standard pipeline (deflection filter, penalties) and summed
+5. **Aggregation**: Scored segments are summed per-tile using `RunScorePipeline` (hard filter + curvature scoring). Full cross-way aggregation (deflection filter, penalties) is omitted for simplicity — those stages require assembling ways into named roads across tiles, which is heavyweight for interactive scoring. Per-segment curvature scores are directionally accurate.
 
 Pre-warming the cache with `twisty fetch` gives instant scoring. Cache misses introduce latency only for the affected tiles.
 
@@ -132,7 +132,7 @@ No retry logic. If a leg fails, the user clicks somewhere else.
 
 ### Modified files
 
-- `main.go` — Register the `route build` subcommand
+- `main.go` — Register the `build` subcommand
 
 ### Reused existing code
 
