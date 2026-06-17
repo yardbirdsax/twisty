@@ -4,6 +4,7 @@
 # Run `make test-integration` to execute the full test suite including integration tests.
 test:
 	go test -short ./...
+	node --test static/statusManager.test.js
 
 test-integration:
 	go test ./...
