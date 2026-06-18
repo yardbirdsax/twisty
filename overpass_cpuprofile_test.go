@@ -91,10 +91,10 @@ func TestCPUProfile_WrittenDuringConversion(t *testing.T) {
 	profilePath := filepath.Join(dataDir, "cpu.prof")
 
 	var stderr bytes.Buffer
-	// runOverpassStart will: skip download (PBF exists), convert PBF->BZ2 (with profiling),
-	// then fail at Docker operations. We expect an error from Docker but the profile
-	// should still be written (defer fires on return).
-	_ = runOverpassStart(region, 8080, dataDir, profilePath, &stderr)
+	err := convertRegionsWithProfile([]string{region}, dataDir, profilePath, &stderr)
+	if err != nil {
+		t.Fatalf("convertRegionsWithProfile returned unexpected error: %v", err)
+	}
 
 	// Verify the profile file exists and is non-empty.
 	info, err := os.Stat(profilePath)
@@ -117,8 +117,7 @@ func TestCPUProfile_NotCreatedWhenOmitted(t *testing.T) {
 	profilePath := filepath.Join(dataDir, "cpu.prof")
 
 	var stderr bytes.Buffer
-	// Call runOverpassStart with empty cpuprofile — no profiling should occur.
-	_ = runOverpassStart(region, 8080, dataDir, "", &stderr)
+	_ = convertRegionsWithProfile([]string{region}, dataDir, "", &stderr)
 
 	// Verify no profile file was created.
 	if _, err := os.Stat(profilePath); !os.IsNotExist(err) {
@@ -144,7 +143,7 @@ func TestCPUProfile_FlushedOnConversionError(t *testing.T) {
 	profilePath := filepath.Join(dir, "cpu.prof")
 
 	var stderr bytes.Buffer
-	err := runOverpassStart(region, 8080, dir, profilePath, &stderr)
+	err := convertRegionsWithProfile([]string{region}, dir, profilePath, &stderr)
 	if err == nil {
 		t.Fatal("expected conversion error but got nil")
 	}

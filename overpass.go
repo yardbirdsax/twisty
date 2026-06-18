@@ -140,6 +140,28 @@ func newOverpassBuildCmd() *cobra.Command {
 	return cmd
 }
 
+// convertRegionsWithProfile runs convertRegionsIncremental with optional CPU
+// profiling. If cpuprofile is non-empty, profiling starts before conversion and
+// the profile is flushed to that path on return (even on error).
+func convertRegionsWithProfile(allRegions []string, dataDir, cpuprofile string, stderr io.Writer) error {
+	if cpuprofile != "" {
+		profFile, err := os.Create(cpuprofile)
+		if err != nil {
+			return fmt.Errorf("creating CPU profile file: %w", err)
+		}
+		if err := pprof.StartCPUProfile(profFile); err != nil {
+			profFile.Close()
+			return fmt.Errorf("starting CPU profile: %w", err)
+		}
+		defer func() {
+			pprof.StopCPUProfile()
+			profFile.Close()
+			fmt.Fprintf(stderr, "CPU profile written to %s\n", cpuprofile)
+		}()
+	}
+	return convertRegionsIncremental(allRegions, dataDir, newConvertProgress(os.Stderr), stderr)
+}
+
 func runOverpassStart(regions string, port int, dataDir string, cpuprofile string, stderr io.Writer) error {
 	if stderr == nil {
 		stderr = os.Stderr
@@ -229,24 +251,7 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 
 	// Convert PBF files to per-region caches and merge into BZ2.
 	if _, err := os.Stat(mergedBZ2); os.IsNotExist(err) {
-		// Start CPU profiling if requested.
-		if cpuprofile != "" {
-			profFile, err := os.Create(cpuprofile)
-			if err != nil {
-				return fmt.Errorf("creating CPU profile file: %w", err)
-			}
-			if err := pprof.StartCPUProfile(profFile); err != nil {
-				profFile.Close()
-				return fmt.Errorf("starting CPU profile: %w", err)
-			}
-			defer func() {
-				pprof.StopCPUProfile()
-				profFile.Close()
-				fmt.Fprintf(stderr, "CPU profile written to %s\n", cpuprofile)
-			}()
-		}
-
-		if err := convertRegionsIncremental(allRegions, dataDir, newConvertProgress(os.Stderr), stderr); err != nil {
+		if err := convertRegionsWithProfile(allRegions, dataDir, cpuprofile, stderr); err != nil {
 			return fmt.Errorf("converting regions: %w", err)
 		}
 	} else {
