@@ -18,8 +18,9 @@ type recordingDownloadProgress struct {
 	calls []string
 }
 
-func (r *recordingDownloadProgress) StartFile(name string, fileIndex int, totalFiles int, totalBytes int64) {
+func (r *recordingDownloadProgress) StartFile(name string, fileIndex int, totalFiles int, totalBytes int64) FileDownloadProgress {
 	r.calls = append(r.calls, "StartFile")
+	return r
 }
 func (r *recordingDownloadProgress) BytesDownloaded(n int64) {
 	r.calls = append(r.calls, "BytesDownloaded")
@@ -43,27 +44,24 @@ func TestDownloadPBF_CallsProgressInOrder(t *testing.T) {
 	destPath := filepath.Join(dir, "test.osm.pbf")
 
 	rec := &recordingDownloadProgress{}
-	if err := downloadPBF(srv.URL+"/test.osm.pbf", destPath, rec, 0, 1); err != nil {
+	fp := rec.StartFile(destPath, 0, 1, int64(len(body)))
+	if err := downloadPBF(srv.URL+"/test.osm.pbf", destPath, fp); err != nil {
 		t.Fatalf("downloadPBF returned error: %v", err)
 	}
 
-	// Verify the file was actually written.
 	if _, err := os.Stat(destPath); err != nil {
 		t.Fatalf("dest file not created: %v", err)
 	}
 
-	// Verify method call order: StartFile first, BytesDownloaded in the middle, FileComplete last.
+	// calls[0] is "StartFile" from our explicit call above.
+	// Remaining: BytesDownloaded..., FileComplete.
 	if len(rec.calls) < 3 {
-		t.Fatalf("expected at least 3 progress calls, got %d: %v", len(rec.calls), rec.calls)
-	}
-	if rec.calls[0] != "StartFile" {
-		t.Errorf("first call should be StartFile, got %q", rec.calls[0])
+		t.Fatalf("expected at least 3 calls, got %d: %v", len(rec.calls), rec.calls)
 	}
 	last := rec.calls[len(rec.calls)-1]
 	if last != "FileComplete" {
 		t.Errorf("last call should be FileComplete, got %q", last)
 	}
-	// All middle calls should be BytesDownloaded.
 	for i := 1; i < len(rec.calls)-1; i++ {
 		if rec.calls[i] != "BytesDownloaded" {
 			t.Errorf("call[%d] should be BytesDownloaded, got %q", i, rec.calls[i])
@@ -79,8 +77,9 @@ func TestDownloadPBF_ReturnsError_WhenServerReturnsNonOK(t *testing.T) {
 
 	dir := t.TempDir()
 	destPath := filepath.Join(dir, "test.osm.pbf")
+	fp := NoopDownloadProgress{}.StartFile(destPath, 0, 1, -1)
 
-	err := downloadPBF(srv.URL+"/test.osm.pbf", destPath, NoopDownloadProgress{}, 0, 1)
+	err := downloadPBF(srv.URL+"/test.osm.pbf", destPath, fp)
 	if err == nil {
 		t.Fatal("expected error for non-200 response, got nil")
 	}
@@ -89,8 +88,9 @@ func TestDownloadPBF_ReturnsError_WhenServerReturnsNonOK(t *testing.T) {
 func TestDownloadPBF_ReturnsError_WhenURLUnreachable(t *testing.T) {
 	dir := t.TempDir()
 	destPath := filepath.Join(dir, "test.osm.pbf")
+	fp := NoopDownloadProgress{}.StartFile(destPath, 0, 1, -1)
 
-	err := downloadPBF("http://127.0.0.1:1/test.osm.pbf", destPath, NoopDownloadProgress{}, 0, 1)
+	err := downloadPBF("http://127.0.0.1:1/test.osm.pbf", destPath, fp)
 	if err == nil {
 		t.Fatal("expected error for unreachable URL, got nil")
 	}
@@ -298,6 +298,65 @@ func TestResolveOverpassDataDir_PassthroughWhenExplicit(t *testing.T) {
 	got := resolveOverpassDataDir("/custom/path")
 	if got != "/custom/path" {
 		t.Errorf("resolveOverpassDataDir(\"/custom/path\") = %q, want %q", "/custom/path", got)
+	}
+}
+
+func TestDownloadPBFsParallel_DownloadsInParallel(t *testing.T) {
+	const delay = 50 * time.Millisecond
+
+	var inflight atomic.Int32
+	var maxInflight atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cur := inflight.Add(1)
+		defer inflight.Add(-1)
+		for {
+			old := maxInflight.Load()
+			if cur <= old || maxInflight.CompareAndSwap(old, cur) {
+				break
+			}
+		}
+		time.Sleep(delay)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("fake"))
+	}))
+	defer srv.Close()
+
+	urls := []string{
+		srv.URL + "/a.osm.pbf",
+		srv.URL + "/b.osm.pbf",
+	}
+
+	dir := t.TempDir()
+	destPaths := []string{
+		filepath.Join(dir, "a.osm.pbf"),
+		filepath.Join(dir, "b.osm.pbf"),
+	}
+
+	err := downloadPBFsParallel(urls, destPaths, NoopDownloadProgress{})
+
+	if err != nil {
+		t.Fatalf("downloadPBFsParallel returned error: %v", err)
+	}
+	if maxInflight.Load() < 2 {
+		t.Errorf("expected at least 2 concurrent downloads, max inflight was %d", maxInflight.Load())
+	}
+}
+
+func TestDownloadPBFsParallel_ReturnsError_OnFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	err := downloadPBFsParallel(
+		[]string{srv.URL + "/a.osm.pbf"},
+		[]string{filepath.Join(dir, "a.osm.pbf")},
+		NoopDownloadProgress{},
+	)
+	if err == nil {
+		t.Fatal("expected error for non-200 response, got nil")
 	}
 }
 

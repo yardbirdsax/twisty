@@ -56,7 +56,8 @@ func TestE2E_DownloadPBFs(t *testing.T) {
 		}
 		url := geofabrikBaseURL + "/" + region + "-latest.osm.pbf"
 		t.Logf("Downloading %s -> %s", url, destPath)
-		if err := downloadPBF(url, destPath, progress, i, len(e2eRegions5)); err != nil {
+		fp := progress.StartFile(destPath, i, len(e2eRegions5), -1)
+		if err := downloadPBF(url, destPath, fp); err != nil {
 			t.Fatalf("downloading %s: %v", url, err)
 		}
 	}

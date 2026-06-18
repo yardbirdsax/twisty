@@ -13,6 +13,7 @@ import (
 	"runtime/pprof"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -204,22 +205,27 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 		}
 	}
 
-	// Download any missing PBF files.
+	// Collect URLs and dest paths for missing PBF files, then download in parallel.
 	downloadProgress := newDownloadProgress(os.Stderr)
-	for i, region := range allRegions {
+	var missingURLs, missingPaths []string
+	for _, region := range allRegions {
 		filename := pbfFilename(region)
 		destPath := filepath.Join(pbfDir, filename)
 		if _, err := os.Stat(destPath); os.IsNotExist(err) {
 			url := geofabrikBaseURL + "/" + region + "-latest.osm.pbf"
 			fmt.Fprintf(stderr, "Downloading %s -> %s\n", url, destPath)
-			if err := downloadPBF(url, destPath, downloadProgress, i, len(allRegions)); err != nil {
-				return fmt.Errorf("downloading %s: %w", url, err)
-			}
+			missingURLs = append(missingURLs, url)
+			missingPaths = append(missingPaths, destPath)
 		} else {
 			fmt.Fprintf(stderr, "PBF already exists: %s\n", destPath)
 		}
 	}
-	downloadProgress.Done()
+	if len(missingURLs) > 0 {
+		if err := downloadPBFsParallel(missingURLs, missingPaths, downloadProgress); err != nil {
+			return fmt.Errorf("downloading PBF: %w", err)
+		}
+		downloadProgress.Done()
+	}
 
 	// Convert PBF files to per-region caches and merge into BZ2.
 	if _, err := os.Stat(mergedBZ2); os.IsNotExist(err) {
@@ -541,9 +547,32 @@ func overpassImageBuildArgs(buildContext string) []string {
 	return args
 }
 
+// downloadPBFsParallel downloads all urls[i] to destPaths[i] concurrently.
+// All downloads start simultaneously; the first error is returned after all
+// goroutines finish.
+func downloadPBFsParallel(urls, destPaths []string, progress DownloadProgress) error {
+	errs := make([]error, len(urls))
+	var wg sync.WaitGroup
+	for i := range urls {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			fp := progress.StartFile(destPaths[idx], idx, len(urls), -1)
+			errs[idx] = downloadPBF(urls[idx], destPaths[idx], fp)
+		}(i)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // downloadPBF downloads the file at url to destPath atomically via a temp file,
-// reporting progress via the provided DownloadProgress.
-func downloadPBF(url, destPath string, progress DownloadProgress, fileIndex, totalFiles int) error {
+// reporting progress via the provided FileDownloadProgress.
+func downloadPBF(url, destPath string, fp FileDownloadProgress) error {
 	resp, err := http.Get(url) //nolint:noctx
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", url, err)
@@ -553,10 +582,6 @@ func downloadPBF(url, destPath string, progress DownloadProgress, fileIndex, tot
 		return fmt.Errorf("GET %s: unexpected status %s", url, resp.Status)
 	}
 
-	total := resp.ContentLength // -1 if unknown
-	progress.StartFile(destPath, fileIndex, totalFiles, total)
-
-	// Write to a temp file in the same directory then rename for atomicity.
 	dir := filepath.Dir(destPath)
 	tmp, err := os.CreateTemp(dir, ".download-*.osm.pbf")
 	if err != nil {
@@ -565,7 +590,7 @@ func downloadPBF(url, destPath string, progress DownloadProgress, fileIndex, tot
 	tmpName := tmp.Name()
 	defer func() {
 		tmp.Close()
-		os.Remove(tmpName) // no-op if rename succeeded
+		os.Remove(tmpName)
 	}()
 
 	buf := make([]byte, 32*1024)
@@ -575,7 +600,7 @@ func downloadPBF(url, destPath string, progress DownloadProgress, fileIndex, tot
 			if _, writeErr := tmp.Write(buf[:n]); writeErr != nil {
 				return fmt.Errorf("writing temp file: %w", writeErr)
 			}
-			progress.BytesDownloaded(int64(n))
+			fp.BytesDownloaded(int64(n))
 		}
 		if readErr == io.EOF {
 			break
@@ -591,7 +616,7 @@ func downloadPBF(url, destPath string, progress DownloadProgress, fileIndex, tot
 	if err := os.Rename(tmpName, destPath); err != nil {
 		return fmt.Errorf("renaming temp file: %w", err)
 	}
-	progress.FileComplete()
+	fp.FileComplete()
 	return nil
 }
 

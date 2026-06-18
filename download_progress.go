@@ -1,30 +1,37 @@
 package main
 
-// DownloadProgress reports progress during PBF file downloads.
-type DownloadProgress interface {
-	// StartFile begins progress tracking for a new file download.
-	// totalBytes is the Content-Length (-1 if unknown). fileIndex is 0-based,
-	// totalFiles is the total number of files to download.
-	StartFile(name string, fileIndex int, totalFiles int, totalBytes int64)
-
-	// BytesDownloaded reports that n additional bytes have been downloaded
-	// for the current file.
+// FileDownloadProgress reports progress for a single in-flight PBF download.
+// Each call to DownloadProgress.StartFile returns one of these.
+type FileDownloadProgress interface {
 	BytesDownloaded(n int64)
-
-	// FileComplete signals that the current file download is finished.
 	FileComplete()
+}
+
+// DownloadProgress manages progress across all PBF file downloads.
+type DownloadProgress interface {
+	// StartFile begins tracking a new file download and returns a
+	// FileDownloadProgress the caller uses to report bytes and completion.
+	// totalBytes is Content-Length (-1 if unknown). fileIndex is 0-based.
+	StartFile(name string, fileIndex int, totalFiles int, totalBytes int64) FileDownloadProgress
 
 	// Done signals that all downloads are complete.
 	Done()
 }
 
+// NoopFileDownloadProgress is a FileDownloadProgress that does nothing.
+type NoopFileDownloadProgress struct{}
+
+func (NoopFileDownloadProgress) BytesDownloaded(int64) {}
+func (NoopFileDownloadProgress) FileComplete()         {}
+
+var _ FileDownloadProgress = NoopFileDownloadProgress{}
+
 // NoopDownloadProgress is a DownloadProgress that does nothing.
-// It is the default when no progress reporting is needed.
 type NoopDownloadProgress struct{}
 
-func (NoopDownloadProgress) StartFile(string, int, int, int64) {}
-func (NoopDownloadProgress) BytesDownloaded(int64)             {}
-func (NoopDownloadProgress) FileComplete()                     {}
-func (NoopDownloadProgress) Done()                             {}
+func (NoopDownloadProgress) StartFile(string, int, int, int64) FileDownloadProgress {
+	return NoopFileDownloadProgress{}
+}
+func (NoopDownloadProgress) Done() {}
 
 var _ DownloadProgress = NoopDownloadProgress{}
