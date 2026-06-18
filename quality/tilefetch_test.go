@@ -3,6 +3,7 @@ package quality
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math"
 	"net/http"
@@ -303,6 +304,34 @@ func TestTileCacheKey(t *testing.T) {
 				t.Errorf("TileCacheKey(%v, %d) = %q, want %q", tc.tile, tc.precision, got, tc.expected)
 			}
 		})
+	}
+}
+
+func TestFetchTiledWaysForTiles_remarkResponseNotCached(t *testing.T) {
+	remarkBody := `{"elements":[],"remark":"runtime error: open64: 2 No such file or directory /db/db/ways.bin"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, remarkBody)
+	}))
+	defer srv.Close()
+
+	cacheDir := t.TempDir()
+	cache := &TileCache{Dir: cacheDir, Precision: 3}
+	tile := Tile{South: 40.0, West: -76.0, North: 40.1, East: -75.9}
+
+	cfg := TileFetchConfig{
+		Endpoint:       srv.URL,
+		TileSize:       0.1,
+		Cache:          cache,
+		RateLimitDelay: 0,
+	}
+
+	_, err := FetchTiledWaysForTiles(context.Background(), []Tile{tile}, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cache.Has(tile) {
+		t.Fatal("expected remark-bearing response NOT to be written to cache")
 	}
 }
 

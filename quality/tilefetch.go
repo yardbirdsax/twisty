@@ -321,26 +321,38 @@ func FetchTiledWaysForTiles(ctx context.Context, tiles []Tile, cfg TileFetchConf
 				failed++
 				raw = nil
 			} else {
-				if writeErr := cfg.Cache.Write(tile, raw); writeErr != nil {
-					cfg.Logger.Warn("cache write error", "south", tile.South, "west", tile.West, "error", writeErr)
+				// Reject Overpass server-side error responses (non-empty "remark")
+				// so they are not cached as if they were valid data.
+				var probe struct {
+					Remark string `json:"remark"`
 				}
-
-				// Rate-limit: wait 1 second between consecutive fetches.
-				// Increment fetched only after the sleep succeeds so the summary
-				// log is accurate when context is cancelled during sleep.
-				if sleepErr := sleepWithContext(ctx, cfg.RateLimitDelay); sleepErr != nil {
-					// The tile was successfully fetched and written; count it before
-					// returning so progress accounting includes this tile.
-					cfg.Progress.Tick(cached)
-					allTileData = append(allTileData, raw)
-					// Merge whatever we have so far before returning the context error.
-					ways, mergeErr := mergeAndDeduplicate(allTileData, cfg.Logger)
-					if mergeErr != nil {
-						return nil, mergeErr
+				if json.Unmarshal(raw, &probe) == nil && probe.Remark != "" {
+					cfg.Logger.Warn("overpass remark error, not caching",
+						"south", tile.South, "west", tile.West, "remark", probe.Remark)
+					failed++
+					raw = nil
+				} else {
+					if writeErr := cfg.Cache.Write(tile, raw); writeErr != nil {
+						cfg.Logger.Warn("cache write error", "south", tile.South, "west", tile.West, "error", writeErr)
 					}
-					return ways, sleepErr
+
+					// Rate-limit: wait 1 second between consecutive fetches.
+					// Increment fetched only after the sleep succeeds so the summary
+					// log is accurate when context is cancelled during sleep.
+					if sleepErr := sleepWithContext(ctx, cfg.RateLimitDelay); sleepErr != nil {
+						// The tile was successfully fetched and written; count it before
+						// returning so progress accounting includes this tile.
+						cfg.Progress.Tick(cached)
+						allTileData = append(allTileData, raw)
+						// Merge whatever we have so far before returning the context error.
+						ways, mergeErr := mergeAndDeduplicate(allTileData, cfg.Logger)
+						if mergeErr != nil {
+							return nil, mergeErr
+						}
+						return ways, sleepErr
+					}
+					fetched++
 				}
-				fetched++
 			}
 		}
 

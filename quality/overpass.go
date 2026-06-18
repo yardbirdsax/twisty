@@ -68,6 +68,7 @@ func BoundingBox(routes [][]geo.Coord, bufferDeg float64) (south, west, north, e
 // overpassResponse is the top-level JSON returned by Overpass API.
 type overpassResponse struct {
 	Elements []overpassElement `json:"elements"`
+	Remark   string            `json:"remark"`
 }
 
 // overpassElement represents a single way element from Overpass.
