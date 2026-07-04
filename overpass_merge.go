@@ -13,11 +13,10 @@ import (
 // convertRegionsIncremental checks per-region cache validity, converts only
 // stale regions, and merges all cached regions through the parallel BZ2 writer
 // into the final merged.osm.bz2.
-func convertRegionsIncremental(allRegions []string, dataDir string, progress osmconv.ConvertProgress, stderr io.Writer) error {
+func convertRegionsIncremental(allRegions []string, dataDir, pbfDir string, progress osmconv.ConvertProgress, stderr io.Writer) error {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
-	pbfDir := filepath.Join(dataDir, "pbf")
 	cacheDir := filepath.Join(dataDir, "cache")
 
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {

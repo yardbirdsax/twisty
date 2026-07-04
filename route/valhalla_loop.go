@@ -223,7 +223,7 @@ func fetchLoopRouteFromURL(baseURL string, start geo.Coord, waypoints []geo.Coor
 // If the waypoint count exceeds Valhalla's location limit, the request is
 // automatically split into multiple calls and the results are stitched.
 func FetchLoopRoute(start geo.Coord, waypoints []geo.Coord) (Route, error) {
-	return fetchLoopRouteFromURL(valhallaBaseURL, start, waypoints)
+	return fetchLoopRouteFromURL(ValhallaBaseURL, start, waypoints)
 }
 
 // FetchLoopRouteFromURL is like FetchLoopRoute but uses the provided base URL

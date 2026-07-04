@@ -91,7 +91,7 @@ func TestCPUProfile_WrittenDuringConversion(t *testing.T) {
 	profilePath := filepath.Join(dataDir, "cpu.prof")
 
 	var stderr bytes.Buffer
-	err := convertRegionsWithProfile([]string{region}, dataDir, profilePath, &stderr)
+	err := convertRegionsWithProfile([]string{region}, dataDir, filepath.Join(dataDir, "pbf"), profilePath, &stderr)
 	if err != nil {
 		t.Fatalf("convertRegionsWithProfile returned unexpected error: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestCPUProfile_NotCreatedWhenOmitted(t *testing.T) {
 	profilePath := filepath.Join(dataDir, "cpu.prof")
 
 	var stderr bytes.Buffer
-	_ = convertRegionsWithProfile([]string{region}, dataDir, "", &stderr)
+	_ = convertRegionsWithProfile([]string{region}, dataDir, filepath.Join(dataDir, "pbf"), "", &stderr)
 
 	// Verify no profile file was created.
 	if _, err := os.Stat(profilePath); !os.IsNotExist(err) {
@@ -143,7 +143,7 @@ func TestCPUProfile_FlushedOnConversionError(t *testing.T) {
 	profilePath := filepath.Join(dir, "cpu.prof")
 
 	var stderr bytes.Buffer
-	err := convertRegionsWithProfile([]string{region}, dir, profilePath, &stderr)
+	err := convertRegionsWithProfile([]string{region}, dir, filepath.Join(dir, "pbf"), profilePath, &stderr)
 	if err == nil {
 		t.Fatal("expected conversion error but got nil")
 	}

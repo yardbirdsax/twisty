@@ -59,16 +59,22 @@ func TestExecBuild_missingAddress(t *testing.T) {
 }
 
 func TestHandleRouteLeg_success(t *testing.T) {
-	srv := &buildServer{}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/route-leg", srv.handleRouteLeg)
+	// Start a stub Valhalla server so the test does not hit the live network.
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// "??" is a valid polyline6 encoding of a single point (0,0).
+		fmt.Fprint(w, `{"trip":{"summary":{"time":60,"length":1.0},"legs":[{"shape":"??","summary":{"time":60,"length":1.0},"maneuvers":[]}]},"alternates":[]}`)
+	}))
+	defer stub.Close()
+
+	srv := &buildServer{valhallaURL: stub.URL}
 
 	body := `{"from":{"lat":40.0,"lon":-75.5},"to":{"lat":40.01,"lon":-75.49}}`
 	req := httptest.NewRequest("POST", "/api/route-leg", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	mux.ServeHTTP(w, req)
+	srv.handleRouteLeg(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -86,6 +92,30 @@ func TestHandleRouteLeg_success(t *testing.T) {
 	}
 	if resp.Distance <= 0 {
 		t.Fatal("expected positive distance")
+	}
+}
+
+func TestHandleRouteLeg_UsesConfiguredValhallaURL(t *testing.T) {
+	// Start a stub Valhalla server.
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Minimal valid Valhalla response.
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"trip":{"summary":{"time":60,"length":1.0},"legs":[{"shape":"??","summary":{"time":60,"length":1.0},"maneuvers":[]}]},"alternates":[]}`)
+	}))
+	defer stub.Close()
+
+	srv := &buildServer{
+		valhallaURL: stub.URL,
+	}
+
+	body := `{"from":{"lat":36.1,"lon":-86.7},"to":{"lat":36.2,"lon":-86.8}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/route-leg", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.handleRouteLeg(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

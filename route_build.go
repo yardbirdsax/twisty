@@ -37,6 +37,7 @@ type buildParams struct {
 	tileSize    float64
 	fetchDelay  string
 	verbose     bool
+	valhallaURL string // base URL for the Valhalla routing API
 }
 
 func execBuild(p buildParams) error {
@@ -61,6 +62,7 @@ func execBuild(p buildParams) error {
 	srv := &buildServer{
 		center:      center,
 		overpassURL: p.overpassURL,
+		valhallaURL: p.valhallaURL,
 		cacheDir:    cacheDir,
 		tileSize:    p.tileSize,
 		fetchDelay:  p.fetchDelay,
@@ -98,6 +100,7 @@ func execBuild(p buildParams) error {
 type buildServer struct {
 	center        geocode.Result
 	overpassURL   string
+	valhallaURL   string
 	cacheDir      string
 	tileSize      float64
 	fetchDelay    string
@@ -1316,7 +1319,11 @@ func (s *buildServer) handleRouteLeg(w http.ResponseWriter, r *http.Request) {
 	origin := geo.Coord{Lat: req.From.Lat, Lon: req.From.Lon}
 	dest := geo.Coord{Lat: req.To.Lat, Lon: req.To.Lon}
 
-	routes, err := route.FetchRoutes(origin, dest)
+	valhallaURL := s.valhallaURL
+	if valhallaURL == "" {
+		valhallaURL = route.ValhallaBaseURL
+	}
+	routes, err := route.FetchRoutesFromURL(valhallaURL, origin, dest)
 	if err != nil {
 		http.Error(w, "routing failed: "+err.Error(), http.StatusBadGateway)
 		return
@@ -2160,5 +2167,6 @@ func newBuildCmd() *cobra.Command {
 	f.Float64Var(&p.tileSize, "tile-size", 0.1, "Tile size in degrees")
 	f.StringVar(&p.fetchDelay, "fetch-delay", "", "Delay between tile fetches (e.g. 500ms, 2s); default 1s")
 	f.BoolVar(&p.verbose, "v", false, "Enable verbose logging to stderr")
+	f.StringVar(&p.valhallaURL, "valhalla-url", route.ValhallaBaseURL, "Valhalla routing API URL")
 	return cmd
 }

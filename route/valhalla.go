@@ -12,7 +12,7 @@ import (
 	"github.com/yardbirdsax/twisty/geo"
 )
 
-const valhallaBaseURL = "https://valhalla1.openstreetmap.de"
+const ValhallaBaseURL = "https://valhalla1.openstreetmap.de"
 
 // valhallaHTTPClient is used by fetchRoutesFromURL and is not injectable.
 // This is consistent with the osrm pattern: timeout behaviour is verified
@@ -101,9 +101,9 @@ func tripToRoute(trip valhallaTrip) (Route, error) {
 	}, nil
 }
 
-// fetchRoutesFromURL is the internal implementation of FetchRoutes, accepting a
-// base URL so tests can substitute a local server.
-func fetchRoutesFromURL(baseURL string, origin, dest geo.Coord) ([]Route, error) {
+// FetchRoutesFromURL is the internal implementation of FetchRoutes, accepting a
+// base URL so callers can substitute a local server.
+func FetchRoutesFromURL(baseURL string, origin, dest geo.Coord) ([]Route, error) {
 	reqBody := valhallaRequest{
 		Locations: []valhallaLocation{
 			{Lon: origin.Lon, Lat: origin.Lat},
@@ -170,5 +170,5 @@ func fetchRoutesFromURL(baseURL string, origin, dest geo.Coord) ([]Route, error)
 // FetchRoutes requests route alternatives from the Valhalla routing engine
 // and returns decoded Route structs. Routes avoid highways (use_highways=0).
 func FetchRoutes(origin, dest geo.Coord) ([]Route, error) {
-	return fetchRoutesFromURL(valhallaBaseURL, origin, dest)
+	return FetchRoutesFromURL(ValhallaBaseURL, origin, dest)
 }

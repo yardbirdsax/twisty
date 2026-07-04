@@ -75,7 +75,7 @@ func TestE2E_4RegionColdCache(t *testing.T) {
 	cleanCacheAndMerged(t, e2eDataDir)
 
 	start := time.Now()
-	if err := convertRegionsIncremental(e2eRegions4, e2eDataDir, osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
+	if err := convertRegionsIncremental(e2eRegions4, e2eDataDir, filepath.Join(e2eDataDir, "pbf"), osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
 		t.Fatalf("convertRegionsIncremental: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -94,7 +94,7 @@ func TestE2E_5RegionColdCache(t *testing.T) {
 	cleanCacheAndMerged(t, e2eDataDir)
 
 	start := time.Now()
-	if err := convertRegionsIncremental(e2eRegions5, e2eDataDir, osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
+	if err := convertRegionsIncremental(e2eRegions5, e2eDataDir, filepath.Join(e2eDataDir, "pbf"), osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
 		t.Fatalf("convertRegionsIncremental: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -127,7 +127,7 @@ func TestE2E_IncrementalAddition(t *testing.T) {
 	}
 
 	start := time.Now()
-	if err := convertRegionsIncremental(e2eRegions5, e2eDataDir, osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
+	if err := convertRegionsIncremental(e2eRegions5, e2eDataDir, filepath.Join(e2eDataDir, "pbf"), osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
 		t.Fatalf("convertRegionsIncremental: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -157,7 +157,7 @@ func TestE2E_CorrectnessVerification(t *testing.T) {
 	// Do a fresh full 5-region conversion.
 	cleanCacheAndMerged(t, e2eDataDir)
 	t.Log("Running fresh full 5-region conversion for correctness comparison...")
-	if err := convertRegionsIncremental(e2eRegions5, e2eDataDir, osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
+	if err := convertRegionsIncremental(e2eRegions5, e2eDataDir, filepath.Join(e2eDataDir, "pbf"), osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
 		t.Fatalf("convertRegionsIncremental: %v", err)
 	}
 	fullPath := filepath.Join(e2eDataDir, "merged.osm.bz2")

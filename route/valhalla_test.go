@@ -95,9 +95,9 @@ func TestFetchRoutesValhalla_Unit_SuccessPath(t *testing.T) {
 	origin := geo.Coord{Lat: 40.19, Lon: -75.54}
 	dest := geo.Coord{Lat: 39.83, Lon: -77.23}
 
-	routes, err := fetchRoutesFromURL(srv.URL, origin, dest)
+	routes, err := FetchRoutesFromURL(srv.URL, origin, dest)
 	if err != nil {
-		t.Fatalf("fetchRoutesFromURL returned error: %v", err)
+		t.Fatalf("FetchRoutesFromURL returned error: %v", err)
 	}
 	if len(routes) != 2 {
 		t.Fatalf("expected 2 routes, got %d", len(routes))
@@ -140,7 +140,7 @@ func TestFetchRoutesValhalla_Unit_Non200Status(t *testing.T) {
 	origin := geo.Coord{Lat: 40.19, Lon: -75.54}
 	dest := geo.Coord{Lat: 39.83, Lon: -77.23}
 
-	_, err := fetchRoutesFromURL(srv.URL, origin, dest)
+	_, err := FetchRoutesFromURL(srv.URL, origin, dest)
 	if err == nil {
 		t.Fatal("expected error for non-200 HTTP status, got nil")
 	}
@@ -164,7 +164,7 @@ func TestFetchRoutesValhalla_Unit_EmptyLegs(t *testing.T) {
 	origin := geo.Coord{Lat: 40.19, Lon: -75.54}
 	dest := geo.Coord{Lat: 39.83, Lon: -77.23}
 
-	_, err := fetchRoutesFromURL(srv.URL, origin, dest)
+	_, err := FetchRoutesFromURL(srv.URL, origin, dest)
 	if err == nil {
 		t.Fatal("expected error for empty legs, got nil")
 	}
@@ -193,9 +193,9 @@ func TestFetchRoutesValhalla_Unit_ZeroAlternates(t *testing.T) {
 	origin := geo.Coord{Lat: 40.19, Lon: -75.54}
 	dest := geo.Coord{Lat: 39.83, Lon: -77.23}
 
-	routes, err := fetchRoutesFromURL(srv.URL, origin, dest)
+	routes, err := FetchRoutesFromURL(srv.URL, origin, dest)
 	if err != nil {
-		t.Fatalf("fetchRoutesFromURL returned error: %v", err)
+		t.Fatalf("FetchRoutesFromURL returned error: %v", err)
 	}
 	if len(routes) != 1 {
 		t.Fatalf("expected 1 route, got %d", len(routes))

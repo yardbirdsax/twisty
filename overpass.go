@@ -11,9 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
-	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -143,7 +141,7 @@ func newOverpassBuildCmd() *cobra.Command {
 // convertRegionsWithProfile runs convertRegionsIncremental with optional CPU
 // profiling. If cpuprofile is non-empty, profiling starts before conversion and
 // the profile is flushed to that path on return (even on error).
-func convertRegionsWithProfile(allRegions []string, dataDir, cpuprofile string, stderr io.Writer) error {
+func convertRegionsWithProfile(allRegions []string, dataDir, pbfDir, cpuprofile string, stderr io.Writer) error {
 	if cpuprofile != "" {
 		profFile, err := os.Create(cpuprofile)
 		if err != nil {
@@ -159,7 +157,7 @@ func convertRegionsWithProfile(allRegions []string, dataDir, cpuprofile string, 
 			fmt.Fprintf(stderr, "CPU profile written to %s\n", cpuprofile)
 		}()
 	}
-	return convertRegionsIncremental(allRegions, dataDir, newConvertProgress(os.Stderr), stderr)
+	return convertRegionsIncremental(allRegions, dataDir, pbfDir, newConvertProgress(os.Stderr), stderr)
 }
 
 func runOverpassStart(regions string, port int, dataDir string, cpuprofile string, stderr io.Writer) error {
@@ -180,7 +178,7 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 		}
 	}
 
-	pbfDir := filepath.Join(dataDir, "pbf")
+	pbfDir := resolvePBFDir("")
 	dbDir := filepath.Join(dataDir, "db")
 	mergedBZ2 := filepath.Join(dataDir, "merged.osm.bz2")
 	stampFile := filepath.Join(dataDir, ".regions")
@@ -251,7 +249,7 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 
 	// Convert PBF files to per-region caches and merge into BZ2.
 	if _, err := os.Stat(mergedBZ2); os.IsNotExist(err) {
-		if err := convertRegionsWithProfile(allRegions, dataDir, cpuprofile, stderr); err != nil {
+		if err := convertRegionsWithProfile(allRegions, dataDir, pbfDir, cpuprofile, stderr); err != nil {
 			return fmt.Errorf("converting regions: %w", err)
 		}
 	} else {
@@ -323,30 +321,6 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 
 	fmt.Fprintf(stderr, "\nOverpass API is ready: %s\n", endpoint)
 	return nil
-}
-
-// pbfFilename returns the local PBF filename for a Geofabrik region path.
-// Slashes in the region path are replaced with underscores so the name is
-// safe to use as a flat filename.
-func pbfFilename(region string) string {
-	return strings.ReplaceAll(region, "/", "_") + "-latest.osm.pbf"
-}
-
-// mergeRegions returns the sorted union of existing and new region lists.
-func mergeRegions(existing, add []string) []string {
-	seen := make(map[string]struct{}, len(existing)+len(add))
-	for _, r := range existing {
-		seen[r] = struct{}{}
-	}
-	for _, r := range add {
-		seen[r] = struct{}{}
-	}
-	merged := make([]string, 0, len(seen))
-	for r := range seen {
-		merged = append(merged, r)
-	}
-	sort.Strings(merged)
-	return merged
 }
 
 // overpassDockerRunArgs builds the arguments for `docker run` to start the
@@ -550,79 +524,6 @@ func overpassImageBuildArgs(buildContext string) []string {
 	}
 	args = append(args, "-t", overpassImage, buildContext)
 	return args
-}
-
-// downloadPBFsParallel downloads all urls[i] to destPaths[i] concurrently.
-// All downloads start simultaneously; the first error is returned after all
-// goroutines finish.
-func downloadPBFsParallel(urls, destPaths []string, progress DownloadProgress) error {
-	errs := make([]error, len(urls))
-	var wg sync.WaitGroup
-	for i := range urls {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			fp := progress.StartFile(destPaths[idx], idx, len(urls), -1)
-			errs[idx] = downloadPBF(urls[idx], destPaths[idx], fp)
-		}(i)
-	}
-	wg.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// downloadPBF downloads the file at url to destPath atomically via a temp file,
-// reporting progress via the provided FileDownloadProgress.
-func downloadPBF(url, destPath string, fp FileDownloadProgress) error {
-	resp, err := http.Get(url) //nolint:noctx
-	if err != nil {
-		return fmt.Errorf("GET %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: unexpected status %s", url, resp.Status)
-	}
-
-	dir := filepath.Dir(destPath)
-	tmp, err := os.CreateTemp(dir, ".download-*.osm.pbf")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		tmp.Close()
-		os.Remove(tmpName)
-	}()
-
-	buf := make([]byte, 32*1024)
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, writeErr := tmp.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("writing temp file: %w", writeErr)
-			}
-			fp.BytesDownloaded(int64(n))
-		}
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return fmt.Errorf("reading response: %w", readErr)
-		}
-	}
-
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, destPath); err != nil {
-		return fmt.Errorf("renaming temp file: %w", err)
-	}
-	fp.FileComplete()
-	return nil
 }
 
 // dockerCmd runs a docker subcommand, captures combined output, and returns it.

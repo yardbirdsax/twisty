@@ -39,7 +39,7 @@ func TestE2E_Local_1RegionColdCache(t *testing.T) {
 	cleanCacheAndMerged(t, localDataDir)
 
 	start := time.Now()
-	if err := convertRegionsIncremental(localRegions1, localDataDir, osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
+	if err := convertRegionsIncremental(localRegions1, localDataDir, filepath.Join(localDataDir, "pbf"), osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
 		t.Fatalf("convertRegionsIncremental: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -57,7 +57,7 @@ func TestE2E_Local_2RegionColdCache(t *testing.T) {
 	cleanCacheAndMerged(t, localDataDir)
 
 	start := time.Now()
-	if err := convertRegionsIncremental(localRegions2, localDataDir, osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
+	if err := convertRegionsIncremental(localRegions2, localDataDir, filepath.Join(localDataDir, "pbf"), osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
 		t.Fatalf("convertRegionsIncremental: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -91,7 +91,7 @@ func TestE2E_Local_IncrementalAddition(t *testing.T) {
 	}
 
 	start := time.Now()
-	if err := convertRegionsIncremental(localRegions2, localDataDir, osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
+	if err := convertRegionsIncremental(localRegions2, localDataDir, filepath.Join(localDataDir, "pbf"), osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
 		t.Fatalf("convertRegionsIncremental: %v", err)
 	}
 	elapsed := time.Since(start)
@@ -121,7 +121,7 @@ func TestE2E_Local_CorrectnessVerification(t *testing.T) {
 	// Do a fresh full 2-region conversion.
 	cleanCacheAndMerged(t, localDataDir)
 	t.Log("Running fresh full 2-region conversion for correctness comparison...")
-	if err := convertRegionsIncremental(localRegions2, localDataDir, osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
+	if err := convertRegionsIncremental(localRegions2, localDataDir, filepath.Join(localDataDir, "pbf"), osmconv.NoopConvertProgress{}, os.Stderr); err != nil {
 		t.Fatalf("convertRegionsIncremental: %v", err)
 	}
 	fullPath := filepath.Join(localDataDir, "merged.osm.bz2")

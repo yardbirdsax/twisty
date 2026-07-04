@@ -153,7 +153,7 @@ func TestConvertRegionsIncremental_FullPipeline(t *testing.T) {
 		setupPBFRegion(t, pbfDir, region)
 	}
 
-	if err := convertRegionsIncremental(regions, dataDir, nil, nil); err != nil {
+	if err := convertRegionsIncremental(regions, dataDir, pbfDir, nil, nil); err != nil {
 		t.Fatalf("convertRegionsIncremental: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestConvertRegionsIncremental_CacheReuse(t *testing.T) {
 	setupPBFRegion(t, pbfDir, "alpha")
 
 	// First run — converts and writes cache.
-	if err := convertRegionsIncremental(regions, dataDir, nil, nil); err != nil {
+	if err := convertRegionsIncremental(regions, dataDir, pbfDir, nil, nil); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
@@ -189,7 +189,7 @@ func TestConvertRegionsIncremental_CacheReuse(t *testing.T) {
 	os.Remove(filepath.Join(dataDir, "merged.osm.bz2"))
 
 	// Second run — should skip conversion, only merge.
-	if err := convertRegionsIncremental(regions, dataDir, nil, nil); err != nil {
+	if err := convertRegionsIncremental(regions, dataDir, pbfDir, nil, nil); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 
@@ -212,7 +212,7 @@ func TestConvertRegionsIncremental_IncrementalAddition(t *testing.T) {
 	setupPBFRegion(t, pbfDir, "beta")
 
 	// First run with alpha and beta.
-	if err := convertRegionsIncremental([]string{"alpha", "beta"}, dataDir, nil, nil); err != nil {
+	if err := convertRegionsIncremental([]string{"alpha", "beta"}, dataDir, pbfDir, nil, nil); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
@@ -226,7 +226,7 @@ func TestConvertRegionsIncremental_IncrementalAddition(t *testing.T) {
 	os.Remove(filepath.Join(dataDir, "merged.osm.bz2"))
 
 	// Second run with alpha, beta, gamma.
-	if err := convertRegionsIncremental([]string{"alpha", "beta", "gamma"}, dataDir, nil, nil); err != nil {
+	if err := convertRegionsIncremental([]string{"alpha", "beta", "gamma"}, dataDir, pbfDir, nil, nil); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 
@@ -253,13 +253,13 @@ func TestConvertRegionsIncremental_OrphanCleanup(t *testing.T) {
 	setupPBFRegion(t, pbfDir, "gamma")
 
 	// First run with all three.
-	if err := convertRegionsIncremental([]string{"alpha", "beta", "gamma"}, dataDir, nil, nil); err != nil {
+	if err := convertRegionsIncremental([]string{"alpha", "beta", "gamma"}, dataDir, pbfDir, nil, nil); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
 	// Delete merged and run again with only alpha and beta.
 	os.Remove(filepath.Join(dataDir, "merged.osm.bz2"))
-	if err := convertRegionsIncremental([]string{"alpha", "beta"}, dataDir, nil, nil); err != nil {
+	if err := convertRegionsIncremental([]string{"alpha", "beta"}, dataDir, pbfDir, nil, nil); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 
@@ -293,7 +293,7 @@ func TestConvertRegionsIncremental_ProgressReporting(t *testing.T) {
 
 	rec := &recordingConvertProgress{}
 	var stderrBuf strings.Builder
-	if err := convertRegionsIncremental([]string{"alpha", "beta"}, dataDir, rec, &stderrBuf); err != nil {
+	if err := convertRegionsIncremental([]string{"alpha", "beta"}, dataDir, pbfDir, rec, &stderrBuf); err != nil {
 		t.Fatalf("convertRegionsIncremental: %v", err)
 	}
 
@@ -317,7 +317,7 @@ func TestConvertRegionsIncremental_ProgressReporting(t *testing.T) {
 	// Delete merged and run again — both should report cached.
 	os.Remove(filepath.Join(dataDir, "merged.osm.bz2"))
 	var stderrBuf2 strings.Builder
-	if err := convertRegionsIncremental([]string{"alpha", "beta"}, dataDir, osmconv.NoopConvertProgress{}, &stderrBuf2); err != nil {
+	if err := convertRegionsIncremental([]string{"alpha", "beta"}, dataDir, pbfDir, osmconv.NoopConvertProgress{}, &stderrBuf2); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 

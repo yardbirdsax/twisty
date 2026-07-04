@@ -138,7 +138,7 @@ func TestRunOverpassClean_FreshStartAfterClean(t *testing.T) {
 	_ = pbfData
 
 	// First run: convert and populate cache.
-	if err := convertRegionsIncremental([]string{region}, dataDir, nil, io.Discard); err != nil {
+	if err := convertRegionsIncremental([]string{region}, dataDir, pbfDir, nil, io.Discard); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
@@ -168,7 +168,7 @@ func TestRunOverpassClean_FreshStartAfterClean(t *testing.T) {
 	}
 
 	// Second run: should re-convert from scratch, not reuse any cache.
-	if err := convertRegionsIncremental([]string{region}, dataDir, nil, io.Discard); err != nil {
+	if err := convertRegionsIncremental([]string{region}, dataDir, pbfDir, nil, io.Discard); err != nil {
 		t.Fatalf("second run after clean: %v", err)
 	}
 
