@@ -11,6 +11,7 @@ Heavily influenced by the amazing [Curvature](https://roadcurvature.com/) projec
 - `twisty route` — uses the [Valhalla API](https://valhalla.openstreetmap.de/) to construct routes between two points, then picks the most twisty one
 - `twisty build` — interactively build a route on a map with live curvature scoring
 - `twisty overpass` — manage a local Overpass API instance running in Docker
+- `twisty valhalla` — manage a local Valhalla routing server running in Docker
 - `twisty gpx` — export a Google Maps driving route as a GPX file
 
 ## Installation
@@ -286,24 +287,30 @@ Then open `http://localhost:8080` in your browser. Click the map to add waypoint
 - The **Save / Load** buttons let you persist routes as `.twisty.json` files to share between sessions or machines.
 - Toggle between **Way view** (segments colored by curvature tier) and **Road view** (segments colored by aggregate road score) using the button in the stats panel.
 
-### Using with a local Overpass instance
+### Using with local instances
 
-`twisty build` fetches tiles from the Overpass API on demand as you pan the map. For large or heavily-used areas, this can be slow or rate-limited. Running a local Overpass instance with `twisty overpass start` first can significantly speed up tile fetching:
+For the best experience, run local Overpass and Valhalla instances together. Overpass serves tile data as you pan the map; Valhalla handles routing when you click waypoints. Both use the same Geofabrik region paths so you only need to specify them once per service.
 
 ```bash
-# Start a local Overpass instance preloaded with the regions you need
+# Start a local Overpass instance for tile data
 twisty overpass start \
   --regions north-america/us/north-carolina,north-america/us/tennessee \
   --port 8080
 
-# Then launch the build UI pointed at the local instance
+# Start a local Valhalla instance for routing
+twisty valhalla start \
+  --regions north-america/us/north-carolina,north-america/us/tennessee \
+  --port 8002
+
+# Launch the build UI pointed at both local instances
 twisty build \
   --address "Asheville, NC" \
   --port 9090 \
-  --overpass-url http://localhost:8080/api/interpreter
+  --overpass-url http://localhost:8080/api/interpreter \
+  --valhalla-url http://localhost:8002
 ```
 
-This is especially worthwhile when building routes across state or country boundaries, where the tile set is large. See [twisty overpass start](#twisty-overpass-start) for how to load the required regions.
+This is especially worthwhile when building routes across state or country boundaries, where the tile set is large and repeated routing calls would hit the public APIs. See [twisty overpass start](#twisty-overpass-start) and [twisty valhalla start](#twisty-valhalla-start) for details on region management.
 
 ## twisty overpass
 
@@ -424,6 +431,124 @@ twisty overpass build [--src-dir <dir>]
 ### Docker image
 
 twisty uses the [`wiktorn/overpass-api`](https://github.com/wiktorn/Overpass-API) image. On arm64 hosts (Apple Silicon) the image is built locally from source because no official arm64 image is published. The build is triggered automatically by `start` if needed, or can be triggered manually with `build`.
+
+## twisty valhalla
+
+Manages a local [Valhalla](https://github.com/valhalla/valhalla) routing server running in Docker. Useful for running `twisty route`, `twisty build`, or `twisty random` against a local instance instead of the public API — helpful for repeated sessions, offline use, or areas where the public API is slow.
+
+The local instance is backed by OSM data downloaded from [Geofabrik](https://download.geofabrik.de/) and stored in a local data directory (default: `~/.twisty/valhalla/`). Routing tile data is built from PBF extracts using the official Valhalla Docker image.
+
+### Subcommands
+
+| Subcommand | Description |
+|-----------|-------------|
+| `start` | Download PBF data, build routing tiles, and start the Valhalla container |
+| `stop` | Stop the running container |
+| `status` | Print whether the container is running |
+| `logs` | Stream live logs from the container |
+| `clean` | Stop the container and delete all local data |
+
+### twisty valhalla start
+
+Downloads PBF data for the specified regions, builds Valhalla routing tiles, and starts the container. If multiple regions are specified they are merged into a single PBF using osmium before tile-building (required to avoid corrupted output).
+
+```
+twisty valhalla start --regions <region>[,<region>...] [flags]
+```
+
+#### Required flags
+
+| Flag | Description |
+|------|-------------|
+| `--regions string` | Comma-separated Geofabrik region paths (e.g. `north-america/us/tennessee`) |
+
+#### Optional flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port int` | `8002` | Host port to expose the Valhalla API on |
+| `--data-dir string` | `~/.twisty/valhalla` | Directory for downloaded PBF files and built routing tiles |
+
+Once the container is ready the endpoint is printed:
+
+```
+Valhalla routing server is ready: http://localhost:8002
+```
+
+Pass this URL to `twisty route`, `twisty build`, or `twisty random` via `--valhalla-url`.
+
+#### Example
+
+```bash
+twisty valhalla start \
+  --regions north-america/us/north-carolina,north-america/us/tennessee \
+  --port 8002
+
+# Then find a twisty route using the local instance:
+twisty route \
+  --origin "Asheville, NC" \
+  --dest "Deals Gap, NC" \
+  --twist 0.9 \
+  --valhalla-url http://localhost:8002 \
+  --out gap_run.gpx
+```
+
+#### Region management
+
+Regions are cumulative. If you run `start` again with additional regions, twisty detects the change, downloads any missing PBF files, rebuilds the merged data file, and re-imports tiles. Regions that were already downloaded are reused from the local cache. The region set is stamped to disk before tile-building so that a crash or OOM kill does not cause a full restart from scratch on the next invocation.
+
+### twisty valhalla stop
+
+Stops the running container (data is preserved).
+
+```
+twisty valhalla stop
+```
+
+### twisty valhalla status
+
+Prints whether the Valhalla container is currently running and the endpoint URL.
+
+```
+twisty valhalla status [--port <n>]
+```
+
+#### Optional flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port int` | `8002` | Port the Valhalla server is running on |
+
+### twisty valhalla logs
+
+Streams live logs from the container (equivalent to `docker logs -f`).
+
+```
+twisty valhalla logs [--lines <n>]
+```
+
+#### Optional flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--lines int` | `0` | Number of log lines to show (0 = stream all) |
+
+### twisty valhalla clean
+
+Stops the container and removes the entire data directory, including all downloaded PBF files and built routing tiles.
+
+```
+twisty valhalla clean [--data-dir <dir>]
+```
+
+### Docker images
+
+`twisty valhalla` uses two Docker images:
+
+- [`ghcr.io/valhalla/valhalla:latest`](https://github.com/valhalla/valhalla) — the Valhalla routing engine, used for both tile-building and serving.
+- [`iboates/osmium`](https://hub.docker.com/r/iboates/osmium) — used to merge multiple PBF files before tile-building when more than one region is requested.
+
+Both images are pulled automatically on first use.
 
 ## twisty gpx
 
