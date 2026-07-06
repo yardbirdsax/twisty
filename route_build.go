@@ -558,12 +558,14 @@ function startAddWaypoint() {
   var addRow = document.getElementById('waypoints-add');
   if (addRow.querySelector('.wp-input')) return;
 
+  var handle = document.getElementById('waypoints-add-handle');
   var input = document.createElement('input');
   input.className = 'wp-input';
   input.type = 'text';
   input.placeholder = 'Enter address...';
   input.style.flex = '1';
   addRow.textContent = '';
+  if (handle) addRow.appendChild(handle);
   addRow.appendChild(input);
   input.focus();
 
@@ -573,7 +575,9 @@ function startAddWaypoint() {
       if (!q) return;
       commitAddWaypoint(q, addRow, input);
     } else if (e.key === 'Escape') {
-      addRow.textContent = '+ Add waypoint';
+      addRow.textContent = '';
+      if (handle) addRow.appendChild(handle);
+      addRow.appendChild(document.createTextNode('+ Add waypoint'));
       addRow.onclick = startAddWaypoint;
       showWpError('');
     }
@@ -592,7 +596,10 @@ function commitAddWaypoint(query, addRow, input) {
     .then(function(data) {
       var latlng = L.latLng(data.lat, data.lon);
       labelCache[labelKey([data.lat, data.lon])] = data.display_name;
-      addRow.textContent = '+ Add waypoint';
+      var handle = document.getElementById('waypoints-add-handle');
+      addRow.textContent = '';
+      if (handle) addRow.appendChild(handle);
+      addRow.appendChild(document.createTextNode('+ Add waypoint'));
       addRow.onclick = startAddWaypoint;
       activeSlotIndex = -1;
       addWaypoint(latlng);
