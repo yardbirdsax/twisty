@@ -899,6 +899,8 @@ func TestHandleIndex_rendersWaypointPanel(t *testing.T) {
 		`id="waypoints-count"`,
 		`id="wp-error"`,
 		`+ Add waypoint`,
+		`wp-handle`,
+		`wp-drop-indicator`,
 	}
 	for _, c := range checks {
 		if !strings.Contains(body, c) {

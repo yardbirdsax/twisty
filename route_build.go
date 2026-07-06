@@ -217,6 +217,10 @@ const buildHTML = `<!DOCTYPE html>
   .wp-error { font-size: 10px; color: #dc2626; margin-top: 2px; display: none; }
   @keyframes wp-shake { 0%%,100%%{transform:translateX(0)} 25%%{transform:translateX(-4px)} 75%%{transform:translateX(4px)} }
   .wp-input.shake { animation: wp-shake 0.3s ease; }
+  .wp-handle { color: #9ca3af; cursor: grab; font-size: 13px; flex-shrink: 0; padding: 0 2px; user-select: none; }
+  .wp-handle:active { cursor: grabbing; }
+  .wp-row.dragging { opacity: 0.4; }
+  .wp-drop-indicator { height: 2px; background: #2563eb; margin: 1px 0; border-radius: 1px; }
 
   #export-buttons {
     position: absolute; bottom: 12px; right: 12px; z-index: 1000;
@@ -311,6 +315,7 @@ var labelCache = {};
 var activeSlotIndex = -1;
 var waypointsPanelOpen = false;
 var reverseGeocodeGeneration = 0;
+var dragState = null; // { type: 'reorder'|'insert', fromIndex: number|null }
 
 var CIRCLED_DIGITS = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
 function waypointBadge(i) {
@@ -342,6 +347,69 @@ function toggleWaypointsPanel() {
   }
 }
 
+function initWaypointDnD() {
+  var list = document.getElementById('waypoints-list');
+
+  list.addEventListener('dragstart', function(e) {
+    var row = e.target.closest('.wp-row');
+    if (!row) return;
+    var idx = parseInt(row.dataset.index, 10);
+    dragState = { type: 'reorder', fromIndex: idx };
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+
+  list.addEventListener('dragend', function(e) {
+    var row = e.target.closest('.wp-row');
+    if (row) { row.classList.remove('dragging'); row.draggable = false; }
+    clearDropIndicator(list);
+    dragState = null;
+  });
+
+  list.addEventListener('dragover', function(e) {
+    if (!dragState || dragState.type !== 'reorder') return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    clearDropIndicator(list);
+    var toIndex = getDropIndex(list, e.clientY);
+    var addRow = document.getElementById('waypoints-add');
+    var rows = list.querySelectorAll('.wp-row');
+    var indicator = document.createElement('div');
+    indicator.className = 'wp-drop-indicator';
+    if (toIndex < rows.length) {
+      list.insertBefore(indicator, rows[toIndex]);
+    } else {
+      list.insertBefore(indicator, addRow);
+    }
+  });
+
+  list.addEventListener('drop', function(e) {
+    e.preventDefault();
+    if (!dragState || dragState.type !== 'reorder') return;
+    var fromIndex = dragState.fromIndex;
+    var toIndex = getDropIndex(list, e.clientY);
+    clearDropIndicator(list);
+    dragState = null;
+
+    // Dropping at fromIndex or fromIndex+1 is a no-op (same effective position).
+    if (toIndex === fromIndex || toIndex === fromIndex + 1) return;
+
+    var wp = waypoints.splice(fromIndex, 1)[0];
+    var insertAt = toIndex > fromIndex ? toIndex - 1 : toIndex;
+    waypoints.splice(insertAt, 0, wp);
+
+    legPolylines.forEach(function(p) { map.removeLayer(p); });
+    legPolylines = [];
+    legs = [];
+    refreshMarkers();
+    renderWaypointList();
+    rerouteAll();
+    saveState();
+  });
+}
+
+initWaypointDnD();
+
 function renderWaypointList() {
   document.getElementById('waypoints-count').textContent = waypoints.length;
   var list = document.getElementById('waypoints-list');
@@ -357,6 +425,15 @@ function renderWaypointList() {
     var row = document.createElement('div');
     row.className = 'wp-row' + (i === activeSlotIndex ? ' active-slot' : '');
     row.dataset.index = i;
+
+    var handle = document.createElement('span');
+    handle.className = 'wp-handle';
+    handle.textContent = '⠿';
+    handle.title = 'Drag to reorder';
+    (function(idx) {
+      handle.addEventListener('mousedown', function() { row.draggable = true; });
+      handle.addEventListener('mouseup', function() { row.draggable = false; });
+    })(i);
 
     var badge = document.createElement('span');
     badge.className = 'wp-badge';
@@ -376,10 +453,25 @@ function renderWaypointList() {
       startEditWaypoint(row, i, labelEl);
     };
 
+    row.appendChild(handle);
     row.appendChild(badge);
     row.appendChild(labelEl);
     list.insertBefore(row, addRow);
   });
+}
+
+function getDropIndex(list, clientY) {
+  var rows = list.querySelectorAll('.wp-row');
+  for (var i = 0; i < rows.length; i++) {
+    var rect = rows[i].getBoundingClientRect();
+    if (clientY < rect.top + rect.height / 2) return i;
+  }
+  return rows.length;
+}
+
+function clearDropIndicator(list) {
+  var existing = list.querySelector('.wp-drop-indicator');
+  if (existing) existing.parentNode.removeChild(existing);
 }
 
 function setActiveSlot(i) {
