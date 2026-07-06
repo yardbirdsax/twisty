@@ -361,6 +361,7 @@ function initWaypointDnD() {
     });
     addHandle.addEventListener('mouseup', function() {
       addRow.draggable = false;
+      dragState = null;
     });
   }
 
@@ -379,8 +380,7 @@ function initWaypointDnD() {
     var addRow = document.getElementById('waypoints-add');
     if (addRow) addRow.draggable = false;
     clearDropIndicator(list);
-    // If insert drag ended without a drop (e.g., dropped outside), clear state.
-    if (dragState && dragState.type === 'insert') { dragState = null; }
+    dragState = null;
   });
 
   list.addEventListener('dragover', function(e) {
