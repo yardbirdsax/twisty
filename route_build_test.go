@@ -1036,6 +1036,26 @@ func TestHandleRefreshViewport_methodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestHandleIndex_addRowHasDragHandle(t *testing.T) {
+	bs := &buildServer{}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/", nil)
+	bs.handleIndex(w, r)
+	body := w.Body.String()
+
+	// The add row must contain a wp-handle span so it can be dragged to set insert position.
+	// Find the waypoints-add div and check it contains the handle markup.
+	addIdx := strings.Index(body, `id="waypoints-add"`)
+	if addIdx < 0 {
+		t.Fatal("waypoints-add element not found in HTML")
+	}
+	// The handle is rendered as a child span inside #waypoints-add.
+	// We check the static HTML has the handle span inline (not JS-rendered).
+	if !strings.Contains(body[addIdx:addIdx+200], `wp-handle`) {
+		t.Errorf("expected waypoints-add to contain a wp-handle span in static HTML")
+	}
+}
+
 func TestHandleIndex_debugButtonAbsentByDefault(t *testing.T) {
 	srv := &buildServer{
 		center:   geocode.Result{Lat: 38.4, Lon: -79.4},

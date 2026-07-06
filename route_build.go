@@ -276,7 +276,7 @@ const buildHTML = `<!DOCTYPE html>
       <span class="toggle" id="waypoints-toggle">▶</span>
     </div>
     <div id="waypoints-list">
-      <div id="waypoints-add" onclick="startAddWaypoint()">+ Add waypoint</div>
+      <div id="waypoints-add" onclick="startAddWaypoint()"><span class="wp-handle" id="waypoints-add-handle" title="Drag to insert at position">⠿</span>+ Add waypoint</div>
     </div>
     <div class="wp-error" id="wp-error"></div>
   </div>
@@ -350,6 +350,20 @@ function toggleWaypointsPanel() {
 function initWaypointDnD() {
   var list = document.getElementById('waypoints-list');
 
+  // Wire add-row handle so dragging it sets insert mode.
+  var addHandle = document.getElementById('waypoints-add-handle');
+  if (addHandle) {
+    var addRow = document.getElementById('waypoints-add');
+    addHandle.addEventListener('mousedown', function(e) {
+      e.stopPropagation();
+      addRow.draggable = true;
+      dragState = { type: 'insert', fromIndex: null };
+    });
+    addHandle.addEventListener('mouseup', function() {
+      addRow.draggable = false;
+    });
+  }
+
   list.addEventListener('dragstart', function(e) {
     var row = e.target.closest('.wp-row');
     if (!row) return;
@@ -362,12 +376,15 @@ function initWaypointDnD() {
   list.addEventListener('dragend', function(e) {
     var row = e.target.closest('.wp-row');
     if (row) { row.classList.remove('dragging'); row.draggable = false; }
+    var addRow = document.getElementById('waypoints-add');
+    if (addRow) addRow.draggable = false;
     clearDropIndicator(list);
-    dragState = null;
+    // If insert drag ended without a drop (e.g., dropped outside), clear state.
+    if (dragState && dragState.type === 'insert') { dragState = null; }
   });
 
   list.addEventListener('dragover', function(e) {
-    if (!dragState || dragState.type !== 'reorder') return;
+    if (!dragState) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     clearDropIndicator(list);
@@ -385,26 +402,31 @@ function initWaypointDnD() {
 
   list.addEventListener('drop', function(e) {
     e.preventDefault();
-    if (!dragState || dragState.type !== 'reorder') return;
+    if (!dragState) return;
+    var type = dragState.type;
     var fromIndex = dragState.fromIndex;
     var toIndex = getDropIndex(list, e.clientY);
     clearDropIndicator(list);
     dragState = null;
 
-    // Dropping at fromIndex or fromIndex+1 is a no-op (same effective position).
-    if (toIndex === fromIndex || toIndex === fromIndex + 1) return;
+    var addRow = document.getElementById('waypoints-add');
+    if (addRow) addRow.draggable = false;
 
-    var wp = waypoints.splice(fromIndex, 1)[0];
-    var insertAt = toIndex > fromIndex ? toIndex - 1 : toIndex;
-    waypoints.splice(insertAt, 0, wp);
-
-    legPolylines.forEach(function(p) { map.removeLayer(p); });
-    legPolylines = [];
-    legs = [];
-    refreshMarkers();
-    renderWaypointList();
-    rerouteAll();
-    saveState();
+    if (type === 'reorder') {
+      if (toIndex === fromIndex || toIndex === fromIndex + 1) return;
+      var wp = waypoints.splice(fromIndex, 1)[0];
+      var insertAt = toIndex > fromIndex ? toIndex - 1 : toIndex;
+      waypoints.splice(insertAt, 0, wp);
+      legPolylines.forEach(function(p) { map.removeLayer(p); });
+      legPolylines = [];
+      legs = [];
+      refreshMarkers();
+      renderWaypointList();
+      rerouteAll();
+      saveState();
+    } else if (type === 'insert') {
+      startInsertWaypoint(toIndex);
+    }
   });
 }
 
@@ -574,6 +596,71 @@ function commitAddWaypoint(query, addRow, input) {
       addRow.onclick = startAddWaypoint;
       activeSlotIndex = -1;
       addWaypoint(latlng);
+    })
+    .catch(function(err) {
+      input.disabled = false;
+      input.classList.add('shake');
+      setTimeout(function() { input.classList.remove('shake'); }, 300);
+      input.focus();
+      showWpError(err.message || 'Address not found');
+    });
+}
+
+function startInsertWaypoint(insertIndex) {
+  var list = document.getElementById('waypoints-list');
+  var rows = list.querySelectorAll('.wp-row');
+  var addRow = document.getElementById('waypoints-add');
+
+  var placeholderRow = document.createElement('div');
+  placeholderRow.className = 'wp-row';
+
+  var input = document.createElement('input');
+  input.className = 'wp-input';
+  input.type = 'text';
+  input.placeholder = 'Enter address...';
+  input.style.flex = '1';
+  placeholderRow.appendChild(input);
+
+  if (insertIndex < rows.length) {
+    list.insertBefore(placeholderRow, rows[insertIndex]);
+  } else {
+    list.insertBefore(placeholderRow, addRow);
+  }
+  input.focus();
+
+  input.onkeydown = function(e) {
+    if (e.key === 'Enter') {
+      var q = input.value.trim();
+      if (!q) return;
+      commitInsertWaypoint(insertIndex, q, placeholderRow, input);
+    } else if (e.key === 'Escape') {
+      list.removeChild(placeholderRow);
+      showWpError('');
+    }
+  };
+}
+
+function commitInsertWaypoint(insertIndex, query, placeholderRow, input) {
+  input.disabled = true;
+  showWpError('');
+  fetch('/api/geocode?q=' + encodeURIComponent(query))
+    .then(function(r) {
+      if (r.status === 404) throw new Error('Address not found');
+      if (!r.ok) throw new Error('Geocoding error');
+      return r.json();
+    })
+    .then(function(data) {
+      var list = document.getElementById('waypoints-list');
+      list.removeChild(placeholderRow);
+      waypoints.splice(insertIndex, 0, [data.lat, data.lon]);
+      labelCache[labelKey([data.lat, data.lon])] = data.display_name;
+      legPolylines.forEach(function(p) { map.removeLayer(p); });
+      legPolylines = [];
+      legs = [];
+      refreshMarkers();
+      renderWaypointList();
+      rerouteAll();
+      saveState();
     })
     .catch(function(err) {
       input.disabled = false;
