@@ -221,6 +221,8 @@ const buildHTML = `<!DOCTYPE html>
   .wp-handle:active { cursor: grabbing; }
   .wp-row.dragging { opacity: 0.4; }
   .wp-drop-indicator { height: 2px; background: #2563eb; margin: 1px 0; border-radius: 1px; }
+  .wp-delete { color: #9ca3af; font-size: 11px; flex-shrink: 0; cursor: pointer; padding: 0 2px; }
+  .wp-delete:hover { color: #dc2626; }
 
   #export-buttons {
     position: absolute; bottom: 12px; right: 12px; z-index: 1000;
@@ -475,11 +477,41 @@ function renderWaypointList() {
       startEditWaypoint(row, i, labelEl);
     };
 
+    var deleteBtn = document.createElement('span');
+    deleteBtn.className = 'wp-delete';
+    deleteBtn.textContent = '×';
+    deleteBtn.title = 'Remove waypoint';
+    (function(idx) {
+      deleteBtn.onclick = function(e) {
+        e.stopPropagation();
+        removeWaypoint(idx);
+      };
+    })(i);
+
     row.appendChild(handle);
     row.appendChild(badge);
     row.appendChild(labelEl);
+    row.appendChild(deleteBtn);
     list.insertBefore(row, addRow);
   });
+}
+
+function removeWaypoint(i) {
+  waypoints.splice(i, 1);
+  activeSlotIndex = -1;
+  legPolylines.forEach(function(p) { map.removeLayer(p); });
+  legPolylines = [];
+  legs = [];
+  refreshMarkers();
+  renderWaypointList();
+  if (waypoints.length === 0) {
+    localStorage.removeItem('twisty-build-state');
+    updateStats();
+    requestScore();
+  } else {
+    rerouteAll();
+    saveState();
+  }
 }
 
 function getDropIndex(list, clientY) {
