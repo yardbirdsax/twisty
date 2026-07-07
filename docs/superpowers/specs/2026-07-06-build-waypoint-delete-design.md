@@ -36,7 +36,7 @@ Clicking `×` on row `i` calls `removeWaypoint(i)`:
 
 - **Delete only waypoint:** leaves an empty route; export buttons gray out, score shows `—`.
 - **Delete first or last waypoint:** `rerouteAll()` re-routes the remaining pairs correctly — no special case needed.
-- **Active slot:** `removeWaypoint` resets `activeSlotIndex` to `-1`. This prevents a subsequent map click from replacing the wrong waypoint when the previously active slot no longer refers to the same position after the splice.
+- **Active slot:** The active slot is a waypoint the user has selected via its badge; the next map click replaces it rather than appending. `removeWaypoint` always resets `activeSlotIndex` to `-1`, covering two problematic cases: (a) the deleted waypoint was the active one — its slot no longer exists; (b) a waypoint before the active one was deleted — the splice shifts all subsequent indices down by one, so the active index would now point at the wrong waypoint.
 
 ### Consistency with existing patterns
 
