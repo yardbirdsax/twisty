@@ -26,7 +26,7 @@ The button is appended to the row in `renderWaypointList()` after the label elem
 
 Clicking `×` on row `i` calls `removeWaypoint(i)`:
 
-1. Splice waypoint `i` out of `waypoints`.
+1. Splice waypoint `i` out of `waypoints`. Reset `activeSlotIndex` to `-1`.
 2. Remove all leg polylines from the map and clear `legPolylines` and `legs`.
 3. Call `refreshMarkers()` and `renderWaypointList()`.
 4. If no waypoints remain: call `updateStats()` and `requestScore()` and remove the localStorage entry.
@@ -36,7 +36,7 @@ Clicking `×` on row `i` calls `removeWaypoint(i)`:
 
 - **Delete only waypoint:** leaves an empty route; export buttons gray out, score shows `—`.
 - **Delete first or last waypoint:** `rerouteAll()` re-routes the remaining pairs correctly — no special case needed.
-- **`activeSlotIndex` pointing at or beyond the deleted index:** `renderWaypointList()` redraws from scratch and `rerouteAll()` does not use `activeSlotIndex`, so no stale state can accumulate.
+- **Active slot:** `removeWaypoint` resets `activeSlotIndex` to `-1`. This prevents a subsequent map click from replacing the wrong waypoint when the previously active slot no longer refers to the same position after the splice.
 
 ### Consistency with existing patterns
 
