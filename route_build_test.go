@@ -369,6 +369,65 @@ func TestHandleSegments_emptyCache(t *testing.T) {
 	}
 }
 
+func TestHandleSegments_reportsPendingTilesWhenCacheEmpty(t *testing.T) {
+	srv := &buildServer{
+		cacheDir:    t.TempDir(),
+		tileSize:    0.1,
+		overpassURL: "http://127.0.0.1:1", // unreachable — fetch will fail silently
+		tileReady:   make(chan quality.Tile, 64),
+		broker:      newSSEBroker(),
+	}
+	go srv.broker.run()
+	req := httptest.NewRequest("GET", "/api/segments?bbox=-76,40,-75,41", nil)
+	w := httptest.NewRecorder()
+	srv.handleSegments(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Type         string `json:"type"`
+		PendingTiles int    `json:"pending_tiles"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.PendingTiles == 0 {
+		t.Fatal("expected pending_tiles>0 when cache is empty and tiles need fetching")
+	}
+}
+
+func TestHandleSegments_reportsFailedTiles(t *testing.T) {
+	srv := &buildServer{
+		cacheDir:    t.TempDir(),
+		tileSize:    0.1,
+		overpassURL: "http://127.0.0.1:1",
+		tileReady:   make(chan quality.Tile, 64),
+		broker:      newSSEBroker(),
+	}
+	go srv.broker.run()
+
+	tile := quality.Tile{South: 40.0, West: -75.8, North: 40.1, East: -75.7}
+	srv.failedTiles.Store(tile, struct{}{})
+
+	req := httptest.NewRequest("GET", "/api/segments?bbox=-75.8,39.9,-75.7,40.0", nil)
+	w := httptest.NewRecorder()
+	srv.handleSegments(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		FailedTiles int `json:"failed_tiles"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.FailedTiles == 0 {
+		t.Fatal("expected failed_tiles>0 when a tile is pre-marked failed")
+	}
+}
+
 func TestHandleRoadSegments_emptyCache(t *testing.T) {
 	srv := &buildServer{
 		cacheDir:    t.TempDir(),

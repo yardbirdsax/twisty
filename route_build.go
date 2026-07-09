@@ -917,12 +917,19 @@ function loadVisibleSegments() {
       });
   } else {
     statusManager.set('roads', '⏳ Loading roads...', false);
-    fetch('/api/tiles?bbox=' + bbox);
     fetch('/api/segments?bbox=' + bbox)
       .then(function(r) { return r.json(); })
-      .then(function(fc) {
-        mergeFeatures(fc.features, gen, mode, layer, seen);
-        if (gen === segmentGeneration) { statusManager.clear('roads'); }
+      .then(function(data) {
+        mergeFeatures(data.features, gen, mode, layer, seen);
+        if (gen !== segmentGeneration) return;
+        if (data.pending_tiles > 0) {
+          statusManager.set('roads', '⏳ Loading ' + data.pending_tiles + ' tile' + (data.pending_tiles > 1 ? 's' : '') + '...', false);
+          roadPollTimer = setTimeout(loadVisibleSegments, 2000);
+        } else if (data.failed_tiles > 0) {
+          statusManager.set('roads', '⚠ ' + data.failed_tiles + ' tile(s) failed', false);
+        } else {
+          statusManager.clear('roads');
+        }
       })
       .catch(function() {
         if (gen === segmentGeneration) { statusManager.clear('roads'); }
@@ -2082,6 +2089,13 @@ func (s *buildServer) tilesInBBox(west, south, east, north float64) []quality.Ti
 	return tiles
 }
 
+type segmentsResponse struct {
+	Type         string            `json:"type"`
+	Features     []geoJSONFeature  `json:"features"`
+	PendingTiles int               `json:"pending_tiles"`
+	FailedTiles  int               `json:"failed_tiles"`
+}
+
 func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
 	west, south, east, north, err := parseBBox(r.URL.Query().Get("bbox"))
 	if err != nil {
@@ -2092,9 +2106,11 @@ func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
 	tiles := s.tilesInBBox(west, south, east, north)
 	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
 
+	var missing []quality.Tile
 	var allCollections []quality.RoadCollection
 	for _, t := range tiles {
 		if !cache.Has(t) {
+			missing = append(missing, t)
 			continue
 		}
 		data, err := cache.Read(t)
@@ -2109,10 +2125,27 @@ func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
 		allCollections = append(allCollections, quality.Aggregate(result.ScoredWays)...)
 	}
 
+	if len(missing) > 0 {
+		go s.fetchMissingTiles(missing)
+	}
+
+	var failedCount int
+	for _, t := range tiles {
+		if _, failed := s.failedTiles.Load(t); failed {
+			failedCount++
+		}
+	}
+
 	fc := collectionsToGeoJSON(allCollections)
 	filtered := filterFeaturesByBBox(fc, west, south, east, north)
+	resp := segmentsResponse{
+		Type:         filtered.Type,
+		Features:     filtered.Features,
+		PendingTiles: len(missing),
+		FailedTiles:  failedCount,
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(filtered)
+	json.NewEncoder(w).Encode(resp)
 }
 
 type roadSegmentsResponse struct {
