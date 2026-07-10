@@ -179,7 +179,7 @@ func (s *buildServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if debugMode {
 		debugSnippet = buildHTMLDebugSnippet
 	}
-	html := fmt.Sprintf(buildHTML, debugSnippet, s.center.Lat, s.center.Lon, quality.DefaultMaxCurvaturePerKm, quality.DefaultMaxCurvature, statusManagerJS)
+	html := fmt.Sprintf(buildHTML, quality.DefaultMaxCurvature, debugSnippet, s.center.Lat, s.center.Lon, quality.DefaultMaxCurvaturePerKm, statusManagerJS)
 	w.Write([]byte(html))
 }
 
