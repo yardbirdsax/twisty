@@ -821,6 +821,7 @@ var routingGeneration = 0;
 var OVERLAY_WAYS = 'ways';
 var OVERLAY_ROADS = 'roads';
 var overlayMode = OVERLAY_WAYS;
+var minScoreFilter = 0;
 var roadPollTimer = null;
 
 var MIN_ZOOM = 12;
@@ -833,11 +834,21 @@ var segmentGeneration = 0;
 
 function segmentStyle(feature) {
   if (overlayMode === OVERLAY_ROADS) {
+    var score = feature && feature.properties ? (feature.properties.score || 0) : 0;
+    if (score < minScoreFilter) {
+      return { opacity: 0, weight: 0 };
+    }
     var color = feature && feature.properties ? feature.properties.color : '#475569';
     return { color: color || '#475569', weight: 3, opacity: 0.8 };
   }
   var tier = feature ? feature.properties.tier : 0;
   return { color: TIER_COLORS[Math.max(0, Math.min(tier, 4))], weight: 3, opacity: 0.8 };
+}
+
+function onMinTwistInput(value) {
+  minScoreFilter = parseFloat(value) || 0;
+  document.getElementById('min-twist-label').textContent = Math.round(minScoreFilter);
+  roadLayer.setStyle(segmentStyle);
 }
 
 var roadLayer = L.geoJSON(null, { style: segmentStyle }).addTo(map);
@@ -1010,11 +1021,14 @@ function toggleOverlayMode() {
   overlayMode = overlayMode === OVERLAY_WAYS ? OVERLAY_ROADS : OVERLAY_WAYS;
   var btn = document.getElementById('btn-overlay-toggle');
   btn.textContent = overlayMode === OVERLAY_WAYS ? 'Switch to Road view' : 'Switch to Way view';
+  var slider = document.getElementById('min-twist-slider');
+  slider.disabled = overlayMode === OVERLAY_WAYS;
   // rebuildSegmentLayer increments segmentGeneration, which invalidates all
   // in-flight fetch callbacks and the old SSE handler's captured gen.
   rebuildSegmentLayer();
   if (overlayMode === OVERLAY_ROADS) {
     if (evtSource) { evtSource.close(); evtSource = null; }
+    roadLayer.setStyle(segmentStyle);
   } else {
     connectSSE();
   }
