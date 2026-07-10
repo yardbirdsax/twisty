@@ -8,6 +8,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -43,6 +44,12 @@ type buildParams struct {
 func execBuild(p buildParams) error {
 	if p.address == "" {
 		return fmt.Errorf("--address is required")
+	}
+
+	if p.verbose {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})))
 	}
 
 	center, err := geocode.Resolve(p.address, "Center")
@@ -106,6 +113,7 @@ type buildServer struct {
 	fetchDelay    string
 	nominatimBase string   // override for tests; empty means use production Nominatim
 	failedTiles   sync.Map // key: quality.Tile, value: struct{}
+	inFlight      sync.Map // key: quality.Tile, value: struct{}; prevents duplicate concurrent fetches
 	tileReady     chan quality.Tile
 	broker        *sseBroker
 }
@@ -849,7 +857,10 @@ function rebuildSegmentLayer() {
 // This prevents stale in-flight callbacks from polluting the current layer.
 function mergeFeatures(features, gen, mode, layer, seen) {
   if (!features) return;
-  if (gen !== segmentGeneration) return;
+  if (gen !== segmentGeneration) {
+    console.log('[twisty] mergeFeatures: discarding stale response (gen=' + gen + ' current=' + segmentGeneration + ')');
+    return;
+  }
   features.forEach(function(f) {
     if (!f.geometry || !f.geometry.coordinates || f.geometry.coordinates.length < 1) return;
     // Re-check generation inside the loop: a concurrent rebuild between
@@ -874,7 +885,9 @@ function mergeFeatures(features, gen, mode, layer, seen) {
 }
 
 function loadVisibleSegments() {
+  if (roadPollTimer) { clearTimeout(roadPollTimer); roadPollTimer = null; }
   var zoom = map.getZoom();
+  console.log('[twisty] loadVisibleSegments: zoom=' + zoom + ' gen=' + segmentGeneration);
   var toggleBtn = document.getElementById('btn-overlay-toggle');
   if (zoom < MIN_ZOOM) {
     // Close SSE before rebuilding so pushed data doesn't repopulate the
@@ -901,6 +914,7 @@ function loadVisibleSegments() {
     fetch('/api/road-segments?bbox=' + bbox)
       .then(function(r) { return r.json(); })
       .then(function(data) {
+        console.log('[twisty] road-segments response: gen=' + gen + ' features=' + (data.features ? data.features.length : 0) + ' pending=' + data.pending_tiles + ' failed=' + data.failed_tiles);
         mergeFeatures(data.features, gen, mode, layer, seen);
         if (gen !== segmentGeneration) return;
         if (data.pending_tiles > 0) {
@@ -920,6 +934,7 @@ function loadVisibleSegments() {
     fetch('/api/segments?bbox=' + bbox)
       .then(function(r) { return r.json(); })
       .then(function(data) {
+        console.log('[twisty] segments response: gen=' + gen + ' features=' + (data.features ? data.features.length : 0) + ' pending=' + data.pending_tiles + ' failed=' + data.failed_tiles);
         mergeFeatures(data.features, gen, mode, layer, seen);
         if (gen !== segmentGeneration) return;
         if (data.pending_tiles > 0) {
@@ -973,7 +988,9 @@ function connectSSE() {
   var seen = renderedSegments;
   evtSource.onmessage = function(e) {
     try {
-      mergeFeatures(JSON.parse(e.data).features, gen, mode, layer, seen);
+      var d = JSON.parse(e.data);
+      console.log('[twisty] SSE push: gen=' + gen + ' features=' + (d.features ? d.features.length : 0));
+      mergeFeatures(d.features, gen, mode, layer, seen);
     } catch(err) {}
   };
 }
@@ -1799,6 +1816,25 @@ func (s *buildServer) handleScore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *buildServer) fetchMissingTiles(tiles []quality.Tile) {
+	// Claim tiles that aren't already being fetched by another goroutine.
+	var claimed []quality.Tile
+	for _, t := range tiles {
+		if _, loaded := s.inFlight.LoadOrStore(t, struct{}{}); !loaded {
+			claimed = append(claimed, t)
+			slog.Debug("fetchMissingTiles: goroutine enqueuing tile", "south", t.South, "west", t.West)
+		} else {
+			slog.Debug("fetchMissingTiles: tile already in-flight, skipping", "south", t.South, "west", t.West)
+		}
+	}
+	if len(claimed) == 0 {
+		return
+	}
+	defer func() {
+		for _, t := range claimed {
+			s.inFlight.Delete(t)
+		}
+	}()
+	tiles = claimed
 	var fetchDelay time.Duration
 	if s.fetchDelay != "" {
 		d, err := time.ParseDuration(s.fetchDelay)
@@ -1832,6 +1868,7 @@ func (s *buildServer) fetchMissingTiles(tiles []quality.Tile) {
 			select {
 			case s.tileReady <- t:
 			default:
+				slog.Warn("tileReady channel full, SSE push dropped", "south", t.South, "west", t.West)
 			}
 		}
 	}

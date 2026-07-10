@@ -1040,6 +1040,67 @@ func TestHandleRefreshViewport_clearsCacheAndFailed(t *testing.T) {
 	}
 }
 
+func TestFetchMissingTiles_deduplicatesInFlightTiles(t *testing.T) {
+	// Gate lets us hold the first goroutine inside the Overpass mock so a second
+	// goroutine can race against it with the same tile.
+	firstRequestStarted := make(chan struct{})
+	firstRequestUnblock := make(chan struct{})
+	fetchCount := 0
+
+	overpassSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fetchCount++
+		close(firstRequestStarted)
+		<-firstRequestUnblock
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"elements":[]}`)) //nolint:errcheck
+	}))
+	defer overpassSrv.Close()
+
+	cacheDir := t.TempDir()
+	tile := quality.Tile{South: 40.0, West: -75.8, North: 40.1, East: -75.7}
+
+	srv := &buildServer{
+		overpassURL: overpassSrv.URL,
+		cacheDir:    cacheDir,
+		tileSize:    0.1,
+		fetchDelay:  "1ms",
+		tileReady:   make(chan quality.Tile, 64),
+		broker:      newSSEBroker(),
+	}
+	go srv.broker.run()
+
+	// First goroutine: will block inside the Overpass mock.
+	go srv.fetchMissingTiles([]quality.Tile{tile})
+
+	// Wait until the first goroutine is inside the mock handler, then fire a second.
+	select {
+	case <-firstRequestStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first goroutine never reached the Overpass mock")
+	}
+
+	// Second call with the same tile — should be a no-op due to in-flight tracking.
+	srv.fetchMissingTiles([]quality.Tile{tile})
+
+	// Unblock the first goroutine.
+	close(firstRequestUnblock)
+
+	// Give the first goroutine time to finish.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		cache := &quality.TileCache{Dir: cacheDir, Precision: 3}
+		if cache.Has(tile) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if fetchCount != 1 {
+		t.Errorf("expected exactly 1 Overpass fetch, got %d", fetchCount)
+	}
+}
+
 func TestFetchMissingTiles_clearsFailedOnSuccess(t *testing.T) {
 	// Spin up a mock Overpass server that returns a valid (non-remark) response
 	// for any request. This simulates a tile that previously failed but now succeeds.
