@@ -232,6 +232,11 @@ const buildHTML = `<!DOCTYPE html>
   .wp-delete { color: #9ca3af; font-size: 11px; flex-shrink: 0; cursor: pointer; padding: 0 2px; }
   .wp-delete:hover { color: #dc2626; }
 
+  #min-twist-row { margin-top: 4px; }
+  #min-twist-row label { font-size: 11px; color: #555; display: flex; justify-content: space-between; margin-bottom: 2px; }
+  #min-twist-slider { width: 100%%; cursor: pointer; }
+  #min-twist-slider:disabled { opacity: 0.4; cursor: not-allowed; }
+
   #export-buttons {
     position: absolute; bottom: 12px; right: 12px; z-index: 1000;
     display: flex; gap: 8px;
@@ -269,6 +274,10 @@ const buildHTML = `<!DOCTYPE html>
   <div class="row"><span class="key">Time</span><span class="val" id="time-val">—</span></div>
   <div class="row" style="margin-top:8px;">
     <button id="btn-overlay-toggle" onclick="toggleOverlayMode()" style="width:100%%;background:#374151;color:white;border:none;border-radius:4px;padding:5px 8px;font-size:11px;cursor:pointer;">Switch to Road view</button>
+  </div>
+  <div id="min-twist-row" class="row" style="margin-top:4px;display:block;">
+    <label for="min-twist-slider"><span>Min twist</span><span id="min-twist-label">0</span></label>
+    <input id="min-twist-slider" type="range" min="0" max="8000" step="100" value="0" disabled oninput="onMinTwistInput(this.value)">
   </div>
   <div class="row" style="margin-top:4px;gap:4px;justify-content:flex-start;">
     <button id="btn-save" onclick="saveRoute()" style="flex:1;background:#374151;color:white;border:none;border-radius:4px;padding:5px 8px;font-size:11px;cursor:pointer;">Save</button>
