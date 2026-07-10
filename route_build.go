@@ -179,7 +179,7 @@ func (s *buildServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if debugMode {
 		debugSnippet = buildHTMLDebugSnippet
 	}
-	html := fmt.Sprintf(buildHTML, quality.DefaultMaxCurvature, debugSnippet, s.center.Lat, s.center.Lon, quality.DefaultMaxCurvaturePerKm, statusManagerJS)
+	html := fmt.Sprintf(buildHTML, debugSnippet, s.center.Lat, s.center.Lon, quality.DefaultMaxCurvaturePerKm, statusManagerJS, quality.DefaultMaxCurvature)
 	w.Write([]byte(html))
 }
 
@@ -277,7 +277,7 @@ const buildHTML = `<!DOCTYPE html>
   </div>
   <div id="min-twist-row" class="row" style="margin-top:4px;display:block;">
     <label for="min-twist-slider"><span>Min twist</span><span id="min-twist-label">0</span></label>
-    <input id="min-twist-slider" type="range" min="0" max="%g" step="100" value="0" disabled oninput="onMinTwistInput(this.value)">
+    <input id="min-twist-slider" type="range" min="0" max="100" step="1" value="0" disabled oninput="onMinTwistInput(this.value)">
   </div>
   <div class="row" style="margin-top:4px;gap:4px;justify-content:flex-start;">
     <button id="btn-save" onclick="saveRoute()" style="flex:1;background:#374151;color:white;border:none;border-radius:4px;padding:5px 8px;font-size:11px;cursor:pointer;">Save</button>
@@ -822,6 +822,13 @@ var OVERLAY_WAYS = 'ways';
 var OVERLAY_ROADS = 'roads';
 var overlayMode = OVERLAY_WAYS;
 var minScoreFilter = 0;
+// Logarithmic slider mapping: position 0→score 0, position 80%%→score max/8, position 100%%→score max.
+// SLIDER_B controls the curve shape and was derived from those anchors; SLIDER_A scales to SLIDER_MAX_SCORE.
+// If DefaultMaxCurvature changes, the curve re-anchors automatically. Only SLIDER_B needs revisiting if
+// the 80%%→max/8 anchor point should change.
+var SLIDER_MAX_SCORE = %g;
+var SLIDER_B = 38.2;
+var SLIDER_A = SLIDER_MAX_SCORE / (SLIDER_B - 1);
 var roadPollTimer = null;
 
 var MIN_ZOOM = 12;
@@ -846,7 +853,8 @@ function segmentStyle(feature) {
 }
 
 function onMinTwistInput(value) {
-  minScoreFilter = parseFloat(value) || 0;
+  var p = parseFloat(value) / 100;
+  minScoreFilter = p <= 0 ? 0 : SLIDER_A * (Math.pow(SLIDER_B, p) - 1);
   document.getElementById('min-twist-label').textContent = Math.round(minScoreFilter);
   roadLayer.setStyle(segmentStyle);
 }
