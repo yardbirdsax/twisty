@@ -273,6 +273,9 @@ const buildHTML = `<!DOCTYPE html>
   <div class="row"><span class="key">Distance</span><span class="val" id="dist-val">—</span></div>
   <div class="row"><span class="key">Time</span><span class="val" id="time-val">—</span></div>
   <div class="row" style="margin-top:8px;">
+    <button id="btn-overlay-visibility" onclick="toggleOverlayVisibility()" style="width:100%%;background:#374151;color:white;border:none;border-radius:4px;padding:5px 8px;font-size:11px;cursor:pointer;">Hide overlay</button>
+  </div>
+  <div class="row" style="margin-top:8px;">
     <button id="btn-overlay-toggle" onclick="toggleOverlayMode()" style="width:100%%;background:#374151;color:white;border:none;border-radius:4px;padding:5px 8px;font-size:11px;cursor:pointer;">Switch to Road view</button>
   </div>
   <div id="min-twist-row" class="row" style="margin-top:4px;display:block;">
