@@ -822,6 +822,7 @@ var OVERLAY_WAYS = 'ways';
 var OVERLAY_ROADS = 'roads';
 var overlayMode = OVERLAY_WAYS;
 var minScoreFilter = 0;
+var overlayVisible = true;
 // Logarithmic slider mapping: position 0→score 0, position 80%%→score max/8, position 100%%→score max.
 // SLIDER_B controls the curve shape and was derived from those anchors; SLIDER_A scales to SLIDER_MAX_SCORE.
 // If DefaultMaxCurvature changes, the curve re-anchors automatically. Only SLIDER_B needs revisiting if
@@ -875,7 +876,8 @@ function rebuildSegmentLayer() {
   if (roadPollTimer) { clearTimeout(roadPollTimer); roadPollTimer = null; }
   segmentGeneration++;
   map.removeLayer(roadLayer);
-  roadLayer = L.geoJSON(null, { style: segmentStyle }).addTo(map);
+  roadLayer = L.geoJSON(null, { style: segmentStyle });
+  if (overlayVisible) roadLayer.addTo(map);
   renderedSegments.clear();
   return segmentGeneration;
 }
@@ -1041,6 +1043,19 @@ function toggleOverlayMode() {
     connectSSE();
   }
   loadVisibleSegments();
+}
+
+function toggleOverlayVisibility() {
+  var btn = document.getElementById('btn-overlay-visibility');
+  if (overlayVisible) {
+    map.removeLayer(roadLayer);
+    overlayVisible = false;
+    btn.textContent = 'Show overlay';
+  } else {
+    roadLayer.addTo(map);
+    overlayVisible = true;
+    btn.textContent = 'Hide overlay';
+  }
 }
 
 function restoreState() {
