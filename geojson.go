@@ -87,9 +87,10 @@ func parseBBox(s string) (west, south, east, north float64, err error) {
 }
 
 type geoJSONRoadProps struct {
-	RoadName string  `json:"road_name"`
-	Score    float64 `json:"score"`
-	Color    string  `json:"color"`
+	RoadName    string   `json:"road_name"`
+	Score       float64  `json:"score"`
+	Color       string   `json:"color"`
+	MaxSpeedMPH *float64 `json:"max_speed_mph"`
 }
 
 type geoJSONMultiLineGeometry struct {
@@ -145,6 +146,11 @@ func collectionsToRoadGeoJSON(collections []quality.RoadCollection) geoJSONRoadF
 		}
 		lines := [][][2]float64{pts}
 
+		var maxSpeedMPH *float64
+		if mph, ok := quality.WeightedAverageSpeedMPH(c.WaySpeeds); ok {
+			maxSpeedMPH = &mph
+		}
+
 		fc.Features = append(fc.Features, geoJSONRoadFeature{
 			Type: "Feature",
 			Geometry: geoJSONMultiLineGeometry{
@@ -152,9 +158,10 @@ func collectionsToRoadGeoJSON(collections []quality.RoadCollection) geoJSONRoadF
 				Lines: lines,
 			},
 			Properties: geoJSONRoadProps{
-				RoadName: c.DisplayName(),
-				Score:    c.TotalScore,
-				Color:    color,
+				RoadName:    c.DisplayName(),
+				Score:       c.TotalScore,
+				Color:       color,
+				MaxSpeedMPH: maxSpeedMPH,
 			},
 		})
 	}

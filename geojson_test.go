@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"testing"
 
 	"github.com/yardbirdsax/twisty/geo"
@@ -216,4 +217,59 @@ func TestFilterRoadFeaturesByBBox(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCollectionsToRoadGeoJSON_maxSpeedMPH(t *testing.T) {
+	t.Run("collection with tagged speed emits max_speed_mph", func(t *testing.T) {
+		col := quality.RoadCollection{
+			Name:       "PA 100",
+			TotalScore: 300,
+			WaySpeeds: []quality.WaySpeedInfo{
+				{SpeedMPH: 55, HasSpeed: true, LengthM: 1000},
+				{SpeedMPH: 45, HasSpeed: true, LengthM: 1000},
+			},
+			Segments: []quality.ScoredSegment{
+				{
+					Start: geo.Coord{Lat: 40.1, Lon: -75.1},
+					End:   geo.Coord{Lat: 40.2, Lon: -75.2},
+				},
+			},
+		}
+		fc := collectionsToRoadGeoJSON([]quality.RoadCollection{col})
+		if len(fc.Features) != 1 {
+			t.Fatalf("expected 1 feature, got %d", len(fc.Features))
+		}
+		f := fc.Features[0]
+		if f.Properties.MaxSpeedMPH == nil {
+			t.Fatal("expected max_speed_mph to be non-nil")
+		}
+		// (55*1000 + 45*1000) / 2000 = 50
+		if math.Abs(*f.Properties.MaxSpeedMPH-50.0) > 0.01 {
+			t.Errorf("max_speed_mph = %.4f, want 50.0", *f.Properties.MaxSpeedMPH)
+		}
+	})
+
+	t.Run("collection with no tagged speed emits null max_speed_mph", func(t *testing.T) {
+		col := quality.RoadCollection{
+			Name:       "PA 202",
+			TotalScore: 100,
+			WaySpeeds: []quality.WaySpeedInfo{
+				{SpeedMPH: 0, HasSpeed: false, LengthM: 500},
+			},
+			Segments: []quality.ScoredSegment{
+				{
+					Start: geo.Coord{Lat: 40.1, Lon: -75.1},
+					End:   geo.Coord{Lat: 40.2, Lon: -75.2},
+				},
+			},
+		}
+		fc := collectionsToRoadGeoJSON([]quality.RoadCollection{col})
+		if len(fc.Features) != 1 {
+			t.Fatalf("expected 1 feature, got %d", len(fc.Features))
+		}
+		f := fc.Features[0]
+		if f.Properties.MaxSpeedMPH != nil {
+			t.Errorf("expected max_speed_mph to be nil, got %v", *f.Properties.MaxSpeedMPH)
+		}
+	})
 }
