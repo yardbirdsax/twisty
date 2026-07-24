@@ -60,3 +60,17 @@ func SpeedPassingFraction(speeds []WaySpeedInfo, totalLengthM, minSpeedMPH float
 	}
 	return passingLength / taggedLength
 }
+
+func WeightedAverageSpeedMPH(speeds []WaySpeedInfo) (mph float64, ok bool) {
+	var weightedSum, totalLength float64
+	for _, s := range speeds {
+		if s.HasSpeed {
+			weightedSum += s.SpeedMPH * s.LengthM
+			totalLength += s.LengthM
+		}
+	}
+	if totalLength <= 0 {
+		return 0, false
+	}
+	return weightedSum / totalLength, true
+}
