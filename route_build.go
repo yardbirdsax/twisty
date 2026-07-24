@@ -319,6 +319,8 @@ const buildHTML = `<!DOCTYPE html>
 
 <div id="toast"></div>
 
+<div id="osm-tooltip" style="display:none;position:fixed;z-index:2000;background:rgba(255,255,255,0.95);border-radius:8px;padding:8px 12px;box-shadow:0 2px 8px rgba(0,0,0,0.15);font-size:12px;pointer-events:none;min-width:120px;"></div>
+
 <script>
 var map = L.map('map').setView([%f, %f], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -880,7 +882,22 @@ function onMinSpeedInput(value) {
   roadLayer.setStyle(segmentStyle);
 }
 
+function attachTooltipHandlers(layer) {
+  layer.on('mouseover', function(e) {
+    if (overlayMode !== OVERLAY_WAYS) return;
+    var p = e.layer.feature && e.layer.feature.properties;
+    var hw = (p && p.highway) || '—';
+    var ms = (p && p.maxspeed) || '—';
+    var el = document.getElementById('osm-tooltip');
+    el.innerHTML = '<b>' + hw + '</b><br>Max speed: ' + ms;
+    el.style.display = 'block';
+  });
+  layer.on('mouseout', function() {
+    document.getElementById('osm-tooltip').style.display = 'none';
+  });
+}
 var roadLayer = L.geoJSON(null, { style: segmentStyle }).addTo(map);
+attachTooltipHandlers(roadLayer);
 var renderedSegments = new Set();
 
 function getBboxString() {
@@ -897,6 +914,7 @@ function rebuildSegmentLayer() {
   segmentGeneration++;
   map.removeLayer(roadLayer);
   roadLayer = L.geoJSON(null, { style: segmentStyle });
+  attachTooltipHandlers(roadLayer);
   if (overlayVisible) roadLayer.addTo(map);
   renderedSegments.clear();
   return segmentGeneration;
@@ -1002,6 +1020,14 @@ function loadVisibleSegments() {
   }
 }
 
+map.on('mousemove', function(e) {
+  var el = document.getElementById('osm-tooltip');
+  if (el.style.display === 'none') return;
+  var offset = 14;
+  el.style.left = (e.originalEvent.clientX + offset) + 'px';
+  el.style.top  = (e.originalEvent.clientY + offset) + 'px';
+});
+
 map.on('moveend zoomend', function() {
   if (!applyingRouteState) loadVisibleSegments();
 });
@@ -1048,6 +1074,7 @@ function connectSSE() {
 connectSSE();
 
 function toggleOverlayMode() {
+  document.getElementById('osm-tooltip').style.display = 'none';
   overlayMode = overlayMode === OVERLAY_WAYS ? OVERLAY_ROADS : OVERLAY_WAYS;
   var btn = document.getElementById('btn-overlay-toggle');
   btn.textContent = overlayMode === OVERLAY_WAYS ? 'Switch to Road view' : 'Switch to Way view';
@@ -1072,6 +1099,7 @@ function toggleOverlayVisibility() {
     map.removeLayer(roadLayer);
     overlayVisible = false;
     btn.textContent = 'Show overlay';
+    document.getElementById('osm-tooltip').style.display = 'none';
   } else {
     roadLayer.addTo(map);
     overlayVisible = true;
