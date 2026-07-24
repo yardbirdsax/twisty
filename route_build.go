@@ -282,6 +282,10 @@ const buildHTML = `<!DOCTYPE html>
     <label for="min-twist-slider"><span>Min twist</span><span id="min-twist-label">0</span></label>
     <input id="min-twist-slider" type="range" min="0" max="100" step="1" value="0" disabled oninput="onMinTwistInput(this.value)">
   </div>
+  <div id="min-speed-row" class="row" style="margin-top:4px;display:block;">
+    <label for="min-speed-slider"><span>Min speed</span><span id="min-speed-label">0 mph</span></label>
+    <input id="min-speed-slider" type="range" min="0" max="100" step="1" value="0" disabled oninput="onMinSpeedInput(this.value)">
+  </div>
   <div class="row" style="margin-top:4px;gap:4px;justify-content:flex-start;">
     <button id="btn-save" onclick="saveRoute()" style="flex:1;background:#374151;color:white;border:none;border-radius:4px;padding:5px 8px;font-size:11px;cursor:pointer;">Save</button>
     <button id="btn-load" onclick="loadRoute()" style="flex:1;background:#374151;color:white;border:none;border-radius:4px;padding:5px 8px;font-size:11px;cursor:pointer;">Load</button>
@@ -825,6 +829,7 @@ var OVERLAY_WAYS = 'ways';
 var OVERLAY_ROADS = 'roads';
 var overlayMode = OVERLAY_WAYS;
 var minScoreFilter = 0;
+var minSpeedFilter = 0;
 var overlayVisible = true;
 // Logarithmic slider mapping: position 0→score 0, position 80%%→score max/8, position 100%%→score max.
 // SLIDER_B controls the curve shape and was derived from those anchors; SLIDER_A scales to SLIDER_MAX_SCORE.
@@ -849,6 +854,12 @@ function segmentStyle(feature) {
     if (score < minScoreFilter) {
       return { opacity: 0, weight: 0 };
     }
+    if (minSpeedFilter > 0) {
+      var spd = feature && feature.properties ? feature.properties.max_speed_mph : null;
+      if (spd === null || spd === undefined || spd < minSpeedFilter) {
+        return { opacity: 0, weight: 0 };
+      }
+    }
     var color = feature && feature.properties ? feature.properties.color : '#475569';
     return { color: color || '#475569', weight: 3, opacity: 0.8 };
   }
@@ -860,6 +871,12 @@ function onMinTwistInput(value) {
   var p = parseFloat(value) / 100;
   minScoreFilter = p <= 0 ? 0 : SLIDER_A * (Math.pow(SLIDER_B, p) - 1);
   document.getElementById('min-twist-label').textContent = Math.round(minScoreFilter);
+  roadLayer.setStyle(segmentStyle);
+}
+
+function onMinSpeedInput(value) {
+  minSpeedFilter = parseFloat(value);
+  document.getElementById('min-speed-label').textContent = Math.round(minSpeedFilter) + ' mph';
   roadLayer.setStyle(segmentStyle);
 }
 
@@ -1036,6 +1053,7 @@ function toggleOverlayMode() {
   btn.textContent = overlayMode === OVERLAY_WAYS ? 'Switch to Road view' : 'Switch to Way view';
   var slider = document.getElementById('min-twist-slider');
   slider.disabled = overlayMode === OVERLAY_WAYS;
+  document.getElementById('min-speed-slider').disabled = overlayMode === OVERLAY_WAYS;
   // rebuildSegmentLayer increments segmentGeneration, which invalidates all
   // in-flight fetch callbacks and the old SSE handler's captured gen.
   rebuildSegmentLayer();
