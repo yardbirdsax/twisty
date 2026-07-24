@@ -62,7 +62,16 @@ Added to `<body>` (after `#toast`):
 
 ### JS — tooltip wiring
 
-`roadLayer` is created once on page load. After creation, attach:
+`roadLayer` is recreated each time `rebuildSegmentLayer()` is called (mode toggle, zoom-out clear). The handlers must be attached in a helper function `attachTooltipHandlers(layer)` that is called both on initial creation and inside `rebuildSegmentLayer()` after the new layer is created.
+
+```js
+function attachTooltipHandlers(layer) {
+  layer.on('mouseover', function(e) { ... });
+  layer.on('mouseout', function() { ... });
+}
+```
+
+After creation, attach:
 
 ```js
 roadLayer.on('mouseover', function(e) {
