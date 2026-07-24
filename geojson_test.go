@@ -273,3 +273,75 @@ func TestCollectionsToRoadGeoJSON_maxSpeedMPH(t *testing.T) {
 		}
 	})
 }
+
+func TestCollectionsToGeoJSON_osmTags(t *testing.T) {
+	hw := "secondary"
+	ms := "45 mph"
+	scoredWays := quality.ScoredWays{
+		{
+			WayID: 42,
+			Tags:  map[string]string{"highway": hw, "maxspeed": ms},
+			Segments: []quality.ScoredSegment{
+				{
+					WayID: 42,
+					Start: geo.Coord{Lat: 40.0, Lon: -75.0},
+					End:   geo.Coord{Lat: 40.1, Lon: -75.1},
+				},
+			},
+		},
+	}
+	collections := []quality.RoadCollection{
+		{
+			Name: "Test Road",
+			Segments: []quality.ScoredSegment{
+				{
+					WayID: 42,
+					Start: geo.Coord{Lat: 40.0, Lon: -75.0},
+					End:   geo.Coord{Lat: 40.1, Lon: -75.1},
+				},
+			},
+		},
+	}
+	fc := collectionsToGeoJSON(collections, scoredWays)
+	if len(fc.Features) != 1 {
+		t.Fatalf("expected 1 feature, got %d", len(fc.Features))
+	}
+	p := fc.Features[0].Properties
+	if p.Highway == nil || *p.Highway != hw {
+		t.Errorf("Highway = %v, want %q", p.Highway, hw)
+	}
+	if p.Maxspeed == nil || *p.Maxspeed != ms {
+		t.Errorf("Maxspeed = %v, want %q", p.Maxspeed, ms)
+	}
+}
+
+func TestCollectionsToGeoJSON_missingMaxspeed(t *testing.T) {
+	scoredWays := quality.ScoredWays{
+		{
+			WayID: 7,
+			Tags:  map[string]string{"highway": "residential"},
+			Segments: []quality.ScoredSegment{
+				{WayID: 7, Start: geo.Coord{Lat: 40.0, Lon: -75.0}, End: geo.Coord{Lat: 40.1, Lon: -75.1}},
+			},
+		},
+	}
+	collections := []quality.RoadCollection{
+		{
+			Name: "Side St",
+			Segments: []quality.ScoredSegment{
+				{WayID: 7, Start: geo.Coord{Lat: 40.0, Lon: -75.0}, End: geo.Coord{Lat: 40.1, Lon: -75.1}},
+			},
+		},
+	}
+	fc := collectionsToGeoJSON(collections, scoredWays)
+	if len(fc.Features) != 1 {
+		t.Fatalf("expected 1 feature, got %d", len(fc.Features))
+	}
+	p := fc.Features[0].Properties
+	if p.Highway == nil || *p.Highway != "residential" {
+		t.Errorf("Highway = %v, want \"residential\"", p.Highway)
+	}
+	if p.Maxspeed != nil {
+		t.Errorf("Maxspeed should be nil when tag absent, got %q", *p.Maxspeed)
+	}
+}

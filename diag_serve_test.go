@@ -28,7 +28,7 @@ func TestCollectionsToGeoJSON(t *testing.T) {
 		},
 	}
 
-	fc := collectionsToGeoJSON(collections)
+	fc := collectionsToGeoJSON(collections, quality.ScoredWays{})
 
 	if fc.Type != "FeatureCollection" {
 		t.Fatalf("expected FeatureCollection, got %q", fc.Type)
@@ -149,7 +149,7 @@ func TestDiagServeHandlers(t *testing.T) {
 		},
 	}
 
-	fc := collectionsToGeoJSON(collections)
+	fc := collectionsToGeoJSON(collections, quality.ScoredWays{})
 	fcJSON, err := json.Marshal(fc)
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)

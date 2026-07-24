@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yardbirdsax/twisty/diag"
+	"github.com/yardbirdsax/twisty/quality"
 )
 
 const diagHTML = `<!DOCTYPE html>
@@ -154,9 +155,15 @@ func diagServe(cacheDir string, port int) error {
 	}
 	fmt.Fprintf(os.Stderr, "Pipeline done in %s: %d collections\n", time.Since(t0).Round(time.Millisecond), len(result.Collections))
 
+	// Flatten ScoredWays from Grouped map
+	var allScoredWays quality.ScoredWays
+	for _, ways := range result.Grouped {
+		allScoredWays = append(allScoredWays, ways...)
+	}
+
 	fmt.Fprintf(os.Stderr, "Serializing segments to GeoJSON...\n")
 	t1 := time.Now()
-	fc := collectionsToGeoJSON(result.Collections)
+	fc := collectionsToGeoJSON(result.Collections, allScoredWays)
 	fcJSON, err := json.Marshal(fc)
 	if err != nil {
 		return fmt.Errorf("serializing GeoJSON: %w", err)

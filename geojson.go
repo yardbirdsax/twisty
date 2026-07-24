@@ -11,6 +11,8 @@ type geoJSONSegmentProps struct {
 	Tier     int     `json:"tier"`
 	Score    float64 `json:"score"`
 	WayID    int64   `json:"way_id"`
+	Highway  *string `json:"highway,omitempty"`
+	Maxspeed *string `json:"maxspeed,omitempty"`
 }
 
 type geoJSONGeometry struct {
@@ -29,7 +31,12 @@ type geoJSONFeatureCollection struct {
 	Features []geoJSONFeature `json:"features"`
 }
 
-func collectionsToGeoJSON(collections []quality.RoadCollection) geoJSONFeatureCollection {
+func collectionsToGeoJSON(collections []quality.RoadCollection, scoredWays quality.ScoredWays) geoJSONFeatureCollection {
+	tagsByWayID := make(map[int64]map[string]string, len(scoredWays))
+	for _, sw := range scoredWays {
+		tagsByWayID[sw.WayID] = sw.Tags
+	}
+
 	total := 0
 	for _, c := range collections {
 		total += len(c.Segments)
@@ -40,6 +47,20 @@ func collectionsToGeoJSON(collections []quality.RoadCollection) geoJSONFeatureCo
 	}
 	for _, c := range collections {
 		for _, seg := range c.Segments {
+			props := geoJSONSegmentProps{
+				RoadName: c.DisplayName(),
+				Tier:     seg.Tier,
+				Score:    seg.Score,
+				WayID:    seg.WayID,
+			}
+			if tags, ok := tagsByWayID[seg.WayID]; ok {
+				if hw := tags["highway"]; hw != "" {
+					props.Highway = &hw
+				}
+				if ms := tags["maxspeed"]; ms != "" {
+					props.Maxspeed = &ms
+				}
+			}
 			fc.Features = append(fc.Features, geoJSONFeature{
 				Type: "Feature",
 				Geometry: geoJSONGeometry{
@@ -49,12 +70,7 @@ func collectionsToGeoJSON(collections []quality.RoadCollection) geoJSONFeatureCo
 						{seg.End.Lon, seg.End.Lat},
 					},
 				},
-				Properties: geoJSONSegmentProps{
-					RoadName: c.DisplayName(),
-					Tier:     seg.Tier,
-					Score:    seg.Score,
-					WayID:    seg.WayID,
-				},
+				Properties: props,
 			})
 		}
 	}

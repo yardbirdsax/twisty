@@ -2212,6 +2212,7 @@ func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
 
 	var missing []quality.Tile
 	var allCollections []quality.RoadCollection
+	var allScoredWays quality.ScoredWays
 	for _, t := range tiles {
 		if !cache.Has(t) {
 			missing = append(missing, t)
@@ -2227,6 +2228,7 @@ func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
 		}
 		result := quality.RunScorePipeline(ways)
 		allCollections = append(allCollections, quality.Aggregate(result.ScoredWays)...)
+		allScoredWays = append(allScoredWays, result.ScoredWays...)
 	}
 
 	if len(missing) > 0 {
@@ -2240,7 +2242,7 @@ func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	fc := collectionsToGeoJSON(allCollections)
+	fc := collectionsToGeoJSON(allCollections, allScoredWays)
 	filtered := filterFeaturesByBBox(fc, west, south, east, north)
 	resp := segmentsResponse{
 		Type:         filtered.Type,
@@ -2350,7 +2352,7 @@ func (s *buildServer) runTileSSEBroadcaster() {
 		}
 		result := quality.RunScorePipeline(ways)
 		collections := quality.Aggregate(result.ScoredWays)
-		fc := collectionsToGeoJSON(collections)
+		fc := collectionsToGeoJSON(collections, result.ScoredWays)
 		payload, err := json.Marshal(fc)
 		if err != nil {
 			continue
