@@ -61,6 +61,9 @@ func SpeedPassingFraction(speeds []WaySpeedInfo, totalLengthM, minSpeedMPH float
 	return passingLength / taggedLength
 }
 
+// WeightedAverageSpeedMPH returns the length-weighted average speed (mph) across
+// tagged ways. Uses averaging semantics; the KML/score path uses SpeedPassingFraction
+// (fraction-of-tagged-length) instead — the two filter differently on mixed-speed roads.
 func WeightedAverageSpeedMPH(speeds []WaySpeedInfo) (mph float64, ok bool) {
 	var weightedSum, totalLength float64
 	for _, s := range speeds {
