@@ -5,6 +5,7 @@
 test:
 	go test -short ./...
 	node --test static/statusManager.test.js
+	node --test static/build.test.js
 
 test-integration:
 	go test ./...
