@@ -237,6 +237,11 @@ const buildHTML = `<!DOCTYPE html>
   #min-twist-slider { width: 100%%; cursor: pointer; }
   #min-twist-slider:disabled { opacity: 0.4; cursor: not-allowed; }
 
+  #min-speed-row { margin-top: 4px; }
+  #min-speed-row label { font-size: 11px; color: #555; display: flex; justify-content: space-between; margin-bottom: 2px; }
+  #min-speed-slider { width: 100%%; cursor: pointer; }
+  #min-speed-slider:disabled { opacity: 0.4; cursor: not-allowed; }
+
   #export-buttons {
     position: absolute; bottom: 12px; right: 12px; z-index: 1000;
     display: flex; gap: 8px;
