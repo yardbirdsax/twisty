@@ -1243,3 +1243,27 @@ func TestHandleDebugTiles_returnsGrid(t *testing.T) {
 		}
 	}
 }
+
+func TestLoggingMiddleware(t *testing.T) {
+	// Arrange: create a simple handler that records whether it was called.
+	called := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	wrapped := loggingMiddleware(inner)
+	req := httptest.NewRequest(http.MethodGet, "/some/path", nil)
+	w := httptest.NewRecorder()
+
+	// Act
+	wrapped.ServeHTTP(w, req)
+
+	// Assert
+	if !called {
+		t.Error("expected inner handler to be called")
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}

@@ -41,6 +41,13 @@ type buildParams struct {
 	valhallaURL string // base URL for the Valhalla routing API
 }
 
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		slog.Info("http request", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
+		next.ServeHTTP(w, r)
+	})
+}
+
 func execBuild(p buildParams) error {
 	if p.address == "" {
 		return fmt.Errorf("--address is required")
@@ -101,7 +108,7 @@ func execBuild(p buildParams) error {
 
 	fmt.Fprintf(os.Stderr, "Map centered on %s (%.5f, %.5f)\n", center.DisplayName, center.Lat, center.Lon)
 	fmt.Fprintf(os.Stderr, "Listening on http://127.0.0.1:%d\n", p.port)
-	return http.Serve(ln, mux)
+	return http.Serve(ln, loggingMiddleware(mux))
 }
 
 type buildServer struct {
