@@ -1146,6 +1146,85 @@ func TestFetchMissingTiles_clearsFailedOnSuccess(t *testing.T) {
 	}
 }
 
+func TestFetchMissingTiles_overlapTileContinuesOnStaleCancel(t *testing.T) {
+	// tileA is in both viewport calls; tileB is only in the first.
+	// After the second call (cancelStale=true), tileB's fetch should be cancelled
+	// but tileA's in-flight HTTP request must NOT be cancelled.
+	tileA := quality.Tile{South: 40.0, West: -75.8, North: 40.1, East: -75.7}
+	tileB := quality.Tile{South: 41.0, West: -75.8, North: 41.1, East: -75.7}
+
+	// Channel that unblocks tileA's mock response.
+	unblockA := make(chan struct{})
+
+	overpassSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The fetch uses a POST with form-encoded body containing "data".
+		// Distinguish tileA vs tileB by the south coordinate in the bbox.
+		if err := r.ParseForm(); err == nil {
+			if strings.Contains(r.FormValue("data"), "40.000000") {
+				// tileA request — block until unblocked.
+				<-unblockA
+			}
+		}
+		// Both tiles return valid empty JSON.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"elements":[]}`)) //nolint:errcheck
+	}))
+	defer overpassSrv.Close()
+
+	cacheDir := t.TempDir()
+	srv := &buildServer{
+		overpassURL: overpassSrv.URL,
+		cacheDir:    cacheDir,
+		tileSize:    0.1,
+		fetchDelay:  "1ms",
+		tileReady:   make(chan quality.Tile, 64),
+		broker:      newSSEBroker(),
+	}
+	go srv.broker.run()
+
+	// First call: claim both tiles (cancelStale=false).
+	go srv.fetchMissingTiles([]quality.Tile{tileA, tileB}, false)
+
+	// Wait until both tiles appear in inFlight.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("timeout waiting for both tiles to appear in inFlight")
+		}
+		_, aOk := srv.inFlight.Load(tileA)
+		_, bOk := srv.inFlight.Load(tileB)
+		if aOk && bOk {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Second call: only tileA in viewport, cancelStale=true — should cancel tileB.
+	srv.fetchMissingTiles([]quality.Tile{tileA}, true)
+
+	// Unblock tileA's mock response so it can complete.
+	close(unblockA)
+
+	// Assert tileA lands in cache within 5 seconds.
+	cache := &quality.TileCache{Dir: cacheDir, Precision: 3}
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("tileA did not land in cache — its context was likely cancelled")
+		}
+		if cache.Has(tileA) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// tileB should NOT be in cache (was cancelled or never completed).
+	if cache.Has(tileB) {
+		t.Error("tileB should not be in cache — it was supposed to be cancelled")
+	}
+}
+
 func TestHandleRefreshViewport_methodNotAllowed(t *testing.T) {
 	srv := &buildServer{cacheDir: t.TempDir(), tileSize: 0.1}
 	req := httptest.NewRequest("GET", "/api/refresh-viewport", nil)
