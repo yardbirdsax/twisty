@@ -200,8 +200,8 @@ func (s *buildServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(html))
 }
 
-// buildHTMLDebugSnippet is injected verbatim into buildHTML via fmt.Sprintf.
-// Any literal '%' in this string MUST be written as '%%'.
+// buildHTMLDebugSnippet is passed as an argument to fmt.Sprintf, not as a
+// format string, so literal '%' must NOT be doubled (write '%', not '%%').
 const buildHTMLDebugSnippet = `
 <div class="row" style="margin-top:4px;">
   <button id="btn-debug-tiles" onclick="toggleDebugTiles()" style="width:100%;background:#374151;color:white;border:none;border-radius:4px;padding:5px 8px;font-size:11px;cursor:pointer;">Show tile grid</button>
