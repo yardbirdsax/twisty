@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -1270,8 +1269,6 @@ func TestLoggingMiddleware(t *testing.T) {
 }
 
 func TestFetchMissingTiles_cancelStale(t *testing.T) {
-	// Mock Overpass server: blocks until released, so tiles stay in-flight long enough
-	// for us to fire the second fetchMissingTiles call.
 	release := make(chan struct{})
 	overpassSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-release
@@ -1280,11 +1277,12 @@ func TestFetchMissingTiles_cancelStale(t *testing.T) {
 		w.Write([]byte(`{"elements":[]}`)) //nolint:errcheck
 	}))
 	defer overpassSrv.Close()
+	defer close(release)
 
 	cacheDir := t.TempDir()
 	tileA := quality.Tile{South: 40.0, West: -75.0, North: 40.1, East: -74.9}
-	tileB := quality.Tile{South: 40.1, West: -75.0, North: 40.2, East: -74.9} // not in second call
-	tileC := quality.Tile{South: 40.2, West: -75.0, North: 40.3, East: -74.9} // only in second call
+	tileB := quality.Tile{South: 40.1, West: -75.0, North: 40.2, East: -74.9}
+	tileC := quality.Tile{South: 40.2, West: -75.0, North: 40.3, East: -74.9}
 
 	srv := &buildServer{
 		overpassURL: overpassSrv.URL,
@@ -1296,50 +1294,48 @@ func TestFetchMissingTiles_cancelStale(t *testing.T) {
 	}
 	go srv.broker.run()
 
-	var wg sync.WaitGroup
+	// First call: claim tileA and tileB; both will block at the Overpass server.
+	go srv.fetchMissingTiles([]quality.Tile{tileA, tileB}, true)
 
-	// First call: claim tileA and tileB with cancelStale=true.
-	wg.Add(1)
+	// Wait until both tiles are claimed by the first goroutine.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_, aOk := srv.inFlight.Load(tileA)
+		_, bOk := srv.inFlight.Load(tileB)
+		if aOk && bOk {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Second call: tileA and tileC. tileB is stale — the stale sweep must cancel
+	// and remove it. Run in a goroutine because tileC will block at the server.
+	// The stale-sweep portion runs synchronously before the goroutine can proceed,
+	// so we use a channel to signal when the sweep is done.
+	secondCallStarted := make(chan struct{})
 	go func() {
-		defer wg.Done()
-		srv.fetchMissingTiles([]quality.Tile{tileA, tileB}, true)
-	}()
-
-	// Give the goroutine time to claim the tiles.
-	time.Sleep(20 * time.Millisecond)
-
-	// Second call: tileA overlaps; tileB is stale; tileC is new.
-	// cancelStale=true should cancel tileB and leave tileA alone.
-	// Run as a goroutine because the Overpass mock blocks until release,
-	// and the second call will claim tileC and block fetching it.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+		close(secondCallStarted)
 		srv.fetchMissingTiles([]quality.Tile{tileA, tileC}, true)
 	}()
+	<-secondCallStarted
 
-	// Give the second goroutine time to complete the stale sweep (cancels tileB)
-	// and claim tileC before we check state.
-	time.Sleep(20 * time.Millisecond)
-
-	// tileB should no longer be in inFlight (it was cancelled and then deleted
-	// by the deferred cleanup when its goroutine exits, or it was cancelled
-	// and deleted during stale sweep). Either way, tileB's cancel should have
-	// been called. We verify this indirectly: tileA must still be in inFlight
-	// (not cancelled), and tileB must not be in inFlight.
-	_, tileAInFlight := srv.inFlight.Load(tileA)
-	_, tileBInFlight := srv.inFlight.Load(tileB)
-
-	// tileA should still be claimed (the first goroutine holds it).
-	if !tileAInFlight {
-		t.Error("expected tileA to remain in-flight (overlap tile)")
+	// Give the second goroutine time to execute the stale sweep and claim tileC.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		_, bOk := srv.inFlight.Load(tileB)
+		_, cOk := srv.inFlight.Load(tileC)
+		if !bOk && cOk {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	// tileB should have been cancelled and removed.
-	if tileBInFlight {
+
+	// tileB must have been cancelled and removed from inFlight.
+	if _, tileBInFlight := srv.inFlight.Load(tileB); tileBInFlight {
 		t.Error("expected tileB to have been cancelled and removed from inFlight")
 	}
-
-	// Unblock goroutines so they can finish before TempDir cleanup.
-	close(release)
-	wg.Wait()
+	// tileC must have been claimed by the second call.
+	if _, tileCInFlight := srv.inFlight.Load(tileC); !tileCInFlight {
+		t.Error("expected tileC to be in-flight after second call")
+	}
 }

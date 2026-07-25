@@ -1943,41 +1943,28 @@ func (s *buildServer) fetchMissingTiles(tiles []quality.Tile, cancelStale bool) 
 		})
 	}
 
-	// Claim tiles that aren't already being fetched by another goroutine.
-	// Each tile gets its own cancel func so that cancelling one stale tile
-	// does not affect other tiles in the same batch.
-	type claimedEntry struct {
-		tile   quality.Tile
-		ctx    context.Context
-		cancel context.CancelFunc
-	}
-	var claimed []claimedEntry
+	batchCtx, batchCancel := context.WithCancel(context.Background())
+
+	var claimed []quality.Tile
 	for _, t := range tiles {
-		tileCtx, cancel := context.WithCancel(context.Background())
-		if _, loaded := s.inFlight.LoadOrStore(t, cancel); loaded {
-			// Already claimed by another goroutine; release the cancel we created.
-			cancel()
+		if _, loaded := s.inFlight.LoadOrStore(t, batchCancel); loaded {
 			slog.Debug("fetchMissingTiles: tile already in-flight, skipping", "south", t.South, "west", t.West)
 		} else {
-			claimed = append(claimed, claimedEntry{tile: t, ctx: tileCtx, cancel: cancel})
+			claimed = append(claimed, t)
 			slog.Debug("fetchMissingTiles: goroutine enqueuing tile", "south", t.South, "west", t.West)
 		}
 	}
 	if len(claimed) == 0 {
+		batchCancel()
 		return
 	}
 	defer func() {
-		for _, e := range claimed {
-			if fn, ok := s.inFlight.LoadAndDelete(e.tile); ok {
+		for _, t := range claimed {
+			if fn, ok := s.inFlight.LoadAndDelete(t); ok {
 				fn.(context.CancelFunc)()
 			}
 		}
 	}()
-
-	claimedTiles := make([]quality.Tile, len(claimed))
-	for i, e := range claimed {
-		claimedTiles[i] = e.tile
-	}
 
 	var fetchDelay time.Duration
 	if s.fetchDelay != "" {
@@ -2000,13 +1987,12 @@ func (s *buildServer) fetchMissingTiles(tiles []quality.Tile, cancelStale bool) 
 		RateLimitDelay: fetchDelay,
 	}
 
-	ctx := context.Background()
-	quality.FetchTiledWaysForTiles(ctx, claimedTiles, cfg)
+	quality.FetchTiledWaysForTiles(batchCtx, claimed, cfg)
 
 	// Notify SSE broker for each tile that landed in cache.
 	// Also clear any prior failure record — a tile that failed once and later
 	// succeeds should no longer appear as failed in the UI.
-	for _, t := range claimedTiles {
+	for _, t := range claimed {
 		if cache.Has(t) {
 			s.failedTiles.Delete(t)
 			select {
@@ -2017,12 +2003,13 @@ func (s *buildServer) fetchMissingTiles(tiles []quality.Tile, cancelStale bool) 
 		}
 	}
 
-	// After fetching, mark any tiles still missing in cache as failed,
-	// but only if they were not cancelled by a stale sweep (cancelled = stale,
-	// not failed; a new fetchMissingTiles call will re-claim them if still needed).
-	for _, e := range claimed {
-		if !cache.Has(e.tile) && e.ctx.Err() == nil {
-			s.failedTiles.Store(e.tile, struct{}{})
+	// After fetching, mark any tiles still missing in cache as failed.
+	// Skip tiles whose batch context was cancelled — those were cancelled by a
+	// stale sweep, not a genuine fetch failure; a new fetchMissingTiles call
+	// will re-claim them if still needed.
+	for _, t := range claimed {
+		if !cache.Has(t) && batchCtx.Err() == nil {
+			s.failedTiles.Store(t, struct{}{})
 		}
 	}
 }
