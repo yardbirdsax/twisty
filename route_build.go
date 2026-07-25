@@ -1944,6 +1944,7 @@ func (s *buildServer) fetchMissingTiles(tiles []quality.Tile, cancelStale bool) 
 	}
 
 	batchCtx, batchCancel := context.WithCancel(context.Background())
+	defer batchCancel()
 
 	var claimed []quality.Tile
 	for _, t := range tiles {
@@ -1955,7 +1956,6 @@ func (s *buildServer) fetchMissingTiles(tiles []quality.Tile, cancelStale bool) 
 		}
 	}
 	if len(claimed) == 0 {
-		batchCancel()
 		return
 	}
 	defer func() {
