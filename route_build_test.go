@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1071,7 +1072,7 @@ func TestFetchMissingTiles_deduplicatesInFlightTiles(t *testing.T) {
 	go srv.broker.run()
 
 	// First goroutine: will block inside the Overpass mock.
-	go srv.fetchMissingTiles([]quality.Tile{tile})
+	go srv.fetchMissingTiles([]quality.Tile{tile}, false)
 
 	// Wait until the first goroutine is inside the mock handler, then fire a second.
 	select {
@@ -1081,7 +1082,7 @@ func TestFetchMissingTiles_deduplicatesInFlightTiles(t *testing.T) {
 	}
 
 	// Second call with the same tile — should be a no-op due to in-flight tracking.
-	srv.fetchMissingTiles([]quality.Tile{tile})
+	srv.fetchMissingTiles([]quality.Tile{tile}, false)
 
 	// Unblock the first goroutine.
 	close(firstRequestUnblock)
@@ -1133,7 +1134,7 @@ func TestFetchMissingTiles_clearsFailedOnSuccess(t *testing.T) {
 	srv.failedTiles.Store(tile, struct{}{})
 
 	// Call fetchMissingTiles synchronously (not as a goroutine).
-	srv.fetchMissingTiles([]quality.Tile{tile})
+	srv.fetchMissingTiles([]quality.Tile{tile}, false)
 
 	// The tile should now be in cache (mock server returned valid data).
 	if !cache.Has(tile) {
@@ -1266,4 +1267,79 @@ func TestLoggingMiddleware(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
+}
+
+func TestFetchMissingTiles_cancelStale(t *testing.T) {
+	// Mock Overpass server: blocks until released, so tiles stay in-flight long enough
+	// for us to fire the second fetchMissingTiles call.
+	release := make(chan struct{})
+	overpassSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"elements":[]}`)) //nolint:errcheck
+	}))
+	defer overpassSrv.Close()
+
+	cacheDir := t.TempDir()
+	tileA := quality.Tile{South: 40.0, West: -75.0, North: 40.1, East: -74.9}
+	tileB := quality.Tile{South: 40.1, West: -75.0, North: 40.2, East: -74.9} // not in second call
+	tileC := quality.Tile{South: 40.2, West: -75.0, North: 40.3, East: -74.9} // only in second call
+
+	srv := &buildServer{
+		overpassURL: overpassSrv.URL,
+		cacheDir:    cacheDir,
+		tileSize:    0.1,
+		fetchDelay:  "1ms",
+		tileReady:   make(chan quality.Tile, 64),
+		broker:      newSSEBroker(),
+	}
+	go srv.broker.run()
+
+	var wg sync.WaitGroup
+
+	// First call: claim tileA and tileB with cancelStale=true.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.fetchMissingTiles([]quality.Tile{tileA, tileB}, true)
+	}()
+
+	// Give the goroutine time to claim the tiles.
+	time.Sleep(20 * time.Millisecond)
+
+	// Second call: tileA overlaps; tileB is stale; tileC is new.
+	// cancelStale=true should cancel tileB and leave tileA alone.
+	// Run as a goroutine because the Overpass mock blocks until release,
+	// and the second call will claim tileC and block fetching it.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		srv.fetchMissingTiles([]quality.Tile{tileA, tileC}, true)
+	}()
+
+	// Give the second goroutine time to complete the stale sweep (cancels tileB)
+	// and claim tileC before we check state.
+	time.Sleep(20 * time.Millisecond)
+
+	// tileB should no longer be in inFlight (it was cancelled and then deleted
+	// by the deferred cleanup when its goroutine exits, or it was cancelled
+	// and deleted during stale sweep). Either way, tileB's cancel should have
+	// been called. We verify this indirectly: tileA must still be in inFlight
+	// (not cancelled), and tileB must not be in inFlight.
+	_, tileAInFlight := srv.inFlight.Load(tileA)
+	_, tileBInFlight := srv.inFlight.Load(tileB)
+
+	// tileA should still be claimed (the first goroutine holds it).
+	if !tileAInFlight {
+		t.Error("expected tileA to remain in-flight (overlap tile)")
+	}
+	// tileB should have been cancelled and removed.
+	if tileBInFlight {
+		t.Error("expected tileB to have been cancelled and removed from inFlight")
+	}
+
+	// Unblock goroutines so they can finish before TempDir cleanup.
+	close(release)
+	wg.Wait()
 }

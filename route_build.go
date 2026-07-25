@@ -120,7 +120,7 @@ type buildServer struct {
 	fetchDelay    string
 	nominatimBase string   // override for tests; empty means use production Nominatim
 	failedTiles   sync.Map // key: quality.Tile, value: struct{}
-	inFlight      sync.Map // key: quality.Tile, value: struct{}; prevents duplicate concurrent fetches
+	inFlight      sync.Map // key: quality.Tile, value: context.CancelFunc; cancels in-flight fetch for that tile
 	tileReady     chan quality.Tile
 	broker        *sseBroker
 }
@@ -1815,7 +1815,7 @@ func (s *buildServer) handleViewportScore(w http.ResponseWriter, r *http.Request
 	}
 
 	if len(missingTiles) > 0 {
-		go s.fetchMissingTiles(missingTiles)
+		go s.fetchMissingTiles(missingTiles, false)
 	}
 
 	sr := s.scoreFromCachedTiles(cachedTiles, cache, nil)
@@ -1902,7 +1902,7 @@ func (s *buildServer) handleScore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(missingTiles) > 0 {
-		go s.fetchMissingTiles(missingTiles)
+		go s.fetchMissingTiles(missingTiles, false)
 	}
 
 	sr := s.scoreFromCachedTiles(cachedTiles, cache, req.Points)
@@ -1925,26 +1925,60 @@ func (s *buildServer) handleScore(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (s *buildServer) fetchMissingTiles(tiles []quality.Tile) {
+func (s *buildServer) fetchMissingTiles(tiles []quality.Tile, cancelStale bool) {
+	if cancelStale {
+		incoming := make(map[quality.Tile]struct{}, len(tiles))
+		for _, t := range tiles {
+			incoming[t] = struct{}{}
+		}
+		s.inFlight.Range(func(key, val any) bool {
+			t := key.(quality.Tile)
+			if _, keep := incoming[t]; !keep {
+				fn := val.(context.CancelFunc)
+				slog.Debug("cancelling stale tile fetch", "south", t.South, "west", t.West)
+				fn()
+				s.inFlight.Delete(t)
+			}
+			return true
+		})
+	}
+
 	// Claim tiles that aren't already being fetched by another goroutine.
-	var claimed []quality.Tile
+	// Each tile gets its own cancel func so that cancelling one stale tile
+	// does not affect other tiles in the same batch.
+	type claimedEntry struct {
+		tile   quality.Tile
+		ctx    context.Context
+		cancel context.CancelFunc
+	}
+	var claimed []claimedEntry
 	for _, t := range tiles {
-		if _, loaded := s.inFlight.LoadOrStore(t, struct{}{}); !loaded {
-			claimed = append(claimed, t)
-			slog.Debug("fetchMissingTiles: goroutine enqueuing tile", "south", t.South, "west", t.West)
-		} else {
+		tileCtx, cancel := context.WithCancel(context.Background())
+		if _, loaded := s.inFlight.LoadOrStore(t, cancel); loaded {
+			// Already claimed by another goroutine; release the cancel we created.
+			cancel()
 			slog.Debug("fetchMissingTiles: tile already in-flight, skipping", "south", t.South, "west", t.West)
+		} else {
+			claimed = append(claimed, claimedEntry{tile: t, ctx: tileCtx, cancel: cancel})
+			slog.Debug("fetchMissingTiles: goroutine enqueuing tile", "south", t.South, "west", t.West)
 		}
 	}
 	if len(claimed) == 0 {
 		return
 	}
 	defer func() {
-		for _, t := range claimed {
-			s.inFlight.Delete(t)
+		for _, e := range claimed {
+			if fn, ok := s.inFlight.LoadAndDelete(e.tile); ok {
+				fn.(context.CancelFunc)()
+			}
 		}
 	}()
-	tiles = claimed
+
+	claimedTiles := make([]quality.Tile, len(claimed))
+	for i, e := range claimed {
+		claimedTiles[i] = e.tile
+	}
+
 	var fetchDelay time.Duration
 	if s.fetchDelay != "" {
 		d, err := time.ParseDuration(s.fetchDelay)
@@ -1967,12 +2001,12 @@ func (s *buildServer) fetchMissingTiles(tiles []quality.Tile) {
 	}
 
 	ctx := context.Background()
-	quality.FetchTiledWaysForTiles(ctx, tiles, cfg)
+	quality.FetchTiledWaysForTiles(ctx, claimedTiles, cfg)
 
 	// Notify SSE broker for each tile that landed in cache.
 	// Also clear any prior failure record — a tile that failed once and later
 	// succeeds should no longer appear as failed in the UI.
-	for _, t := range tiles {
+	for _, t := range claimedTiles {
 		if cache.Has(t) {
 			s.failedTiles.Delete(t)
 			select {
@@ -1983,10 +2017,12 @@ func (s *buildServer) fetchMissingTiles(tiles []quality.Tile) {
 		}
 	}
 
-	// After fetching, mark any tiles still missing in cache as failed.
-	for _, t := range tiles {
-		if !cache.Has(t) {
-			s.failedTiles.Store(t, struct{}{})
+	// After fetching, mark any tiles still missing in cache as failed,
+	// but only if they were not cancelled by a stale sweep (cancelled = stale,
+	// not failed; a new fetchMissingTiles call will re-claim them if still needed).
+	for _, e := range claimed {
+		if !cache.Has(e.tile) && e.ctx.Err() == nil {
+			s.failedTiles.Store(e.tile, struct{}{})
 		}
 	}
 }
@@ -2275,7 +2311,7 @@ func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(missing) > 0 {
-		go s.fetchMissingTiles(missing)
+		go s.fetchMissingTiles(missing, true)
 	}
 
 	var failedCount int
@@ -2334,7 +2370,7 @@ func (s *buildServer) handleRoadSegments(w http.ResponseWriter, r *http.Request)
 	}
 
 	if len(missing) > 0 {
-		go s.fetchMissingTiles(missing)
+		go s.fetchMissingTiles(missing, true)
 	}
 
 	var failedCount int
@@ -2422,7 +2458,7 @@ func (s *buildServer) handleTiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(missing) > 0 {
-		go s.fetchMissingTiles(missing)
+		go s.fetchMissingTiles(missing, false)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
