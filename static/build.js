@@ -411,6 +411,8 @@ function commitInsertWaypoint(insertIndex, query, placeholderRow, input) {
       saveState();
     })
     .catch(function(err) {
+      insertSlotIndex = -1;
+      insertPlaceholderRow = null;
       input.disabled = false;
       input.classList.add('shake');
       setTimeout(function() { input.classList.remove('shake'); }, 300);

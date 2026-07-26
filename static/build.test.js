@@ -688,3 +688,35 @@ test('addWaypoint falls through to append when insertSlotIndex is -1', function(
   assert.equal(ctx.waypoints[1][1], -75.1);
   done();
 });
+
+test('commitInsertWaypoint clears insertSlotIndex on geocode failure', function(t, done) {
+  var placeholderEl = {
+    className: '', style: {},
+    appendChild: function() {},
+    disabled: false,
+    classList: { add: function() {}, remove: function() {} },
+    focus: function() {},
+    value: 'bad address',
+  };
+  var placeholderRow = {
+    removeChild: function() {},
+  };
+  var ctx = makeCtx({
+    fetch: function() {
+      return Promise.resolve({ ok: false, status: 404, json: function() { return Promise.resolve({}); } });
+    }
+  });
+  ctx = loadBuildJS(ctx);
+  ctx.insertSlotIndex = 1;
+  ctx.insertPlaceholderRow = placeholderRow;
+
+  ctx.commitInsertWaypoint(1, 'bad address', placeholderRow, placeholderEl);
+
+  Promise.resolve().then(function() {
+    return Promise.resolve();
+  }).then(function() {
+    assert.equal(ctx.insertSlotIndex, -1, 'insertSlotIndex should be cleared on geocode failure');
+    assert.equal(ctx.insertPlaceholderRow, null, 'insertPlaceholderRow should be cleared on geocode failure');
+    done();
+  });
+});
