@@ -16,6 +16,8 @@ var statusManager = createStatusManager(document.getElementById('fetch-status'))
 
 var labelCache = {};
 var activeSlotIndex = -1;
+var insertSlotIndex = -1;
+var insertPlaceholderRow = null;
 var waypointsPanelOpen = false;
 var reverseGeocodeGeneration = 0;
 var dragState = null; // { type: 'reorder'|'insert', fromIndex: number|null }
@@ -366,6 +368,8 @@ function startInsertWaypoint(insertIndex) {
   } else {
     list.insertBefore(placeholderRow, addRow);
   }
+  insertSlotIndex = insertIndex;
+  insertPlaceholderRow = placeholderRow;
   input.focus();
 
   input.onkeydown = function(e) {
@@ -375,6 +379,8 @@ function startInsertWaypoint(insertIndex) {
       commitInsertWaypoint(insertIndex, q, placeholderRow, input);
     } else if (e.key === 'Escape') {
       list.removeChild(placeholderRow);
+      insertSlotIndex = -1;
+      insertPlaceholderRow = null;
       showWpError('');
     }
   };

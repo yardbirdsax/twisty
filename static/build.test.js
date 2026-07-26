@@ -475,3 +475,108 @@ test('rerouteAll stale generation does not clear status of newer reroute', funct
       done();
     });
 });
+
+// --- insertSlotIndex state ---
+
+test('startInsertWaypoint sets insertSlotIndex to the given index', function() {
+  var list = {
+    querySelectorAll: function(sel) { return sel === '.wp-row' ? [] : []; },
+    insertBefore: function() {},
+    addEventListener: function() {},
+  };
+  var addRow = { id: 'waypoints-add' };
+  var focusedInput = null;
+  var createdEl = {
+    className: '', type: '', placeholder: '', style: {},
+    appendChild: function() {},
+    focus: function() { focusedInput = this; },
+    onkeydown: null,
+  };
+  var ctx = makeCtx();
+  ctx.document.getElementById = function(id) {
+    if (id === 'waypoints-list') return list;
+    if (id === 'waypoints-add') return addRow;
+    return { textContent: '', className: '', style: {}, disabled: false,
+      querySelector: function() { return null; },
+      querySelectorAll: function() { return []; },
+      appendChild: function() {}, insertBefore: function() {}, removeChild: function() {},
+      addEventListener: function() {}, getBoundingClientRect: function() { return { top: 0, height: 20 }; },
+      dataset: {}, classList: { add: function() {}, remove: function() {}, contains: function() { return false; } } };
+  };
+  ctx.document.createElement = function(tag) { return createdEl; };
+  ctx = loadBuildJS(ctx);
+
+  ctx.startInsertWaypoint(2);
+  assert.equal(ctx.insertSlotIndex, 2);
+});
+
+test('startInsertWaypoint sets insertPlaceholderRow to the placeholder element', function() {
+  var list = {
+    querySelectorAll: function(sel) { return []; },
+    insertBefore: function() {},
+    addEventListener: function() {},
+  };
+  var addRow = { id: 'waypoints-add' };
+  var createdEl = {
+    className: '', type: '', placeholder: '', style: {},
+    appendChild: function() {},
+    focus: function() {},
+    onkeydown: null,
+  };
+  var ctx = makeCtx();
+  ctx.document.getElementById = function(id) {
+    if (id === 'waypoints-list') return list;
+    if (id === 'waypoints-add') return addRow;
+    return { textContent: '', className: '', style: {}, disabled: false,
+      querySelector: function() { return null; },
+      querySelectorAll: function() { return []; },
+      appendChild: function() {}, insertBefore: function() {}, removeChild: function() {},
+      addEventListener: function() {}, getBoundingClientRect: function() { return { top: 0, height: 20 }; },
+      dataset: {}, classList: { add: function() {}, remove: function() {}, contains: function() { return false; } } };
+  };
+  ctx.document.createElement = function(tag) { return createdEl; };
+  ctx = loadBuildJS(ctx);
+
+  ctx.startInsertWaypoint(1);
+  assert.ok(ctx.insertPlaceholderRow !== null, 'expected insertPlaceholderRow to be set');
+});
+
+test('Escape in startInsertWaypoint clears insertSlotIndex and insertPlaceholderRow', function() {
+  var removedChild = null;
+  var list = {
+    querySelectorAll: function(sel) { return []; },
+    insertBefore: function() {},
+    removeChild: function(el) { removedChild = el; },
+    addEventListener: function() {},
+  };
+  var addRow = { id: 'waypoints-add' };
+  var capturedKeydown = null;
+  var createdEl = {
+    className: '', type: '', placeholder: '', style: {},
+    appendChild: function() {},
+    focus: function() {},
+    set onkeydown(fn) { capturedKeydown = fn; },
+    get onkeydown() { return capturedKeydown; },
+  };
+  var ctx = makeCtx();
+  ctx.document.getElementById = function(id) {
+    if (id === 'waypoints-list') return list;
+    if (id === 'waypoints-add') return addRow;
+    return { textContent: '', className: '', style: {}, disabled: false,
+      querySelector: function() { return null; },
+      querySelectorAll: function() { return []; },
+      appendChild: function() {}, insertBefore: function() {}, removeChild: function() {},
+      addEventListener: function() {}, getBoundingClientRect: function() { return { top: 0, height: 20 }; },
+      dataset: {}, classList: { add: function() {}, remove: function() {}, contains: function() { return false; } } };
+  };
+  ctx.document.createElement = function(tag) { return createdEl; };
+  ctx = loadBuildJS(ctx);
+
+  ctx.startInsertWaypoint(1);
+  assert.equal(ctx.insertSlotIndex, 1);
+
+  // Simulate Escape keydown
+  capturedKeydown({ key: 'Escape' });
+  assert.equal(ctx.insertSlotIndex, -1);
+  assert.equal(ctx.insertPlaceholderRow, null);
+});
