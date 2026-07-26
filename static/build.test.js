@@ -463,16 +463,15 @@ test('rerouteAll stale generation does not clear status of newer reroute', funct
   // Before first reroute resolves, start a second reroute (increments routingGeneration)
   ctx.rerouteAll();
 
-  // Count clears before resolving
-  var clearsBefore = statusLog.filter(function(e) { return e.op === 'clear' && e.slot === 'routing'; }).length;
-
-  // Resolve the stale (first) fetch
+  // Resolve the stale (first) fetch, then wait 6 plain hops — enough for the stale
+  // callback to have fired (same depth as multi-leg test) — and assert no clear was added.
   resolvers[0]();
-  Promise.resolve().then(function() {
-    return Promise.resolve();
-  }).then(function() {
-    var clearsAfter = statusLog.filter(function(e) { return e.op === 'clear' && e.slot === 'routing'; }).length;
-    assert.equal(clearsAfter, clearsBefore, 'stale callback should not have added a clear');
-    done();
-  });
+  Promise.resolve()
+    .then(function(){}).then(function(){}).then(function(){})
+    .then(function(){}).then(function(){}).then(function(){})
+    .then(function() {
+      var clearsAfter = statusLog.filter(function(e) { return e.op === 'clear' && e.slot === 'routing'; }).length;
+      assert.equal(clearsAfter, 0, 'stale callback should not have added a clear');
+      done();
+    });
 });
