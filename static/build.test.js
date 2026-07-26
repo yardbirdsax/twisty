@@ -431,11 +431,14 @@ test('rerouteAll stale generation does not clear status of newer reroute', funct
   var resolvers = [];
   var ctx = makeCtx({
     fetch: function(url, opts) {
-      return new Promise(function(resolve) {
-        resolvers.push(resolve);
-      }).then(function() {
-        return { ok: true, json: function() { return Promise.resolve({ points: [[40.1, -75.1], [40.2, -75.2]], duration: 60, distance: 1000 }); } };
-      });
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        return new Promise(function(resolve) {
+          resolvers.push(resolve);
+        }).then(function() {
+          return { ok: true, json: function() { return Promise.resolve({ points: [[40.1, -75.1], [40.2, -75.2]], duration: 60, distance: 1000 }); } };
+        });
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
     }
   });
   ctx = loadBuildJS(ctx);
