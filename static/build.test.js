@@ -299,3 +299,34 @@ test('restoreState ignores state with missing waypoints array', function() {
   ctx = loadBuildJS(ctx);
   assert.doesNotThrow(function() { ctx.restoreState(); });
 });
+
+// --- addWaypoint routing progress ---
+
+test('addWaypoint sets routing status to "Routing leg 1 of 1..." when adding second waypoint', function(t, done) {
+  var statusCalls = [];
+  var ctx = makeCtx({
+    fetch: function(url, opts) {
+      return new Promise(function(resolve) {
+        // Resolve after we've captured the status call
+        setTimeout(resolve, 0);
+      }).then(function() {
+        return { ok: true, json: function() { return Promise.resolve({ points: [[40.1, -75.1], [40.2, -75.2]], duration: 60, distance: 1000 }); } };
+      });
+    }
+  });
+  // Intercept statusManager after build.js loads
+  ctx = loadBuildJS(ctx);
+  var origSet = ctx.statusManager.set.bind(ctx.statusManager);
+  ctx.statusManager.set = function(slot, text, done2) {
+    statusCalls.push({ slot: slot, text: text });
+    origSet(slot, text, done2);
+  };
+  // Seed one existing waypoint
+  ctx.waypoints.push([40.0, -75.0]);
+  ctx.addWaypoint({ lat: 40.1, lng: -75.1 });
+  // Check synchronously — the set call happens before the fetch resolves
+  var routingCall = statusCalls.find(function(c) { return c.slot === 'routing'; });
+  assert.ok(routingCall, 'expected a routing status call');
+  assert.equal(routingCall.text, 'Routing leg 1 of 1...');
+  done();
+});

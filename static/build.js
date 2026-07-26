@@ -1050,7 +1050,7 @@ function addWaypoint(latlng) {
 
   if (prev) {
     var gen = ++routingGeneration;
-    statusManager.set('routing', 'Routing...', false);
+    statusManager.set('routing', 'Routing leg 1 of 1...', false);
 
     fetch('/api/route-leg', {
       method: 'POST',
