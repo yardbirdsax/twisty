@@ -1053,6 +1053,7 @@ function addWaypoint(latlng) {
     legs = [];
     refreshMarkers();
     renderWaypointList();
+    reverseGeocodeUnlabeled();
     rerouteAll();
     saveState();
     return;

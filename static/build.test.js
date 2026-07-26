@@ -720,3 +720,37 @@ test('commitInsertWaypoint clears insertSlotIndex on geocode failure', function(
     done();
   });
 });
+
+test('addWaypoint with insertSlotIndex >= 0 calls reverseGeocodeUnlabeled', function(t, done) {
+  var reverseGeocodeCalled = false;
+  var placeholderEl = {
+    parentNode: { removeChild: function() {} },
+  };
+  var ctx = makeCtx({
+    fetch: function(url) {
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        return new Promise(function() {});
+      }
+      if (typeof url === 'string' && url.indexOf('reverse-geocode') !== -1) {
+        reverseGeocodeCalled = true;
+        return new Promise(function() {});
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  });
+  ctx = loadBuildJS(ctx);
+
+  ctx.waypoints.push([40.0, -75.0]);
+  ctx.waypoints.push([40.2, -75.2]);
+  ctx.insertSlotIndex = 1;
+  ctx.insertPlaceholderRow = placeholderEl;
+  // Open the panel so reverseGeocodeUnlabeled actually fires fetches
+  ctx.waypointsPanelOpen = true;
+
+  ctx.addWaypoint({ lat: 40.1, lng: -75.1 });
+
+  Promise.resolve().then(function() {
+    assert.ok(reverseGeocodeCalled, 'expected reverseGeocodeUnlabeled to fire a reverse-geocode fetch');
+    done();
+  });
+});
