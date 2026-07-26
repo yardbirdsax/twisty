@@ -396,6 +396,8 @@ function commitInsertWaypoint(insertIndex, query, placeholderRow, input) {
       return r.json();
     })
     .then(function(data) {
+      insertSlotIndex = -1;
+      insertPlaceholderRow = null;
       var list = document.getElementById('waypoints-list');
       list.removeChild(placeholderRow);
       waypoints.splice(insertIndex, 0, [data.lat, data.lon]);
@@ -1037,6 +1039,23 @@ function showToast(msg) {
 }
 
 function addWaypoint(latlng) {
+  if (insertSlotIndex >= 0) {
+    var idx = insertSlotIndex;
+    var row = insertPlaceholderRow;
+    insertSlotIndex = -1;
+    insertPlaceholderRow = null;
+    if (row && row.parentNode) row.parentNode.removeChild(row);
+    waypoints.splice(idx, 0, [latlng.lat, latlng.lng]);
+    legPolylines.forEach(function(p) { map.removeLayer(p); });
+    legPolylines = [];
+    legs = [];
+    refreshMarkers();
+    renderWaypointList();
+    rerouteAll();
+    saveState();
+    return;
+  }
+
   var prev = waypoints.length > 0 ? waypoints[waypoints.length - 1] : null;
 
   if (activeSlotIndex >= 0 && activeSlotIndex < waypoints.length) {

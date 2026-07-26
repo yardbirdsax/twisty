@@ -580,3 +580,112 @@ test('Escape in startInsertWaypoint clears insertSlotIndex and insertPlaceholder
   assert.equal(ctx.insertSlotIndex, -1);
   assert.equal(ctx.insertPlaceholderRow, null);
 });
+
+// --- addWaypoint insert slot ---
+
+test('addWaypoint with insertSlotIndex >= 0 inserts waypoint at correct index', function(t, done) {
+  var rerouteAllCalled = false;
+  var removedChild = null;
+  var placeholderEl = {
+    parentNode: { removeChild: function(el) { removedChild = el; } },
+  };
+  var ctx = makeCtx({
+    fetch: function(url, opts) {
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        return new Promise(function() {}); // never resolves — we only test the sync path
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  });
+  ctx = loadBuildJS(ctx);
+
+  // Seed two existing waypoints
+  ctx.waypoints.push([40.0, -75.0]);
+  ctx.waypoints.push([40.2, -75.2]);
+  // Simulate insert slot between index 0 and 1
+  ctx.insertSlotIndex = 1;
+  ctx.insertPlaceholderRow = placeholderEl;
+
+  ctx.addWaypoint({ lat: 40.1, lng: -75.1 });
+
+  // Inserted at index 1 between the two existing waypoints
+  assert.equal(ctx.waypoints.length, 3);
+  assert.equal(ctx.waypoints[1][0], 40.1);
+  assert.equal(ctx.waypoints[1][1], -75.1);
+  assert.equal(ctx.waypoints[0][0], 40.0);
+  assert.equal(ctx.waypoints[2][0], 40.2);
+  done();
+});
+
+test('addWaypoint with insertSlotIndex >= 0 clears insertSlotIndex and insertPlaceholderRow', function(t, done) {
+  var placeholderEl = {
+    parentNode: { removeChild: function() {} },
+  };
+  var ctx = makeCtx({
+    fetch: function(url) {
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        return new Promise(function() {});
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  });
+  ctx = loadBuildJS(ctx);
+
+  ctx.waypoints.push([40.0, -75.0]);
+  ctx.waypoints.push([40.2, -75.2]);
+  ctx.insertSlotIndex = 1;
+  ctx.insertPlaceholderRow = placeholderEl;
+
+  ctx.addWaypoint({ lat: 40.1, lng: -75.1 });
+
+  assert.equal(ctx.insertSlotIndex, -1);
+  assert.equal(ctx.insertPlaceholderRow, null);
+  done();
+});
+
+test('addWaypoint with insertSlotIndex >= 0 removes placeholder row from DOM', function(t, done) {
+  var removedEl = null;
+  var placeholderEl = {
+    parentNode: { removeChild: function(el) { removedEl = el; } },
+  };
+  var ctx = makeCtx({
+    fetch: function(url) {
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        return new Promise(function() {});
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  });
+  ctx = loadBuildJS(ctx);
+
+  ctx.waypoints.push([40.0, -75.0]);
+  ctx.waypoints.push([40.2, -75.2]);
+  ctx.insertSlotIndex = 1;
+  ctx.insertPlaceholderRow = placeholderEl;
+
+  ctx.addWaypoint({ lat: 40.1, lng: -75.1 });
+
+  assert.equal(removedEl, placeholderEl);
+  done();
+});
+
+test('addWaypoint falls through to append when insertSlotIndex is -1', function(t, done) {
+  var ctx = makeCtx({
+    fetch: function(url) {
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        return new Promise(function() {});
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  });
+  ctx = loadBuildJS(ctx);
+
+  ctx.waypoints.push([40.0, -75.0]);
+  // insertSlotIndex is -1 by default — normal append
+  ctx.addWaypoint({ lat: 40.1, lng: -75.1 });
+
+  assert.equal(ctx.waypoints.length, 2);
+  assert.equal(ctx.waypoints[1][0], 40.1);
+  assert.equal(ctx.waypoints[1][1], -75.1);
+  done();
+});
