@@ -330,3 +330,139 @@ test('addWaypoint sets routing status to "Routing leg 1 of 1..." when adding sec
   assert.equal(routingCall.text, 'Routing leg 1 of 1...');
   done();
 });
+
+// --- rerouteAll routing progress ---
+
+test('rerouteAll sets status to "Routing leg 1 of 2..." then "Routing leg 2 of 2..." then clears', function(t, done) {
+  var statusLog = [];
+  var fetchCount = 0;
+  var resolvers = [];
+  var ctx = makeCtx({
+    fetch: function(url, opts) {
+      fetchCount++;
+      return new Promise(function(resolve) {
+        resolvers.push(resolve);
+      }).then(function() {
+        return { ok: true, json: function() { return Promise.resolve({ points: [[40.1, -75.1], [40.2, -75.2]], duration: 60, distance: 1000 }); } };
+      });
+    }
+  });
+  ctx = loadBuildJS(ctx);
+  var origSet = ctx.statusManager.set.bind(ctx.statusManager);
+  var origClear = ctx.statusManager.clear.bind(ctx.statusManager);
+  ctx.statusManager.set = function(slot, text, isDone) {
+    statusLog.push({ op: 'set', slot: slot, text: text });
+    origSet(slot, text, isDone);
+  };
+  ctx.statusManager.clear = function(slot) {
+    statusLog.push({ op: 'clear', slot: slot });
+    origClear(slot);
+  };
+
+  ctx.waypoints.push([40.0, -75.0]);
+  ctx.waypoints.push([40.1, -75.1]);
+  ctx.waypoints.push([40.2, -75.2]);
+  ctx.rerouteAll();
+
+  // After rerouteAll(), leg 1 fetch is in-flight; check first status set
+  var leg1Set = statusLog.find(function(e) { return e.op === 'set' && e.slot === 'routing'; });
+  assert.ok(leg1Set, 'expected first routing status set');
+  assert.equal(leg1Set.text, 'Routing leg 1 of 2...');
+
+  // Resolve leg 1 fetch, which triggers routeNext(1)
+  resolvers[0]();
+  Promise.resolve().then(function() {
+    return Promise.resolve();
+  }).then(function() {
+    var leg2Set = statusLog.filter(function(e) { return e.op === 'set' && e.slot === 'routing'; })[1];
+    assert.ok(leg2Set, 'expected second routing status set');
+    assert.equal(leg2Set.text, 'Routing leg 2 of 2...');
+
+    // Resolve leg 2 fetch
+    resolvers[1]();
+    return Promise.resolve().then(function() { return Promise.resolve(); });
+  }).then(function() {
+    var cleared = statusLog.some(function(e) { return e.op === 'clear' && e.slot === 'routing'; });
+    assert.ok(cleared, 'expected routing status to be cleared after last leg');
+    done();
+  });
+});
+
+test('rerouteAll clears routing status on error', function(t, done) {
+  var statusLog = [];
+  var ctx = makeCtx({
+    fetch: function(url, opts) {
+      return Promise.resolve({ ok: false, json: function() { return Promise.resolve({}); } });
+    }
+  });
+  ctx = loadBuildJS(ctx);
+  var origSet = ctx.statusManager.set.bind(ctx.statusManager);
+  var origClear = ctx.statusManager.clear.bind(ctx.statusManager);
+  ctx.statusManager.set = function(slot, text, isDone) {
+    statusLog.push({ op: 'set', slot: slot, text: text });
+    origSet(slot, text, isDone);
+  };
+  ctx.statusManager.clear = function(slot) {
+    statusLog.push({ op: 'clear', slot: slot });
+    origClear(slot);
+  };
+
+  ctx.waypoints.push([40.0, -75.0]);
+  ctx.waypoints.push([40.1, -75.1]);
+  ctx.rerouteAll();
+
+  Promise.resolve().then(function() {
+    return Promise.resolve();
+  }).then(function() {
+    var cleared = statusLog.some(function(e) { return e.op === 'clear' && e.slot === 'routing'; });
+    assert.ok(cleared, 'expected routing status to be cleared on error');
+    done();
+  });
+});
+
+test('rerouteAll stale generation does not clear status of newer reroute', function(t, done) {
+  var resolvers = [];
+  var ctx = makeCtx({
+    fetch: function(url, opts) {
+      return new Promise(function(resolve) {
+        resolvers.push(resolve);
+      }).then(function() {
+        return { ok: true, json: function() { return Promise.resolve({ points: [[40.1, -75.1], [40.2, -75.2]], duration: 60, distance: 1000 }); } };
+      });
+    }
+  });
+  ctx = loadBuildJS(ctx);
+
+  var statusLog = [];
+  var origSet = ctx.statusManager.set.bind(ctx.statusManager);
+  var origClear = ctx.statusManager.clear.bind(ctx.statusManager);
+  ctx.statusManager.set = function(slot, text, isDone) {
+    statusLog.push({ op: 'set', slot: slot, text: text });
+    origSet(slot, text, isDone);
+  };
+  ctx.statusManager.clear = function(slot) {
+    statusLog.push({ op: 'clear', slot: slot });
+    origClear(slot);
+  };
+
+  // First reroute with 1 leg
+  ctx.waypoints.push([40.0, -75.0]);
+  ctx.waypoints.push([40.1, -75.1]);
+  ctx.rerouteAll();
+
+  // Before first reroute resolves, start a second reroute (increments routingGeneration)
+  ctx.rerouteAll();
+
+  // Count clears before resolving
+  var clearsBefore = statusLog.filter(function(e) { return e.op === 'clear' && e.slot === 'routing'; }).length;
+
+  // Resolve the stale (first) fetch
+  resolvers[0]();
+  Promise.resolve().then(function() {
+    return Promise.resolve();
+  }).then(function() {
+    var clearsAfter = statusLog.filter(function(e) { return e.op === 'clear' && e.slot === 'routing'; }).length;
+    assert.equal(clearsAfter, clearsBefore, 'stale callback should not have added a clear');
+    done();
+  });
+});

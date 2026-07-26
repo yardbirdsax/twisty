@@ -450,9 +450,11 @@ function rerouteAll() {
   saveState();
 
   var gen = ++routingGeneration;
+  var total = waypoints.length - 1;
 
   function routeNext(i) {
-    if (i >= waypoints.length - 1) return;
+    if (i >= total) return;
+    statusManager.set('routing', 'Routing leg ' + (i + 1) + ' of ' + total + '...', false);
     var from = waypoints[i];
     var to = waypoints[i + 1];
     fetch('/api/route-leg', {
@@ -473,10 +475,15 @@ function rerouteAll() {
       saveState();
       updateStats();
       requestScore();
-      routeNext(i + 1);
+      if (i + 1 >= total) {
+        statusManager.clear('routing');
+      } else {
+        routeNext(i + 1);
+      }
     })
     .catch(function() {
       if (gen !== routingGeneration) return;
+      statusManager.clear('routing');
       showToast('Could not route leg ' + (i + 1));
     });
   }
