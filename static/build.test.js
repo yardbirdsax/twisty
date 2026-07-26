@@ -584,7 +584,6 @@ test('Escape in startInsertWaypoint clears insertSlotIndex and insertPlaceholder
 // --- addWaypoint insert slot ---
 
 test('addWaypoint with insertSlotIndex >= 0 inserts waypoint at correct index', function(t, done) {
-  var rerouteAllCalled = false;
   var removedChild = null;
   var placeholderEl = {
     parentNode: { removeChild: function(el) { removedChild = el; } },
