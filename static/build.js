@@ -50,6 +50,7 @@ function toggleWaypointsPanel() {
   if (waypointsPanelOpen) {
     reverseGeocodeUnlabeled();
   }
+  savePrefs();
 }
 
 function initWaypointDnD() {
@@ -566,12 +567,14 @@ function onMinTwistInput(value) {
   minScoreFilter = p <= 0 ? 0 : SLIDER_A * (Math.pow(SLIDER_B, p) - 1);
   document.getElementById('min-twist-label').textContent = Math.round(minScoreFilter);
   roadLayer.setStyle(segmentStyle);
+  savePrefs();
 }
 
 function onMinSpeedInput(value) {
   minSpeedFilter = parseFloat(value);
   document.getElementById('min-speed-label').textContent = Math.round(minSpeedFilter) + ' mph';
   roadLayer.setStyle(segmentStyle);
+  savePrefs();
 }
 
 var osmTooltipEl = document.getElementById('osm-tooltip');
@@ -735,7 +738,8 @@ function saveState() {
       zoom: map.getZoom(),
       center: [center.lat, center.lng],
       waypoints: waypoints,
-      legs: legs
+      legs: legs,
+      labelCache: labelCache
     };
     localStorage.setItem('twisty-build-state', JSON.stringify(state));
   } catch(e) {}
@@ -786,6 +790,7 @@ function toggleOverlayMode() {
     connectSSE();
   }
   loadVisibleSegments();
+  savePrefs();
 }
 
 function toggleOverlayVisibility() {
@@ -799,6 +804,69 @@ function toggleOverlayVisibility() {
     roadLayer.addTo(map);
     overlayVisible = true;
     btn.textContent = 'Hide overlay';
+  }
+  savePrefs();
+}
+
+function savePrefs() {
+  try {
+    var prefs = {
+      overlayMode: overlayMode,
+      overlayVisible: overlayVisible,
+      minTwistSlider: parseInt(document.getElementById('min-twist-slider').value, 10),
+      minSpeedSlider: parseInt(document.getElementById('min-speed-slider').value, 10),
+      waypointsPanelOpen: waypointsPanelOpen
+    };
+    localStorage.setItem('twisty-ui-prefs', JSON.stringify(prefs));
+  } catch(e) {}
+}
+
+function loadPrefs() {
+  var raw = localStorage.getItem('twisty-ui-prefs');
+  if (!raw) return;
+  var prefs;
+  try {
+    prefs = JSON.parse(raw);
+  } catch(e) {
+    return;
+  }
+  if (!prefs || typeof prefs !== 'object') return;
+
+  if (prefs.overlayMode === 'roads' || prefs.overlayMode === 'ways') {
+    overlayMode = prefs.overlayMode;
+    var btn = document.getElementById('btn-overlay-toggle');
+    if (btn) btn.textContent = overlayMode === 'ways' ? 'Switch to Road view' : 'Switch to Way view';
+    var twistSlider = document.getElementById('min-twist-slider');
+    var speedSlider = document.getElementById('min-speed-slider');
+    if (twistSlider) twistSlider.disabled = overlayMode === 'ways';
+    if (speedSlider) speedSlider.disabled = overlayMode === 'ways';
+  }
+
+  if (prefs.overlayVisible === false) {
+    map.removeLayer(roadLayer);
+    overlayVisible = false;
+    var visBtn = document.getElementById('btn-overlay-visibility');
+    if (visBtn) visBtn.textContent = 'Show overlay';
+  }
+
+  if (typeof prefs.minTwistSlider === 'number') {
+    var ts = document.getElementById('min-twist-slider');
+    if (ts) ts.value = prefs.minTwistSlider;
+    onMinTwistInput(prefs.minTwistSlider);
+  }
+
+  if (typeof prefs.minSpeedSlider === 'number') {
+    var ss = document.getElementById('min-speed-slider');
+    if (ss) ss.value = prefs.minSpeedSlider;
+    onMinSpeedInput(prefs.minSpeedSlider);
+  }
+
+  if (prefs.waypointsPanelOpen === true) {
+    waypointsPanelOpen = true;
+    var list = document.getElementById('waypoints-list');
+    var toggle = document.getElementById('waypoints-toggle');
+    if (list) list.className = 'open';
+    if (toggle) toggle.textContent = '▼';
   }
 }
 
@@ -836,6 +904,13 @@ var applyingRouteState = false;
 
 function applyRouteState(state) {
   clearRoute();
+  // Restore labelCache after clearRoute() so that renderWaypointList() called
+  // later in this function sees the human-readable labels instead of falling
+  // back to lat/lon coordinates. Must come after clearRoute() (which zeros
+  // labelCache) and before renderWaypointList() (which reads labelCache).
+  if (state.labelCache && typeof state.labelCache === 'object') {
+    labelCache = state.labelCache;
+  }
   waypoints = state.waypoints;
   legs = state.legs;
   applyingRouteState = true;
@@ -858,6 +933,7 @@ function applyRouteState(state) {
   loadVisibleSegments();
 }
 
+loadPrefs();
 restoreState();
 
 function markerColor(index, total) {

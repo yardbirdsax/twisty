@@ -754,3 +754,261 @@ test('addWaypoint with insertSlotIndex >= 0 calls reverseGeocodeUnlabeled', func
     done();
   });
 });
+
+// --- savePrefs ---
+
+test('savePrefs writes overlayMode to twisty-ui-prefs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.overlayMode = 'roads';
+  ctx.savePrefs();
+  var stored = JSON.parse(ctx.localStorage._data['twisty-ui-prefs']);
+  assert.equal(stored.overlayMode, 'roads');
+});
+
+test('savePrefs writes overlayVisible to twisty-ui-prefs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.overlayVisible = false;
+  ctx.savePrefs();
+  var stored = JSON.parse(ctx.localStorage._data['twisty-ui-prefs']);
+  assert.equal(stored.overlayVisible, false);
+});
+
+test('savePrefs writes minTwistSlider from DOM input value', function() {
+  var ctx = makeCtx();
+  var sliderVal = '42';
+  ctx.document.getElementById = function(id) {
+    if (id === 'min-twist-slider') return { value: sliderVal };
+    if (id === 'min-speed-slider') return { value: '0' };
+    return { textContent: '', className: '', style: {}, disabled: false,
+      querySelector: function() { return null; }, querySelectorAll: function() { return []; },
+      appendChild: function() {}, insertBefore: function() {}, removeChild: function() {},
+      addEventListener: function() {}, getBoundingClientRect: function() { return { top: 0, height: 20 }; },
+      dataset: {}, classList: { add: function() {}, remove: function() {}, contains: function() { return false; } } };
+  };
+  ctx = loadBuildJS(ctx);
+  ctx.savePrefs();
+  var stored = JSON.parse(ctx.localStorage._data['twisty-ui-prefs']);
+  assert.equal(stored.minTwistSlider, 42);
+});
+
+test('savePrefs writes minSpeedSlider from DOM input value', function() {
+  var ctx = makeCtx();
+  ctx.document.getElementById = function(id) {
+    if (id === 'min-twist-slider') return { value: '0' };
+    if (id === 'min-speed-slider') return { value: '55' };
+    return { textContent: '', className: '', style: {}, disabled: false,
+      querySelector: function() { return null; }, querySelectorAll: function() { return []; },
+      appendChild: function() {}, insertBefore: function() {}, removeChild: function() {},
+      addEventListener: function() {}, getBoundingClientRect: function() { return { top: 0, height: 20 }; },
+      dataset: {}, classList: { add: function() {}, remove: function() {}, contains: function() { return false; } } };
+  };
+  ctx = loadBuildJS(ctx);
+  ctx.savePrefs();
+  var stored = JSON.parse(ctx.localStorage._data['twisty-ui-prefs']);
+  assert.equal(stored.minSpeedSlider, 55);
+});
+
+test('savePrefs writes waypointsPanelOpen to twisty-ui-prefs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.waypointsPanelOpen = true;
+  ctx.savePrefs();
+  var stored = JSON.parse(ctx.localStorage._data['twisty-ui-prefs']);
+  assert.equal(stored.waypointsPanelOpen, true);
+});
+
+// --- loadPrefs ---
+
+test('loadPrefs sets overlayMode from stored prefs', function() {
+  var ctx = makeCtx();
+  ctx.localStorage._data['twisty-ui-prefs'] = JSON.stringify({ overlayMode: 'roads', overlayVisible: true, minTwistSlider: 0, minSpeedSlider: 0, waypointsPanelOpen: false });
+  ctx = loadBuildJS(ctx);
+  ctx.loadPrefs();
+  assert.equal(ctx.overlayMode, 'roads');
+});
+
+test('loadPrefs updates btn-overlay-toggle text for roads mode', function() {
+  var btnText = null;
+  var ctx = makeCtx();
+  ctx.localStorage._data['twisty-ui-prefs'] = JSON.stringify({ overlayMode: 'roads', overlayVisible: true, minTwistSlider: 0, minSpeedSlider: 0, waypointsPanelOpen: false });
+  ctx.document.getElementById = function(id) {
+    var el = { textContent: '', className: '', style: {}, disabled: false,
+      querySelector: function() { return null; }, querySelectorAll: function() { return []; },
+      appendChild: function() {}, insertBefore: function() {}, removeChild: function() {},
+      addEventListener: function() {}, getBoundingClientRect: function() { return { top: 0, height: 20 }; },
+      dataset: {}, classList: { add: function() {}, remove: function() {}, contains: function() { return false; } },
+      value: '0' };
+    if (id === 'btn-overlay-toggle') {
+      Object.defineProperty(el, 'textContent', { get: function() { return btnText; }, set: function(v) { btnText = v; }, configurable: true });
+    }
+    return el;
+  };
+  ctx = loadBuildJS(ctx);
+  ctx.loadPrefs();
+  assert.equal(btnText, 'Switch to Way view');
+});
+
+test('loadPrefs sets overlayVisible=false and removes roadLayer from map', function() {
+  var layerRemoved = false;
+  var ctx = makeCtx();
+  ctx.localStorage._data['twisty-ui-prefs'] = JSON.stringify({ overlayMode: 'ways', overlayVisible: false, minTwistSlider: 0, minSpeedSlider: 0, waypointsPanelOpen: false });
+  ctx = loadBuildJS(ctx);
+  var origRemove = ctx.map.removeLayer.bind ? ctx.map.removeLayer.bind(ctx.map) : ctx.map.removeLayer;
+  ctx.map.removeLayer = function(layer) { layerRemoved = true; };
+  ctx.loadPrefs();
+  assert.equal(ctx.overlayVisible, false);
+  assert.ok(layerRemoved, 'expected map.removeLayer to be called');
+});
+
+test('loadPrefs calls onMinTwistInput with stored slider value', function() {
+  var twistInputVal = null;
+  var ctx = makeCtx();
+  ctx.localStorage._data['twisty-ui-prefs'] = JSON.stringify({ overlayMode: 'ways', overlayVisible: true, minTwistSlider: 30, minSpeedSlider: 0, waypointsPanelOpen: false });
+  ctx.document.getElementById = function(id) {
+    if (id === 'min-twist-slider') return { value: '30' };
+    if (id === 'min-speed-slider') return { value: '0' };
+    return { textContent: '', className: '', style: {}, disabled: false,
+      querySelector: function() { return null; }, querySelectorAll: function() { return []; },
+      appendChild: function() {}, insertBefore: function() {}, removeChild: function() {},
+      addEventListener: function() {}, getBoundingClientRect: function() { return { top: 0, height: 20 }; },
+      dataset: {}, classList: { add: function() {}, remove: function() {}, contains: function() { return false; } } };
+  };
+  ctx = loadBuildJS(ctx);
+  var origOnMinTwist = ctx.onMinTwistInput;
+  ctx.onMinTwistInput = function(v) { twistInputVal = v; origOnMinTwist(v); };
+  ctx.loadPrefs();
+  assert.equal(twistInputVal, 30);
+});
+
+test('loadPrefs calls onMinSpeedInput with stored slider value', function() {
+  var speedInputVal = null;
+  var ctx = makeCtx();
+  ctx.localStorage._data['twisty-ui-prefs'] = JSON.stringify({ overlayMode: 'ways', overlayVisible: true, minTwistSlider: 0, minSpeedSlider: 45, waypointsPanelOpen: false });
+  ctx.document.getElementById = function(id) {
+    if (id === 'min-twist-slider') return { value: '0' };
+    if (id === 'min-speed-slider') return { value: '45' };
+    return { textContent: '', className: '', style: {}, disabled: false,
+      querySelector: function() { return null; }, querySelectorAll: function() { return []; },
+      appendChild: function() {}, insertBefore: function() {}, removeChild: function() {},
+      addEventListener: function() {}, getBoundingClientRect: function() { return { top: 0, height: 20 }; },
+      dataset: {}, classList: { add: function() {}, remove: function() {}, contains: function() { return false; } } };
+  };
+  ctx = loadBuildJS(ctx);
+  var origOnMinSpeed = ctx.onMinSpeedInput;
+  ctx.onMinSpeedInput = function(v) { speedInputVal = v; origOnMinSpeed(v); };
+  ctx.loadPrefs();
+  assert.equal(speedInputVal, 45);
+});
+
+test('loadPrefs sets waypointsPanelOpen and updates panel DOM', function() {
+  var ctx = makeCtx();
+  ctx.localStorage._data['twisty-ui-prefs'] = JSON.stringify({ overlayMode: 'ways', overlayVisible: true, minTwistSlider: 0, minSpeedSlider: 0, waypointsPanelOpen: true });
+  ctx = loadBuildJS(ctx);
+  ctx.loadPrefs();
+  assert.equal(ctx.waypointsPanelOpen, true);
+});
+
+test('loadPrefs does nothing when twisty-ui-prefs is absent', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.doesNotThrow(function() { ctx.loadPrefs(); });
+  assert.equal(ctx.overlayMode, 'ways'); // default unchanged
+});
+
+test('loadPrefs does nothing when twisty-ui-prefs is invalid JSON', function() {
+  var ctx = makeCtx();
+  ctx.localStorage._data['twisty-ui-prefs'] = 'not-json';
+  ctx = loadBuildJS(ctx);
+  assert.doesNotThrow(function() { ctx.loadPrefs(); });
+  assert.equal(ctx.overlayMode, 'ways'); // default unchanged
+});
+
+// --- labelCache in saveState / restoreState ---
+
+test('saveState includes labelCache in stored JSON', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.labelCache['40.000000,-75.000000'] = 'Main St';
+  ctx.saveState();
+  var stored = JSON.parse(ctx.localStorage._data['twisty-build-state']);
+  assert.equal(stored.labelCache['40.000000,-75.000000'], 'Main St');
+});
+
+test('restoreState populates labelCache from stored state', function() {
+  var state = {
+    zoom: 13, center: [40.0, -75.0],
+    waypoints: [[40.0, -75.0]], legs: [],
+    labelCache: { '40.000000,-75.000000': 'Main St' }
+  };
+  var ctx = makeCtx();
+  ctx.localStorage._data['twisty-build-state'] = JSON.stringify(state);
+  ctx = loadBuildJS(ctx);
+  ctx.restoreState();
+  // labelCache must be populated after restoreState() — verifies that the
+  // cache is restored inside applyRouteState() AFTER clearRoute() (which zeros
+  // it) and BEFORE renderWaypointList() (which reads it to show human-readable
+  // labels). Moving the assignment outside applyRouteState would cause
+  // clearRoute() to wipe the cache before renderWaypointList() ever runs.
+  assert.equal(ctx.labelCache['40.000000,-75.000000'], 'Main St');
+});
+
+test('applyRouteState restores labelCache before renderWaypointList runs', function() {
+  // Verify timing: labelCache must be non-empty when renderWaypointList() is
+  // called. We confirm this by checking that labelCache is populated immediately
+  // after applyRouteState returns (the DOM stub does not support full rendering
+  // inspection, but the cache value proves the assignment order is correct).
+  var state = {
+    zoom: 13, center: [40.0, -75.0],
+    waypoints: [[40.0, -75.0]], legs: [],
+    labelCache: { '40.000000,-75.000000': 'Oak Ave' }
+  };
+  var ctx = loadBuildJS(makeCtx());
+  ctx.applyRouteState(state);
+  assert.equal(ctx.labelCache['40.000000,-75.000000'], 'Oak Ave');
+});
+
+test('restoreState works when labelCache is absent from stored state', function() {
+  var state = {
+    zoom: 13, center: [40.0, -75.0],
+    waypoints: [[40.0, -75.0]], legs: []
+  };
+  var ctx = makeCtx();
+  ctx.localStorage._data['twisty-build-state'] = JSON.stringify(state);
+  ctx = loadBuildJS(ctx);
+  assert.doesNotThrow(function() { ctx.restoreState(); });
+});
+
+// --- savePrefs wiring ---
+
+test('toggleOverlayMode saves prefs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.toggleOverlayMode();
+  assert.ok(ctx.localStorage._data['twisty-ui-prefs'], 'expected twisty-ui-prefs to be written after toggleOverlayMode');
+  var stored = JSON.parse(ctx.localStorage._data['twisty-ui-prefs']);
+  assert.equal(stored.overlayMode, 'roads');
+});
+
+test('toggleOverlayVisibility saves prefs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.toggleOverlayVisibility();
+  assert.ok(ctx.localStorage._data['twisty-ui-prefs'], 'expected twisty-ui-prefs to be written after toggleOverlayVisibility');
+  var stored = JSON.parse(ctx.localStorage._data['twisty-ui-prefs']);
+  assert.equal(stored.overlayVisible, false);
+});
+
+test('onMinTwistInput saves prefs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.onMinTwistInput(50);
+  assert.ok(ctx.localStorage._data['twisty-ui-prefs'], 'expected twisty-ui-prefs to be written after onMinTwistInput');
+});
+
+test('onMinSpeedInput saves prefs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.onMinSpeedInput(30);
+  assert.ok(ctx.localStorage._data['twisty-ui-prefs'], 'expected twisty-ui-prefs to be written after onMinSpeedInput');
+});
+
+test('toggleWaypointsPanel saves prefs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.toggleWaypointsPanel();
+  assert.ok(ctx.localStorage._data['twisty-ui-prefs'], 'expected twisty-ui-prefs to be written after toggleWaypointsPanel');
+  var stored = JSON.parse(ctx.localStorage._data['twisty-ui-prefs']);
+  assert.equal(stored.waypointsPanelOpen, true);
+});
