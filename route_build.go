@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -178,6 +179,17 @@ func (b *sseBroker) broadcast(msg []byte) {
 	select {
 	case b.broadcastCh <- msg:
 	default:
+	}
+}
+
+// tileScorer builds a quality.TileScorer backed by this server's raw tile
+// cache and a score cache sibling directory, matching the layout used by the
+// CLI's scoring pipeline (main.go).
+func (s *buildServer) tileScorer() *quality.TileScorer {
+	scoreCacheDir := filepath.Join(filepath.Dir(s.cacheDir), "scores")
+	return &quality.TileScorer{
+		TileCache:  &quality.TileCache{Dir: s.cacheDir, Precision: 3},
+		ScoreCache: &quality.ScoreCache{Dir: scoreCacheDir, Precision: 3},
 	}
 }
 
@@ -427,7 +439,7 @@ func (s *buildServer) handleViewportScore(w http.ResponseWriter, r *http.Request
 		go s.fetchMissingTiles(missingTiles, false)
 	}
 
-	sr := s.scoreFromCachedTiles(cachedTiles, cache, nil)
+	sr := s.scoreFromCachedTiles(cachedTiles, s.tileScorer(), nil)
 
 	var failedCount int
 	for _, t := range tiles {
@@ -514,7 +526,7 @@ func (s *buildServer) handleScore(w http.ResponseWriter, r *http.Request) {
 		go s.fetchMissingTiles(missingTiles, false)
 	}
 
-	sr := s.scoreFromCachedTiles(cachedTiles, cache, req.Points)
+	sr := s.scoreFromCachedTiles(cachedTiles, s.tileScorer(), req.Points)
 
 	// Count failed tiles relevant to this request.
 	var failedCount int
@@ -621,22 +633,18 @@ func (s *buildServer) fetchMissingTiles(tiles []quality.Tile, cancelStale bool) 
 	}
 }
 
-func (s *buildServer) scoreFromCachedTiles(tiles []quality.Tile, cache *quality.TileCache, routePoints [][2]float64) scoreResult {
+func (s *buildServer) scoreFromCachedTiles(tiles []quality.Tile, scorer *quality.TileScorer, routePoints [][2]float64) scoreResult {
 	var totalScore float64
 	var totalLength float64
 
 	for _, t := range tiles {
-		data, err := cache.Read(t)
+		result, err := scorer.Score(t)
 		if err != nil {
+			slog.Warn("failed to write score cache", "south", t.South, "west", t.West, "error", err)
+		}
+		if !result.Found {
 			continue
 		}
-
-		ways, err := quality.ParseTileData(data)
-		if err != nil {
-			continue
-		}
-
-		result := quality.RunScorePipeline(ways)
 
 		for _, sw := range result.ScoredWays {
 			for _, seg := range sw.Segments {
@@ -881,25 +889,20 @@ func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tiles := s.tilesInBBox(west, south, east, north)
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
+	scorer := s.tileScorer()
 
 	var missing []quality.Tile
 	var allCollections []quality.RoadCollection
 	var allScoredWays quality.ScoredWays
 	for _, t := range tiles {
-		if !cache.Has(t) {
+		result, err := scorer.Score(t)
+		if err != nil {
+			slog.Warn("failed to write score cache", "south", t.South, "west", t.West, "error", err)
+		}
+		if !result.Found {
 			missing = append(missing, t)
 			continue
 		}
-		data, err := cache.Read(t)
-		if err != nil {
-			continue
-		}
-		ways, err := quality.ParseTileData(data)
-		if err != nil {
-			continue
-		}
-		result := quality.RunScorePipeline(ways)
 		allCollections = append(allCollections, quality.Aggregate(result.ScoredWays)...)
 		allScoredWays = append(allScoredWays, result.ScoredWays...)
 	}
@@ -942,24 +945,19 @@ func (s *buildServer) handleRoadSegments(w http.ResponseWriter, r *http.Request)
 	}
 
 	tiles := s.tilesInBBox(west, south, east, north)
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
+	scorer := s.tileScorer()
 
 	var missing []quality.Tile
 	var allCollections []quality.RoadCollection
 	for _, tile := range tiles {
-		if !cache.Has(tile) {
+		result, err := scorer.Score(tile)
+		if err != nil {
+			slog.Warn("failed to write score cache", "south", tile.South, "west", tile.West, "error", err)
+		}
+		if !result.Found {
 			missing = append(missing, tile)
 			continue
 		}
-		data, err := cache.Read(tile)
-		if err != nil {
-			continue
-		}
-		ways, err := quality.ParseTileData(data)
-		if err != nil {
-			continue
-		}
-		result := quality.RunScorePipeline(ways)
 		allCollections = append(allCollections, quality.Aggregate(result.ScoredWays)...)
 	}
 
@@ -1013,17 +1011,15 @@ func (s *buildServer) handleSegmentsStream(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *buildServer) runTileSSEBroadcaster() {
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
+	scorer := s.tileScorer()
 	for t := range s.tileReady {
-		data, err := cache.Read(t)
+		result, err := scorer.Score(t)
 		if err != nil {
+			slog.Warn("failed to write score cache", "south", t.South, "west", t.West, "error", err)
+		}
+		if !result.Found {
 			continue
 		}
-		ways, err := quality.ParseTileData(data)
-		if err != nil {
-			continue
-		}
-		result := quality.RunScorePipeline(ways)
 		collections := quality.Aggregate(result.ScoredWays)
 		fc := collectionsToGeoJSON(collections, result.ScoredWays)
 		payload, err := json.Marshal(fc)

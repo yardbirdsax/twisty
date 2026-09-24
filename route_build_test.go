@@ -293,6 +293,60 @@ func TestHandleScore_returnsScorePerKm(t *testing.T) {
 	}
 }
 
+func TestHandleScore_secondRequestServesFromScoreCache(t *testing.T) {
+	cacheDir := t.TempDir()
+	tile := quality.Tile{South: 40.0, West: -76.0, North: 40.1, East: -75.9}
+	tileData := []byte(`{"elements":[{"id":1,"tags":{"highway":"primary"},"geometry":[{"lat":40.010,"lon":-75.990},{"lat":40.011,"lon":-75.989},{"lat":40.012,"lon":-75.989},{"lat":40.011,"lon":-75.988},{"lat":40.010,"lon":-75.988}]}]}`)
+	cache := &quality.TileCache{Dir: cacheDir, Precision: 3}
+	if err := cache.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir: %v", err)
+	}
+	if err := cache.Write(tile, tileData); err != nil {
+		t.Fatalf("cache.Write: %v", err)
+	}
+
+	srv := &buildServer{tileSize: 0.1, cacheDir: cacheDir}
+	body := `{"points":[[40.010,-75.990],[40.012,-75.988]]}`
+
+	// First request scores the tile and should populate the score cache.
+	req1 := httptest.NewRequest("POST", "/api/score", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	srv.handleScore(w1, req1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d: %s", w1.Code, w1.Body.String())
+	}
+
+	scorer := srv.tileScorer()
+	rawData, err := cache.Read(tile)
+	if err != nil {
+		t.Fatalf("cache.Read: %v", err)
+	}
+	if _, hit := scorer.ScoreCache.Read(tile, rawData); !hit {
+		t.Fatalf("expected score cache to be populated after first handleScore call")
+	}
+
+	// Second request for the same tile should be served from the score cache.
+	req2 := httptest.NewRequest("POST", "/api/score", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handleScore(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second request: expected 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	var resp1, resp2 scoreResponse
+	if err := json.Unmarshal(w1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("unmarshal resp1: %v", err)
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("unmarshal resp2: %v", err)
+	}
+	if resp1.ScorePerKm != resp2.ScorePerKm {
+		t.Fatalf("expected identical ScorePerKm across requests, got %f then %f", resp1.ScorePerKm, resp2.ScorePerKm)
+	}
+}
+
 func TestScoreFromCachedTiles_returnsScorePerKm(t *testing.T) {
 	cacheDir := t.TempDir()
 	tile := quality.Tile{South: 40.0, West: -76.0, North: 40.1, East: -75.9}
@@ -307,7 +361,7 @@ func TestScoreFromCachedTiles_returnsScorePerKm(t *testing.T) {
 	}
 
 	srv := &buildServer{tileSize: 0.1, cacheDir: cacheDir}
-	result := srv.scoreFromCachedTiles([]quality.Tile{tile}, cache, nil)
+	result := srv.scoreFromCachedTiles([]quality.Tile{tile}, srv.tileScorer(), nil)
 
 	if result.Score == 0 {
 		t.Error("expected Score > 0")
