@@ -293,6 +293,60 @@ func TestHandleScore_returnsScorePerKm(t *testing.T) {
 	}
 }
 
+func TestHandleScore_secondRequestServesFromScoreCache(t *testing.T) {
+	cacheDir := t.TempDir()
+	tile := quality.Tile{South: 40.0, West: -76.0, North: 40.1, East: -75.9}
+	tileData := []byte(`{"elements":[{"id":1,"tags":{"highway":"primary"},"geometry":[{"lat":40.010,"lon":-75.990},{"lat":40.011,"lon":-75.989},{"lat":40.012,"lon":-75.989},{"lat":40.011,"lon":-75.988},{"lat":40.010,"lon":-75.988}]}]}`)
+	cache := &quality.TileCache{Dir: cacheDir, Precision: 3}
+	if err := cache.EnsureDir(); err != nil {
+		t.Fatalf("EnsureDir: %v", err)
+	}
+	if err := cache.Write(tile, tileData); err != nil {
+		t.Fatalf("cache.Write: %v", err)
+	}
+
+	srv := &buildServer{tileSize: 0.1, cacheDir: cacheDir}
+	body := `{"points":[[40.010,-75.990],[40.012,-75.988]]}`
+
+	// First request scores the tile and should populate the score cache.
+	req1 := httptest.NewRequest("POST", "/api/score", strings.NewReader(body))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	srv.handleScore(w1, req1)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("first request: expected 200, got %d: %s", w1.Code, w1.Body.String())
+	}
+
+	scorer := srv.tileScorer()
+	rawData, err := cache.Read(tile)
+	if err != nil {
+		t.Fatalf("cache.Read: %v", err)
+	}
+	if _, hit := scorer.ScoreCache.Read(tile, rawData); !hit {
+		t.Fatalf("expected score cache to be populated after first handleScore call")
+	}
+
+	// Second request for the same tile should be served from the score cache.
+	req2 := httptest.NewRequest("POST", "/api/score", strings.NewReader(body))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	srv.handleScore(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second request: expected 200, got %d: %s", w2.Code, w2.Body.String())
+	}
+
+	var resp1, resp2 scoreResponse
+	if err := json.Unmarshal(w1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("unmarshal resp1: %v", err)
+	}
+	if err := json.Unmarshal(w2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("unmarshal resp2: %v", err)
+	}
+	if resp1.ScorePerKm != resp2.ScorePerKm {
+		t.Fatalf("expected identical ScorePerKm across requests, got %f then %f", resp1.ScorePerKm, resp2.ScorePerKm)
+	}
+}
+
 func TestScoreFromCachedTiles_returnsScorePerKm(t *testing.T) {
 	cacheDir := t.TempDir()
 	tile := quality.Tile{South: 40.0, West: -76.0, North: 40.1, East: -75.9}
@@ -307,7 +361,7 @@ func TestScoreFromCachedTiles_returnsScorePerKm(t *testing.T) {
 	}
 
 	srv := &buildServer{tileSize: 0.1, cacheDir: cacheDir}
-	result := srv.scoreFromCachedTiles([]quality.Tile{tile}, cache, nil)
+	result := srv.scoreFromCachedTiles([]quality.Tile{tile}, srv.tileScorer(), nil)
 
 	if result.Score == 0 {
 		t.Error("expected Score > 0")
@@ -408,7 +462,7 @@ func TestHandleSegments_reportsFailedTiles(t *testing.T) {
 	go srv.broker.run()
 
 	tile := quality.Tile{South: 40.0, West: -75.8, North: 40.1, East: -75.7}
-	srv.failedTiles.Store(tile, struct{}{})
+	srv.tileSet().MarkFailed(tile)
 
 	req := httptest.NewRequest("GET", "/api/segments?bbox=-75.8,39.9,-75.7,40.0", nil)
 	w := httptest.NewRecorder()
@@ -487,7 +541,7 @@ func TestHandleRoadSegments_failedTilesReported(t *testing.T) {
 	// For bbox=-75.8,39.9,-75.7,40.0 with tileSize=0.1:
 	// tilesInBBox generates tiles at (South=40.0, West=-75.8, North=40.1, East=-75.7)
 	tile := quality.Tile{South: 40.0, West: -75.8, North: 40.1, East: -75.7}
-	srv.failedTiles.Store(tile, struct{}{})
+	srv.tileSet().MarkFailed(tile)
 
 	req := httptest.NewRequest("GET", "/api/road-segments?bbox=-75.8,39.9,-75.7,40.0", nil)
 	w := httptest.NewRecorder()
@@ -1007,7 +1061,7 @@ func TestHandleRefreshViewport_clearsCacheAndFailed(t *testing.T) {
 		tileSize: 0.1,
 	}
 	// Pre-mark the same tile as failed.
-	srv.failedTiles.Store(tile, struct{}{})
+	srv.tileSet().MarkFailed(tile)
 
 	body := `{"west":-75.8,"south":40.0,"east":-75.7,"north":40.1}`
 	req := httptest.NewRequest("POST", "/api/refresh-viewport", strings.NewReader(body))
@@ -1025,7 +1079,7 @@ func TestHandleRefreshViewport_clearsCacheAndFailed(t *testing.T) {
 	}
 
 	// failedTiles entry should be gone.
-	if _, still := srv.failedTiles.Load(tile); still {
+	if srv.tileSet().IsFailed(tile) {
 		t.Error("expected failedTiles entry to be cleared after refresh")
 	}
 
@@ -1037,191 +1091,6 @@ func TestHandleRefreshViewport_clearsCacheAndFailed(t *testing.T) {
 	}
 	if resp.Cleared != 1 {
 		t.Errorf("expected cleared == 1 (set-union: one tile cleared), got %d", resp.Cleared)
-	}
-}
-
-func TestFetchMissingTiles_deduplicatesInFlightTiles(t *testing.T) {
-	// Gate lets us hold the first goroutine inside the Overpass mock so a second
-	// goroutine can race against it with the same tile.
-	firstRequestStarted := make(chan struct{})
-	firstRequestUnblock := make(chan struct{})
-	fetchCount := 0
-
-	overpassSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fetchCount++
-		close(firstRequestStarted)
-		<-firstRequestUnblock
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"elements":[]}`)) //nolint:errcheck
-	}))
-	defer overpassSrv.Close()
-
-	cacheDir := t.TempDir()
-	tile := quality.Tile{South: 40.0, West: -75.8, North: 40.1, East: -75.7}
-
-	srv := &buildServer{
-		overpassURL: overpassSrv.URL,
-		cacheDir:    cacheDir,
-		tileSize:    0.1,
-		fetchDelay:  "1ms",
-		tileReady:   make(chan quality.Tile, 64),
-		broker:      newSSEBroker(),
-	}
-	go srv.broker.run()
-
-	// First goroutine: will block inside the Overpass mock.
-	go srv.fetchMissingTiles([]quality.Tile{tile}, false)
-
-	// Wait until the first goroutine is inside the mock handler, then fire a second.
-	select {
-	case <-firstRequestStarted:
-	case <-time.After(5 * time.Second):
-		t.Fatal("first goroutine never reached the Overpass mock")
-	}
-
-	// Second call with the same tile — should be a no-op due to in-flight tracking.
-	srv.fetchMissingTiles([]quality.Tile{tile}, false)
-
-	// Unblock the first goroutine.
-	close(firstRequestUnblock)
-
-	// Give the first goroutine time to finish.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		cache := &quality.TileCache{Dir: cacheDir, Precision: 3}
-		if cache.Has(tile) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	if fetchCount != 1 {
-		t.Errorf("expected exactly 1 Overpass fetch, got %d", fetchCount)
-	}
-}
-
-func TestFetchMissingTiles_clearsFailedOnSuccess(t *testing.T) {
-	// Spin up a mock Overpass server that returns a valid (non-remark) response
-	// for any request. This simulates a tile that previously failed but now succeeds.
-	overpassSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"elements":[]}`)) //nolint:errcheck
-	}))
-	defer overpassSrv.Close()
-
-	cacheDir := t.TempDir()
-	cache := &quality.TileCache{Dir: cacheDir, Precision: 3}
-	if err := cache.EnsureDir(); err != nil {
-		t.Fatalf("EnsureDir: %v", err)
-	}
-
-	tile := quality.Tile{South: 40.0, West: -75.8, North: 40.1, East: -75.7}
-
-	srv := &buildServer{
-		overpassURL: overpassSrv.URL,
-		cacheDir:    cacheDir,
-		tileSize:    0.1,
-		fetchDelay:  "1ms", // avoid 1-second rate-limit delay in tests
-		tileReady:   make(chan quality.Tile, 64),
-		broker:      newSSEBroker(),
-	}
-	go srv.broker.run()
-
-	// Pre-mark the tile as failed (simulates a prior failed fetch).
-	srv.failedTiles.Store(tile, struct{}{})
-
-	// Call fetchMissingTiles synchronously (not as a goroutine).
-	srv.fetchMissingTiles([]quality.Tile{tile}, false)
-
-	// The tile should now be in cache (mock server returned valid data).
-	if !cache.Has(tile) {
-		t.Fatal("expected tile to be in cache after successful fetch")
-	}
-
-	// The failed entry should have been cleared.
-	if _, still := srv.failedTiles.Load(tile); still {
-		t.Error("expected failedTiles entry to be cleared after successful fetch")
-	}
-}
-
-func TestFetchMissingTiles_overlapTileContinuesOnStaleCancel(t *testing.T) {
-	// tileA is in both viewport calls; tileB is only in the first.
-	// After the second call (cancelStale=true), tileB's fetch should be cancelled
-	// but tileA's in-flight HTTP request must NOT be cancelled.
-	tileA := quality.Tile{South: 40.0, West: -75.8, North: 40.1, East: -75.7}
-	tileB := quality.Tile{South: 41.0, West: -75.8, North: 41.1, East: -75.7}
-
-	// Channel that unblocks tileA's mock response.
-	unblockA := make(chan struct{})
-
-	overpassSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The fetch uses a POST with form-encoded body containing "data".
-		// Distinguish tileA vs tileB by the south coordinate in the bbox.
-		if err := r.ParseForm(); err == nil {
-			if strings.Contains(r.FormValue("data"), "40.000000") {
-				// tileA request — block until unblocked.
-				<-unblockA
-			}
-		}
-		// Both tiles return valid empty JSON.
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"elements":[]}`)) //nolint:errcheck
-	}))
-	defer overpassSrv.Close()
-
-	cacheDir := t.TempDir()
-	srv := &buildServer{
-		overpassURL: overpassSrv.URL,
-		cacheDir:    cacheDir,
-		tileSize:    0.1,
-		fetchDelay:  "1ms",
-		tileReady:   make(chan quality.Tile, 64),
-		broker:      newSSEBroker(),
-	}
-	go srv.broker.run()
-
-	// First call: claim both tiles (cancelStale=false).
-	go srv.fetchMissingTiles([]quality.Tile{tileA, tileB}, false)
-
-	// Wait until both tiles appear in inFlight.
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if time.Now().After(deadline) {
-			t.Fatal("timeout waiting for both tiles to appear in inFlight")
-		}
-		_, aOk := srv.inFlight.Load(tileA)
-		_, bOk := srv.inFlight.Load(tileB)
-		if aOk && bOk {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	// Second call: only tileA in viewport, cancelStale=true — should cancel tileB.
-	srv.fetchMissingTiles([]quality.Tile{tileA}, true)
-
-	// Unblock tileA's mock response so it can complete.
-	close(unblockA)
-
-	// Assert tileA lands in cache within 5 seconds.
-	cache := &quality.TileCache{Dir: cacheDir, Precision: 3}
-	deadline = time.Now().Add(5 * time.Second)
-	for {
-		if time.Now().After(deadline) {
-			t.Fatal("tileA did not land in cache — its context was likely cancelled")
-		}
-		if cache.Has(tileA) {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// tileB should NOT be in cache (was cancelled or never completed).
-	if cache.Has(tileB) {
-		t.Error("tileB should not be in cache — it was supposed to be cancelled")
 	}
 }
 
@@ -1344,77 +1213,5 @@ func TestLoggingMiddleware(t *testing.T) {
 	}
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200, got %d", w.Code)
-	}
-}
-
-func TestFetchMissingTiles_cancelStale(t *testing.T) {
-	release := make(chan struct{})
-	overpassSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		<-release
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"elements":[]}`)) //nolint:errcheck
-	}))
-	defer overpassSrv.Close()
-	defer close(release)
-
-	cacheDir := t.TempDir()
-	tileA := quality.Tile{South: 40.0, West: -75.0, North: 40.1, East: -74.9}
-	tileB := quality.Tile{South: 40.1, West: -75.0, North: 40.2, East: -74.9}
-	tileC := quality.Tile{South: 40.2, West: -75.0, North: 40.3, East: -74.9}
-
-	srv := &buildServer{
-		overpassURL: overpassSrv.URL,
-		cacheDir:    cacheDir,
-		tileSize:    0.1,
-		fetchDelay:  "1ms",
-		tileReady:   make(chan quality.Tile, 64),
-		broker:      newSSEBroker(),
-	}
-	go srv.broker.run()
-
-	// First call: claim tileA and tileB; both will block at the Overpass server.
-	go srv.fetchMissingTiles([]quality.Tile{tileA, tileB}, true)
-
-	// Wait until both tiles are claimed by the first goroutine.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		_, aOk := srv.inFlight.Load(tileA)
-		_, bOk := srv.inFlight.Load(tileB)
-		if aOk && bOk {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	// Second call: tileA and tileC. tileB is stale — the stale sweep must cancel
-	// and remove it. Run in a goroutine because tileC will block at the server.
-	// The stale-sweep portion runs synchronously before the goroutine can proceed,
-	// so we use a channel to signal when the sweep is done.
-	secondCallStarted := make(chan struct{})
-	go func() {
-		close(secondCallStarted)
-		srv.fetchMissingTiles([]quality.Tile{tileA, tileC}, true)
-	}()
-	<-secondCallStarted
-
-	// Give the second goroutine time to execute the stale sweep and claim tileC.
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		_, bOk := srv.inFlight.Load(tileB)
-		_, cOk := srv.inFlight.Load(tileC)
-		if !bOk && cOk {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	// tileB must have been cancelled and removed from inFlight.
-	if _, tileBInFlight := srv.inFlight.Load(tileB); tileBInFlight {
-		t.Error("expected tileB to have been cancelled and removed from inFlight")
-	}
-	// tileC must have been claimed by the second call.
-	if _, tileCInFlight := srv.inFlight.Load(tileC); !tileCInFlight {
-		t.Error("expected tileC to be in-flight after second call")
 	}
 }

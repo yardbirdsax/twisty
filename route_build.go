@@ -2,7 +2,6 @@
 package main
 
 import (
-	"context"
 	_ "embed"
 	"encoding/json"
 	"encoding/xml"
@@ -13,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,6 +89,7 @@ func execBuild(p buildParams) error {
 		tileReady:   make(chan quality.Tile, 64),
 		broker:      broker,
 	}
+	srv.tileSet() // build eagerly so it's ready before the broadcaster starts
 	go srv.runTileSSEBroadcaster()
 
 	mux := http.NewServeMux()
@@ -124,11 +125,40 @@ type buildServer struct {
 	cacheDir      string
 	tileSize      float64
 	fetchDelay    string
-	nominatimBase string   // override for tests; empty means use production Nominatim
-	failedTiles   sync.Map // key: quality.Tile, value: struct{}
-	inFlight      sync.Map // key: quality.Tile, value: context.CancelFunc; cancels in-flight fetch for that tile
+	nominatimBase string // override for tests; empty means use production Nominatim
 	tileReady     chan quality.Tile
 	broker        *sseBroker
+
+	// tiles is lazily built from the fields above on first use (see
+	// tileSet()) so tests that construct a buildServer{} literal directly
+	// need not know about quality.TileSet. Once built it is reused for the
+	// life of the server so in-flight/failed bookkeeping persists.
+	tiles     *quality.TileSet
+	tilesOnce sync.Once
+}
+
+// tileSet returns this server's quality.TileSet, building it on first use
+// from cacheDir/tileSize/overpassURL/fetchDelay/tileReady. The TileCache it
+// wraps is constructed once, with Precision stated in exactly one place
+// (quality.NewTileSet). Safe for concurrent use: the build server's handlers
+// and runTileSSEBroadcaster all call this from their own goroutines.
+func (s *buildServer) tileSet() *quality.TileSet {
+	s.tilesOnce.Do(func() {
+		var fetchDelay time.Duration
+		if s.fetchDelay != "" {
+			if d, err := time.ParseDuration(s.fetchDelay); err == nil {
+				fetchDelay = d
+			}
+		}
+		s.tiles = quality.NewTileSet(quality.TileSetConfig{
+			CacheDir:    s.cacheDir,
+			TileSize:    s.tileSize,
+			OverpassURL: s.overpassURL,
+			FetchDelay:  fetchDelay,
+			TileReady:   s.tileReady,
+		})
+	})
+	return s.tiles
 }
 
 type sseBroker struct {
@@ -180,6 +210,21 @@ func (b *sseBroker) broadcast(msg []byte) {
 	default:
 	}
 }
+
+// tileScorer builds a quality.TileScorer backed by this server's TileSet's raw
+// tile cache and a score cache sibling directory, matching the layout used by
+// the CLI's scoring pipeline (main.go).
+func (s *buildServer) tileScorer() *quality.TileScorer {
+	scoreCacheDir := filepath.Join(filepath.Dir(s.cacheDir), "scores")
+	return &quality.TileScorer{
+		TileCache:  s.tileSet().Cache,
+		ScoreCache: &quality.ScoreCache{Dir: scoreCacheDir, Precision: tileScoreCachePrecision},
+	}
+}
+
+// tileScoreCachePrecision matches quality's tileCachePrecision so the raw
+// tile cache and score cache agree on coordinate-formatting precision.
+const tileScoreCachePrecision = 3
 
 func (s *buildServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
@@ -411,36 +456,14 @@ func (s *buildServer) handleViewportScore(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
-
-	var cachedTiles []quality.Tile
-	var missingTiles []quality.Tile
-	for _, t := range tiles {
-		if cache.Has(t) {
-			cachedTiles = append(cachedTiles, t)
-		} else {
-			missingTiles = append(missingTiles, t)
-		}
-	}
-
-	if len(missingTiles) > 0 {
-		go s.fetchMissingTiles(missingTiles, false)
-	}
-
-	sr := s.scoreFromCachedTiles(cachedTiles, cache, nil)
-
-	var failedCount int
-	for _, t := range tiles {
-		if _, failed := s.failedTiles.Load(t); failed {
-			failedCount++
-		}
-	}
+	status := s.tileSet().Ensure(tiles, false)
+	sr := s.scoreFromCachedTiles(status.Cached, s.tileScorer(), nil)
 
 	resp := scoreResponse{
 		Score:        sr.Score,
 		ScorePerKm:   sr.ScorePerKm,
-		PendingTiles: len(missingTiles),
-		FailedTiles:  failedCount,
+		PendingTiles: len(status.Pending),
+		FailedTiles:  len(status.Failed),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -458,20 +481,10 @@ func (s *buildServer) handleRefreshViewport(w http.ResponseWriter, r *http.Reque
 	}
 
 	tiles := s.tilesInBBox(req.West, req.South, req.East, req.North)
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
 
 	cleared := 0
 	for _, t := range tiles {
-		tileCleared := false
-		if cache.Has(t) {
-			if err := os.Remove(cache.Path(t)); err == nil {
-				tileCleared = true
-			}
-		}
-		if _, wasFailed := s.failedTiles.LoadAndDelete(t); wasFailed {
-			tileCleared = true
-		}
-		if tileCleared {
+		if s.tileSet().ClearCacheAndFailed(t) {
 			cleared++
 		}
 	}
@@ -497,146 +510,31 @@ func (s *buildServer) handleScore(w http.ResponseWriter, r *http.Request) {
 
 	tiles := tilesForPolyline(req.Points, s.tileSize)
 
-	cacheDir := s.cacheDir
-	cache := &quality.TileCache{Dir: cacheDir, Precision: 3}
-
-	var cachedTiles []quality.Tile
-	var missingTiles []quality.Tile
-	for _, t := range tiles {
-		if cache.Has(t) {
-			cachedTiles = append(cachedTiles, t)
-		} else {
-			missingTiles = append(missingTiles, t)
-		}
-	}
-
-	if len(missingTiles) > 0 {
-		go s.fetchMissingTiles(missingTiles, false)
-	}
-
-	sr := s.scoreFromCachedTiles(cachedTiles, cache, req.Points)
-
-	// Count failed tiles relevant to this request.
-	var failedCount int
-	for _, t := range tiles {
-		if _, failed := s.failedTiles.Load(t); failed {
-			failedCount++
-		}
-	}
+	status := s.tileSet().Ensure(tiles, false)
+	sr := s.scoreFromCachedTiles(status.Cached, s.tileScorer(), req.Points)
 
 	resp := scoreResponse{
 		Score:        sr.Score,
 		ScorePerKm:   sr.ScorePerKm,
-		PendingTiles: len(missingTiles),
-		FailedTiles:  failedCount,
+		PendingTiles: len(status.Pending),
+		FailedTiles:  len(status.Failed),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (s *buildServer) fetchMissingTiles(tiles []quality.Tile, cancelStale bool) {
-	if cancelStale {
-		incoming := make(map[quality.Tile]struct{}, len(tiles))
-		for _, t := range tiles {
-			incoming[t] = struct{}{}
-		}
-		s.inFlight.Range(func(key, val any) bool {
-			t := key.(quality.Tile)
-			if _, keep := incoming[t]; !keep {
-				fn := val.(context.CancelFunc)
-				slog.Debug("cancelling stale tile fetch", "south", t.South, "west", t.West)
-				fn()
-				s.inFlight.Delete(t)
-			}
-			return true
-		})
-	}
-
-	type claimedTile struct {
-		tile   quality.Tile
-		ctx    context.Context
-		cancel context.CancelFunc
-	}
-
-	// Phase 1: claim all tiles upfront so inFlight is populated before any HTTP
-	// request starts. Each tile gets its own independent context so that the stale
-	// sweep can cancel individual tiles without affecting siblings.
-	var claimed []claimedTile
-	for _, t := range tiles {
-		tileCtx, tileCancel := context.WithCancel(context.Background())
-		if _, loaded := s.inFlight.LoadOrStore(t, tileCancel); loaded {
-			tileCancel() // immediately release, won't be used
-			slog.Debug("fetchMissingTiles: tile already in-flight, skipping", "south", t.South, "west", t.West)
-		} else {
-			claimed = append(claimed, claimedTile{tile: t, ctx: tileCtx, cancel: tileCancel})
-			slog.Debug("fetchMissingTiles: goroutine enqueuing tile", "south", t.South, "west", t.West)
-		}
-	}
-	if len(claimed) == 0 {
-		return
-	}
-	defer func() {
-		for _, c := range claimed {
-			if fn, ok := s.inFlight.LoadAndDelete(c.tile); ok {
-				fn.(context.CancelFunc)()
-			}
-		}
-	}()
-
-	var fetchDelay time.Duration
-	if s.fetchDelay != "" {
-		d, err := time.ParseDuration(s.fetchDelay)
-		if err == nil {
-			fetchDelay = d
-		}
-	}
-	if fetchDelay == 0 {
-		fetchDelay = time.Second
-	}
-
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
-	cache.EnsureDir()
-
-	cfg := quality.TileFetchConfig{
-		Endpoint:       s.overpassURL,
-		TileSize:       s.tileSize,
-		Cache:          cache,
-		RateLimitDelay: fetchDelay,
-	}
-
-	// Phase 2: fetch each claimed tile using its own context so a stale-sweep
-	// cancel on one tile does not affect the others.
-	for _, c := range claimed {
-		quality.FetchTiledWaysForTiles(c.ctx, []quality.Tile{c.tile}, cfg)
-		if cache.Has(c.tile) {
-			s.failedTiles.Delete(c.tile)
-			select {
-			case s.tileReady <- c.tile:
-			default:
-				slog.Warn("tileReady channel full, SSE push dropped", "south", c.tile.South, "west", c.tile.West)
-			}
-		} else if c.ctx.Err() == nil {
-			s.failedTiles.Store(c.tile, struct{}{})
-		}
-	}
-}
-
-func (s *buildServer) scoreFromCachedTiles(tiles []quality.Tile, cache *quality.TileCache, routePoints [][2]float64) scoreResult {
+func (s *buildServer) scoreFromCachedTiles(tiles []quality.Tile, scorer *quality.TileScorer, routePoints [][2]float64) scoreResult {
 	var totalScore float64
 	var totalLength float64
 
 	for _, t := range tiles {
-		data, err := cache.Read(t)
+		result, err := scorer.Score(t)
 		if err != nil {
+			slog.Warn("failed to write score cache", "south", t.South, "west", t.West, "error", err)
+		}
+		if !result.Found {
 			continue
 		}
-
-		ways, err := quality.ParseTileData(data)
-		if err != nil {
-			continue
-		}
-
-		result := quality.RunScorePipeline(ways)
 
 		for _, sw := range result.ScoredWays {
 			for _, seg := range sw.Segments {
@@ -881,38 +779,21 @@ func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tiles := s.tilesInBBox(west, south, east, north)
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
+	scorer := s.tileScorer()
+	status := s.tileSet().Ensure(tiles, true)
 
-	var missing []quality.Tile
 	var allCollections []quality.RoadCollection
 	var allScoredWays quality.ScoredWays
-	for _, t := range tiles {
-		if !cache.Has(t) {
-			missing = append(missing, t)
-			continue
-		}
-		data, err := cache.Read(t)
+	for _, t := range status.Cached {
+		result, err := scorer.Score(t)
 		if err != nil {
+			slog.Warn("failed to write score cache", "south", t.South, "west", t.West, "error", err)
+		}
+		if !result.Found {
 			continue
 		}
-		ways, err := quality.ParseTileData(data)
-		if err != nil {
-			continue
-		}
-		result := quality.RunScorePipeline(ways)
 		allCollections = append(allCollections, quality.Aggregate(result.ScoredWays)...)
 		allScoredWays = append(allScoredWays, result.ScoredWays...)
-	}
-
-	if len(missing) > 0 {
-		go s.fetchMissingTiles(missing, true)
-	}
-
-	var failedCount int
-	for _, t := range tiles {
-		if _, failed := s.failedTiles.Load(t); failed {
-			failedCount++
-		}
 	}
 
 	fc := collectionsToGeoJSON(allCollections, allScoredWays)
@@ -920,8 +801,8 @@ func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
 	resp := segmentsResponse{
 		Type:         filtered.Type,
 		Features:     filtered.Features,
-		PendingTiles: len(missing),
-		FailedTiles:  failedCount,
+		PendingTiles: len(status.Pending),
+		FailedTiles:  len(status.Failed),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -942,36 +823,19 @@ func (s *buildServer) handleRoadSegments(w http.ResponseWriter, r *http.Request)
 	}
 
 	tiles := s.tilesInBBox(west, south, east, north)
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
+	scorer := s.tileScorer()
+	status := s.tileSet().Ensure(tiles, true)
 
-	var missing []quality.Tile
 	var allCollections []quality.RoadCollection
-	for _, tile := range tiles {
-		if !cache.Has(tile) {
-			missing = append(missing, tile)
-			continue
-		}
-		data, err := cache.Read(tile)
+	for _, tile := range status.Cached {
+		result, err := scorer.Score(tile)
 		if err != nil {
+			slog.Warn("failed to write score cache", "south", tile.South, "west", tile.West, "error", err)
+		}
+		if !result.Found {
 			continue
 		}
-		ways, err := quality.ParseTileData(data)
-		if err != nil {
-			continue
-		}
-		result := quality.RunScorePipeline(ways)
 		allCollections = append(allCollections, quality.Aggregate(result.ScoredWays)...)
-	}
-
-	if len(missing) > 0 {
-		go s.fetchMissingTiles(missing, true)
-	}
-
-	var failedCount int
-	for _, t := range tiles {
-		if _, failed := s.failedTiles.Load(t); failed {
-			failedCount++
-		}
 	}
 
 	fc := collectionsToRoadGeoJSON(allCollections)
@@ -979,8 +843,8 @@ func (s *buildServer) handleRoadSegments(w http.ResponseWriter, r *http.Request)
 	resp := roadSegmentsResponse{
 		Type:         filtered.Type,
 		Features:     filtered.Features,
-		PendingTiles: len(missing),
-		FailedTiles:  failedCount,
+		PendingTiles: len(status.Pending),
+		FailedTiles:  len(status.Failed),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
@@ -1013,17 +877,15 @@ func (s *buildServer) handleSegmentsStream(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *buildServer) runTileSSEBroadcaster() {
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
+	scorer := s.tileScorer()
 	for t := range s.tileReady {
-		data, err := cache.Read(t)
+		result, err := scorer.Score(t)
 		if err != nil {
+			slog.Warn("failed to write score cache", "south", t.South, "west", t.West, "error", err)
+		}
+		if !result.Found {
 			continue
 		}
-		ways, err := quality.ParseTileData(data)
-		if err != nil {
-			continue
-		}
-		result := quality.RunScorePipeline(ways)
 		collections := quality.Aggregate(result.ScoredWays)
 		fc := collectionsToGeoJSON(collections, result.ScoredWays)
 		payload, err := json.Marshal(fc)
@@ -1041,19 +903,8 @@ func (s *buildServer) handleTiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
 	tiles := s.tilesInBBox(west, south, east, north)
-
-	var missing []quality.Tile
-	for _, t := range tiles {
-		if !cache.Has(t) {
-			missing = append(missing, t)
-		}
-	}
-
-	if len(missing) > 0 {
-		go s.fetchMissingTiles(missing, false)
-	}
+	s.tileSet().Ensure(tiles, false)
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -1066,7 +917,7 @@ func (s *buildServer) handleDebugTiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tiles := s.tilesInBBox(west, south, east, north)
-	cache := &quality.TileCache{Dir: s.cacheDir, Precision: 3}
+	cache := s.tileSet().Cache
 
 	type tileProps struct {
 		Tile   string `json:"tile"`
