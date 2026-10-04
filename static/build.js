@@ -925,6 +925,9 @@ function applyRouteState(state) {
   });
   refreshMarkers();
   renderWaypointList();
+  // Older saved routes (or ones saved before addresses resolved) may lack
+  // labels; fetch any that are missing.
+  reverseGeocodeUnlabeled();
   updateStats();
   if (legs.length > 0) {
     requestScore();
@@ -1243,7 +1246,8 @@ function saveRoute() {
     center: [center.lat, center.lng],
     zoom: map.getZoom(),
     waypoints: waypoints,
-    legs: legs
+    legs: legs,
+    labelCache: labelCache
   };
   var json = JSON.stringify(state, null, 2);
 

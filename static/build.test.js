@@ -931,6 +931,46 @@ test('saveState includes labelCache in stored JSON', function() {
   assert.equal(stored.labelCache['40.000000,-75.000000'], 'Main St');
 });
 
+test('saveRoute includes labelCache in the saved file', async function() {
+  var written = null;
+  var ctx = loadBuildJS(makeCtx());
+  ctx.window.showSaveFilePicker = function() {
+    return Promise.resolve({
+      createWritable: function() {
+        return Promise.resolve({
+          write: function(json) { written = json; return Promise.resolve(); },
+          close: function() { return Promise.resolve(); },
+        });
+      },
+    });
+  };
+  ctx.labelCache['40.000000,-75.000000'] = 'Main St';
+  ctx.saveRoute();
+  await new Promise(function(resolve) { setImmediate(resolve); });
+  assert.ok(written, 'expected saveRoute to write a file');
+  assert.equal(JSON.parse(written).labelCache['40.000000,-75.000000'], 'Main St');
+});
+
+test('applyRouteState reverse-geocodes only waypoints missing from labelCache', function() {
+  var fetched = [];
+  var ctx = loadBuildJS(makeCtx({
+    fetch: function(url) {
+      if (typeof url === 'string' && url.indexOf('reverse-geocode') !== -1) {
+        fetched.push(url);
+        return new Promise(function() {});
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  }));
+  ctx.applyRouteState({
+    waypoints: [[40.0, -75.0], [40.2, -75.2]],
+    legs: [{ points: [[40.0, -75.0], [40.2, -75.2]] }],
+    labelCache: { '40.000000,-75.000000': 'Main St' }
+  });
+  assert.equal(fetched.length, 1);
+  assert.match(fetched[0], /lat=40\.2&lon=-75\.2/);
+});
+
 test('restoreState populates labelCache from stored state', function() {
   var state = {
     zoom: 13, center: [40.0, -75.0],
