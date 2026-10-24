@@ -315,3 +315,122 @@ func TestStampRegions_Overwrites(t *testing.T) {
 		t.Errorf("expected overwrite, got %q", got)
 	}
 }
+
+// writeTile creates an empty .gph file for the given level under
+// <tilesDir>/tiles/<level>/000/.
+func writeTile(t *testing.T, tilesDir, level string) {
+	t.Helper()
+	dir := filepath.Join(tilesDir, "tiles", level, "000")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "123.gph"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTilesComplete_AllLevels(t *testing.T) {
+	tilesDir := t.TempDir()
+	for _, l := range []string{"0", "1", "2"} {
+		writeTile(t, tilesDir, l)
+	}
+	if ok, problem := tilesComplete(tilesDir); !ok {
+		t.Errorf("expected complete, got problem %q", problem)
+	}
+}
+
+func TestTilesComplete_OnlyLevel2(t *testing.T) {
+	tilesDir := t.TempDir()
+	writeTile(t, tilesDir, "2")
+	if err := os.WriteFile(filepath.Join(tilesDir, "tiles", "ways_0.bin"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ok, problem := tilesComplete(tilesDir)
+	if ok {
+		t.Fatal("expected incomplete")
+	}
+	if !strings.Contains(problem, "level 0") {
+		t.Errorf("expected problem to name level 0, got %q", problem)
+	}
+}
+
+func TestTilesComplete_Empty(t *testing.T) {
+	if ok, _ := tilesComplete(t.TempDir()); ok {
+		t.Error("expected empty dir to be incomplete")
+	}
+}
+
+func completeDataDir(t *testing.T) string {
+	t.Helper()
+	dataDir := t.TempDir()
+	tilesDir := filepath.Join(dataDir, "tiles")
+	for _, l := range []string{"0", "1", "2"} {
+		writeTile(t, tilesDir, l)
+	}
+	return dataDir
+}
+
+func TestNeedsBuild_NoMarkerCompleteTiles_WritesMarker(t *testing.T) {
+	dataDir := completeDataDir(t)
+	build, reason := needsBuild(dataDir)
+	if build {
+		t.Errorf("expected no rebuild, got reason %q", reason)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, builtMarkerName)); err != nil {
+		t.Errorf("expected marker to be written: %v", err)
+	}
+}
+
+func TestNeedsBuild_NoMarkerCompleteTilesWithLeftoverBin_Rebuilds(t *testing.T) {
+	dataDir := completeDataDir(t)
+	if err := os.WriteFile(filepath.Join(dataDir, "tiles", "tiles", "ways_0.bin"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	build, reason := needsBuild(dataDir)
+	if !build {
+		t.Fatal("expected rebuild")
+	}
+	if !strings.Contains(reason, "intermediate build files") {
+		t.Errorf("expected reason to mention intermediate build files, got %q", reason)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, builtMarkerName)); err == nil {
+		t.Error("marker must not be written when intermediate files remain")
+	}
+}
+
+func TestNeedsBuild_MarkerPresentIncompleteTiles(t *testing.T) {
+	dataDir := t.TempDir()
+	writeTile(t, filepath.Join(dataDir, "tiles"), "2")
+	if err := os.WriteFile(filepath.Join(dataDir, builtMarkerName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	build, reason := needsBuild(dataDir)
+	if !build {
+		t.Fatal("expected rebuild")
+	}
+	if !strings.Contains(reason, "level 0") {
+		t.Errorf("expected reason to name level 0, got %q", reason)
+	}
+}
+
+func TestNeedsBuild_NoMarkerIncompleteTiles(t *testing.T) {
+	dataDir := t.TempDir()
+	writeTile(t, filepath.Join(dataDir, "tiles"), "2")
+	build, _ := needsBuild(dataDir)
+	if !build {
+		t.Error("expected rebuild")
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, builtMarkerName)); err == nil {
+		t.Error("marker must not be written for incomplete tiles")
+	}
+}
+
+func TestNeedsBuild_MarkerAndCompleteTiles(t *testing.T) {
+	dataDir := completeDataDir(t)
+	if err := os.WriteFile(filepath.Join(dataDir, builtMarkerName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if build, reason := needsBuild(dataDir); build {
+		t.Errorf("expected no rebuild, got %q", reason)
+	}
+}

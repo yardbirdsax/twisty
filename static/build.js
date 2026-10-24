@@ -10,6 +10,7 @@ var waypoints = [];
 var markers = [];
 var legPolylines = [];
 var legs = [];
+var gapLines = []; // dashed warning lines, each { leg: index into legs, layer }
 var scorePollTimer = null;
 var scorePerKmMax = window.TWISTY_CONFIG.scorePerKmMax;
 var statusManager = createStatusManager(document.getElementById('fetch-status'));
@@ -22,9 +23,104 @@ var waypointsPanelOpen = false;
 var reverseGeocodeGeneration = 0;
 var dragState = null; // { type: 'reorder'|'insert', fromIndex: number|null }
 
+// A leg has a gap when the route starts or ends farther than this (meters)
+// from the waypoint it was asked to connect.
+var SNAP_WARN_M = 150;
+var GAP_COLOR = '#f59e0b';
+
 var CIRCLED_DIGITS = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
 function waypointBadge(i) {
   return i < CIRCLED_DIGITS.length ? CIRCLED_DIGITS[i] : '#' + (i + 1);
+}
+
+function snapOf(leg, key) {
+  var v = leg && leg[key];
+  return typeof v === 'number' && v > 0 ? v : 0;
+}
+
+// Accepts either an API response (snap_*_m) or a stored leg (snap*M).
+function legHasGap(leg) {
+  if (!leg) return false;
+  var from = leg.snap_from_m !== undefined ? leg.snap_from_m : leg.snapFromM;
+  var to = leg.snap_to_m !== undefined ? leg.snap_to_m : leg.snapToM;
+  return (typeof from === 'number' && from > SNAP_WARN_M) ||
+         (typeof to === 'number' && to > SNAP_WARN_M);
+}
+
+function snapGapMessage(meters, waypointNumber, atStart) {
+  var rounded = Math.round(meters / 10) * 10;
+  return 'Route ' + (atStart ? 'starts ' : 'ends ') + rounded + ' m from waypoint ' + waypointNumber +
+    ' — the router may not know this road.';
+}
+
+// Toast text for leg i (0-based) naming the waypoint with the larger gap, or ''.
+function legGapWarning(leg, i) {
+  if (!legHasGap(leg)) return '';
+  var from = snapOf(leg, 'snapFromM');
+  var to = snapOf(leg, 'snapToM');
+  return to >= from ? snapGapMessage(to, i + 2) : snapGapMessage(from, i + 1, true);
+}
+
+function normalizeLeg(leg) {
+  leg.snapFromM = snapOf(leg, 'snapFromM');
+  leg.snapToM = snapOf(leg, 'snapToM');
+  return leg;
+}
+
+function legFromResponse(data) {
+  return {
+    points: data.points,
+    duration: data.duration,
+    distance: data.distance,
+    snapFromM: snapOf(data, 'snap_from_m'),
+    snapToM: snapOf(data, 'snap_to_m')
+  };
+}
+
+// Larger snap distance (meters) of the legs adjoining waypoint j, or 0.
+function waypointGapM(j) {
+  var before = j > 0 ? snapOf(legs[j - 1], 'snapToM') : 0;
+  var after = snapOf(legs[j], 'snapFromM');
+  var worst = Math.max(before, after);
+  return worst > SNAP_WARN_M ? worst : 0;
+}
+
+function clearGapLines() {
+  gapLines.forEach(function(g) { map.removeLayer(g.layer); });
+  gapLines = [];
+}
+
+function removeGapLinesForLeg(index) {
+  gapLines = gapLines.filter(function(g) {
+    if (g.leg !== index) return true;
+    map.removeLayer(g.layer);
+    return false;
+  });
+}
+
+function addGapLine(index, a, b) {
+  var layer = L.polyline([a, b], {
+    color: GAP_COLOR, weight: 3, opacity: 0.9, dashArray: '6 8', pane: 'routePane'
+  }).addTo(map);
+  gapLines.push({ leg: index, layer: layer });
+}
+
+// Draw dashed lines for leg i between its route ends and the waypoints it missed.
+function drawGapLines(i) {
+  var leg = legs[i];
+  var pts = leg && leg.points;
+  if (!pts || pts.length === 0 || !legHasGap(leg)) return;
+  if (leg.snapFromM > SNAP_WARN_M) addGapLine(i, waypoints[i], pts[0]);
+  if (leg.snapToM > SNAP_WARN_M) addGapLine(i, pts[pts.length - 1], waypoints[i + 1]);
+}
+
+// After leg i is routed: draw the gap and, once per routing, warn about it.
+function noteLegRouted(i) {
+  var msg = legGapWarning(legs[i], i);
+  if (!msg) return;
+  drawGapLines(i);
+  renderWaypointList();
+  showToast(msg);
 }
 
 function labelKey(wp) {
@@ -125,6 +221,7 @@ function initWaypointDnD() {
       waypoints.splice(insertAt, 0, wp);
       legPolylines.forEach(function(p) { map.removeLayer(p); });
       legPolylines = [];
+      clearGapLines();
       legs = [];
       refreshMarkers();
       renderWaypointList();
@@ -194,6 +291,14 @@ function renderWaypointList() {
 
     row.appendChild(handle);
     row.appendChild(badge);
+    var gapM = waypointGapM(i);
+    if (gapM > 0) {
+      var warn = document.createElement('span');
+      warn.className = 'wp-gap-badge';
+      warn.textContent = '⚠';
+      warn.title = 'Route misses this waypoint by about ' + (Math.round(gapM / 10) * 10) + ' m';
+      row.appendChild(warn);
+    }
     row.appendChild(labelEl);
     row.appendChild(deleteBtn);
     list.insertBefore(row, addRow);
@@ -205,6 +310,7 @@ function removeWaypoint(i) {
   activeSlotIndex = -1;
   legPolylines.forEach(function(p) { map.removeLayer(p); });
   legPolylines = [];
+  clearGapLines();
   legs = [];
   refreshMarkers();
   renderWaypointList();
@@ -405,6 +511,7 @@ function commitInsertWaypoint(insertIndex, query, placeholderRow, input) {
       labelCache[labelKey([data.lat, data.lon])] = data.display_name;
       legPolylines.forEach(function(p) { map.removeLayer(p); });
       legPolylines = [];
+      clearGapLines();
       legs = [];
       refreshMarkers();
       renderWaypointList();
@@ -455,6 +562,7 @@ function rerouteAll() {
 
   legPolylines.forEach(function(p) { map.removeLayer(p); });
   legPolylines = [];
+  clearGapLines();
   legs = [];
   updateStats();
   requestScore();
@@ -482,7 +590,8 @@ function rerouteAll() {
       var latLngs = data.points.map(function(p) { return [p[0], p[1]]; });
       var polyline = L.polyline(latLngs, { color: '#2563eb', weight: 3, opacity: 0.5, pane: 'routePane' }).addTo(map);
       legPolylines.push(polyline);
-      legs.push({ points: data.points, duration: data.duration, distance: data.distance });
+      legs.push(legFromResponse(data));
+      noteLegRouted(i);
       saveState();
       updateStats();
       requestScore();
@@ -912,7 +1021,7 @@ function applyRouteState(state) {
     labelCache = state.labelCache;
   }
   waypoints = state.waypoints;
-  legs = state.legs;
+  legs = state.legs.map(normalizeLeg);
   applyingRouteState = true;
   if (state.center != null && state.zoom != null) {
     map.setView(state.center, state.zoom);
@@ -923,6 +1032,7 @@ function applyRouteState(state) {
     var polyline = L.polyline(latLngs, { color: '#2563eb', weight: 3, opacity: 0.5, pane: 'routePane' }).addTo(map);
     legPolylines.push(polyline);
   });
+  legs.forEach(function(leg, i) { drawGapLines(i); });
   refreshMarkers();
   renderWaypointList();
   // Older saved routes (or ones saved before addresses resolved) may lack
@@ -1129,6 +1239,7 @@ function addWaypoint(latlng) {
     waypoints.splice(idx, 0, [latlng.lat, latlng.lng]);
     legPolylines.forEach(function(p) { map.removeLayer(p); });
     legPolylines = [];
+    clearGapLines();
     legs = [];
     refreshMarkers();
     renderWaypointList();
@@ -1184,7 +1295,8 @@ function addWaypoint(latlng) {
       var latLngs = data.points.map(function(p) { return [p[0], p[1]]; });
       var polyline = L.polyline(latLngs, { color: '#2563eb', weight: 3, opacity: 0.5, pane: 'routePane' }).addTo(map);
       legPolylines.push(polyline);
-      legs.push({ points: data.points, duration: data.duration, distance: data.distance });
+      legs.push(legFromResponse(data));
+      noteLegRouted(legs.length - 1);
       saveState();
       updateStats();
       requestScore();
@@ -1208,6 +1320,7 @@ function removeLastWaypoint() {
   if (legPolylines.length > 0) {
     map.removeLayer(legPolylines.pop());
     legs.pop();
+    removeGapLinesForLeg(legs.length);
   }
 
   refreshMarkers();
@@ -1228,6 +1341,7 @@ function clearRoute() {
   scoreGeneration++;
   legPolylines.forEach(function(p) { map.removeLayer(p); });
   legPolylines = [];
+  clearGapLines();
   markers.forEach(function(m) { map.removeLayer(m); });
   markers = [];
   waypoints = [];
@@ -1365,3 +1479,25 @@ function exportRoute(format) {
     showToast('Export failed: ' + err.message);
   });
 }
+
+// Routing health: if the server reports the router is unhealthy (e.g. broken
+// tiles), show a persistent banner. A failed probe shows nothing.
+function showRoutingBanner(message) {
+  var el = document.getElementById('routing-banner');
+  if (!el) return;
+  el.textContent = message;
+  el.style.display = 'block';
+}
+
+function checkRoutingHealth() {
+  fetch('/api/health')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data && data.routing && data.routing.ok === false) {
+        showRoutingBanner(data.routing.message || 'Routing is unavailable.');
+      }
+    })
+    .catch(function() {});
+}
+
+checkRoutingHealth();

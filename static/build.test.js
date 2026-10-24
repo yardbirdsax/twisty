@@ -1052,3 +1052,119 @@ test('toggleWaypointsPanel saves prefs', function() {
   var stored = JSON.parse(ctx.localStorage._data['twisty-ui-prefs']);
   assert.equal(stored.waypointsPanelOpen, true);
 });
+
+// --- snap gap detection ---
+
+test('SNAP_WARN_M is 150', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(ctx.SNAP_WARN_M, 150);
+});
+
+test('legHasGap is true when snap_to_m exceeds the threshold', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(ctx.legHasGap({ snap_to_m: 530, snap_from_m: 10 }), true);
+});
+
+test('legHasGap is true when snap_from_m exceeds the threshold', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(ctx.legHasGap({ snap_to_m: 5, snap_from_m: 151 }), true);
+});
+
+test('legHasGap is false for small snap distances', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(ctx.legHasGap({ snap_to_m: 40, snap_from_m: 12 }), false);
+});
+
+test('legHasGap is false when fields are missing', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(ctx.legHasGap({}), false);
+  assert.equal(ctx.legHasGap(null), false);
+});
+
+test('legHasGap is false at exactly the threshold', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(ctx.legHasGap({ snap_to_m: 150, snap_from_m: 150 }), false);
+});
+
+test('legHasGap accepts stored leg field names', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(ctx.legHasGap({ snapToM: 530, snapFromM: 0 }), true);
+  assert.equal(ctx.legHasGap({ snapToM: 10, snapFromM: 0 }), false);
+});
+
+// --- snap toast message ---
+
+test('snapGapMessage rounds to nearest 10 m', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(ctx.snapGapMessage(530, 3), 'Route ends 530 m from waypoint 3 — the router may not know this road.');
+  assert.equal(ctx.snapGapMessage(534, 3), 'Route ends 530 m from waypoint 3 — the router may not know this road.');
+  assert.equal(ctx.snapGapMessage(536, 3), 'Route ends 540 m from waypoint 3 — the router may not know this road.');
+});
+
+test('snapGapMessage says "starts" for the start side', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(ctx.snapGapMessage(534, 3, true), 'Route starts 530 m from waypoint 3 — the router may not know this road.');
+  assert.equal(ctx.snapGapMessage(534, 3, false), 'Route ends 530 m from waypoint 3 — the router may not know this road.');
+});
+
+test('legGapWarning says starts when the start gap is larger', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.match(ctx.legGapWarning({ snapFromM: 400, snapToM: 20 }, 1), /^Route starts 400 m from waypoint 2 /);
+  assert.match(ctx.legGapWarning({ snapFromM: 10, snapToM: 530 }, 1), /^Route ends 530 m from waypoint 3 /);
+});
+
+test('legGapWarning names the 1-based waypoint with the larger gap', function() {
+  var ctx = loadBuildJS(makeCtx());
+  var toLeg = { snapFromM: 10, snapToM: 530 };
+  assert.match(ctx.legGapWarning(toLeg, 1), /530 m from waypoint 3 /);
+  var fromLeg = { snapFromM: 400, snapToM: 20 };
+  assert.match(ctx.legGapWarning(fromLeg, 1), /400 m from waypoint 2 /);
+  assert.equal(ctx.legGapWarning({ snapFromM: 1, snapToM: 2 }, 0), '');
+});
+
+// --- leg snap state ---
+
+test('legFromResponse stores snap distances and defaults missing to 0', function() {
+  var ctx = loadBuildJS(makeCtx());
+  var leg = ctx.legFromResponse({ points: [[1, 2]], duration: 5, distance: 9, snap_from_m: 12.5, snap_to_m: 530 });
+  assert.equal(leg.snapFromM, 12.5);
+  assert.equal(leg.snapToM, 530);
+  assert.equal(leg.distance, 9);
+  var legacy = ctx.legFromResponse({ points: [], duration: 1, distance: 2 });
+  assert.equal(legacy.snapFromM, 0);
+  assert.equal(legacy.snapToM, 0);
+});
+
+test('saveState/restoreState round-trips snapFromM and snapToM', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.waypoints.push([40, -75], [40.1, -75.1]);
+  ctx.legs.push({ points: [[40, -75], [40.1, -75.1]], duration: 1, distance: 2, snapFromM: 7, snapToM: 530 });
+  ctx.saveState();
+  var ctx2 = makeCtx();
+  ctx2.localStorage._data['twisty-build-state'] = ctx.localStorage._data['twisty-build-state'];
+  ctx2 = loadBuildJS(ctx2);
+  assert.equal(ctx2.legs[0].snapFromM, 7);
+  assert.equal(ctx2.legs[0].snapToM, 530);
+});
+
+test('restoreState loads legacy legs without snap fields as 0', function() {
+  var ctx = makeCtx();
+  ctx.localStorage._data['twisty-build-state'] = JSON.stringify({
+    waypoints: [[40, -75], [40.1, -75.1]],
+    legs: [{ points: [[40, -75], [40.1, -75.1]], duration: 1, distance: 2 }],
+  });
+  ctx = loadBuildJS(ctx);
+  assert.equal(ctx.legs.length, 1);
+  assert.equal(ctx.legs[0].snapFromM, 0);
+  assert.equal(ctx.legs[0].snapToM, 0);
+});
+
+// --- waypoint gap lookup ---
+
+test('waypointGapM reports the larger adjoining gap and 0 when none', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.legs.push({ snapFromM: 0, snapToM: 530 }, { snapFromM: 20, snapToM: 0 });
+  assert.equal(ctx.waypointGapM(0), 0);
+  assert.equal(ctx.waypointGapM(1), 530);
+  assert.equal(ctx.waypointGapM(2), 0);
+});

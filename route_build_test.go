@@ -119,6 +119,173 @@ func TestHandleRouteLeg_UsesConfiguredValhallaURL(t *testing.T) {
 	}
 }
 
+// routeLegSnap runs handleRouteLeg against a stub Valhalla whose route is the
+// given polyline and returns the decoded response.
+func routeLegSnap(t *testing.T, shape [][2]float64, from, to coordJSON) routeLegResponse {
+	t.Helper()
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"trip":{"summary":{"time":60,"length":1.0},"legs":[{"shape":%q,"summary":{"time":60,"length":1.0},"maneuvers":[]}]},"alternates":[]}`, encodeP6Polyline(shape))
+	}))
+	defer stub.Close()
+
+	srv := &buildServer{valhallaURL: stub.URL}
+	body := fmt.Sprintf(`{"from":{"lat":%f,"lon":%f},"to":{"lat":%f,"lon":%f}}`, from.Lat, from.Lon, to.Lat, to.Lon)
+	req := httptest.NewRequest(http.MethodPost, "/api/route-leg", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	srv.handleRouteLeg(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp routeLegResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	return resp
+}
+
+func TestHandleRouteLeg_reportsSnapDistances(t *testing.T) {
+	from := coordJSON{Lat: 40.0, Lon: -75.5}
+	to := coordJSON{Lat: 40.01, Lon: -75.49}
+
+	t.Run("route ends 500 m short of destination", func(t *testing.T) {
+		// 0.0045 degrees of latitude is ~500 m.
+		shape := [][2]float64{{from.Lat, from.Lon}, {to.Lat - 0.0045, to.Lon}}
+		resp := routeLegSnap(t, shape, from, to)
+		if resp.SnapFromM > 5 {
+			t.Errorf("snap_from_m = %v, want ~0", resp.SnapFromM)
+		}
+		if resp.SnapToM < 495 || resp.SnapToM > 505 {
+			t.Errorf("snap_to_m = %v, want ~500", resp.SnapToM)
+		}
+	})
+
+	t.Run("both ends match", func(t *testing.T) {
+		shape := [][2]float64{{from.Lat, from.Lon}, {to.Lat, to.Lon}}
+		resp := routeLegSnap(t, shape, from, to)
+		if resp.SnapFromM > 2 || resp.SnapToM > 2 {
+			t.Errorf("snap = (%v, %v), want ~0", resp.SnapFromM, resp.SnapToM)
+		}
+	})
+}
+
+// healthFromStub serves handler as Valhalla and returns the decoded
+// /api/health routing block.
+func healthFromStub(t *testing.T, handler http.HandlerFunc) routingHealth {
+	t.Helper()
+	stub := httptest.NewServer(handler)
+	defer stub.Close()
+
+	srv := &buildServer{
+		valhallaURL: stub.URL,
+		center:      geocode.Result{Lat: 40.0, Lon: -75.5, DisplayName: "Testville"},
+	}
+	w := httptest.NewRecorder()
+	srv.handleHealth(w, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp struct {
+		Routing routingHealth `json:"routing"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	return resp.Routing
+}
+
+func locateStub(body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, body)
+	}
+}
+
+func TestHandleHealth_noEdges(t *testing.T) {
+	h := healthFromStub(t, locateStub(`[{"edges":[]}]`))
+	if h.OK {
+		t.Error("expected ok=false")
+	}
+	if !strings.Contains(h.Message, "no road data") || !strings.Contains(h.Message, "Testville") {
+		t.Errorf("unexpected message: %q", h.Message)
+	}
+}
+
+func TestHandleHealth_noEdgesAdvisesRebuildForLocalServer(t *testing.T) {
+	h := healthFromStub(t, locateStub(`[{"edges":[]}]`))
+	if !strings.Contains(h.Message, "twisty valhalla clean") {
+		t.Errorf("expected rebuild advice for localhost stub: %q", h.Message)
+	}
+}
+
+func TestIsLocalURL(t *testing.T) {
+	cases := map[string]bool{
+		"http://localhost:8002":   true,
+		"http://127.0.0.1:8002":   true,
+		"http://[::1]:8002":       true,
+		"http://valhalla.example": false,
+		"https://10.0.0.5:8002/":  false,
+		"":                        false,
+		"://bad":                  false,
+	}
+	for u, want := range cases {
+		if got := isLocalURL(u); got != want {
+			t.Errorf("isLocalURL(%q) = %v, want %v", u, got, want)
+		}
+	}
+}
+
+func TestNoRoadDataMessage_remoteOmitsLocalAdvice(t *testing.T) {
+	msg := noRoadDataMessage("Testville", "http://valhalla.example:8002")
+	if strings.Contains(msg, "twisty valhalla") {
+		t.Errorf("remote message must not advise local commands: %q", msg)
+	}
+	if !strings.Contains(msg, "no road data near Testville") || !strings.Contains(msg, "remote") {
+		t.Errorf("unexpected remote message: %q", msg)
+	}
+}
+
+func TestHandleHealth_nearEdgeIsOK(t *testing.T) {
+	h := healthFromStub(t, locateStub(`[{"edges":[{"correlated_lat":40.0,"correlated_lon":-75.5,"distance":12}]}]`))
+	if !h.OK || h.Message != "" || h.SnapM != 12 {
+		t.Errorf("got %+v, want ok with snap_m 12", h)
+	}
+}
+
+func TestHandleHealth_pickNearestEdge(t *testing.T) {
+	h := healthFromStub(t, locateStub(`[{"edges":[{"distance":900},{"distance":30}]}]`))
+	if !h.OK || h.SnapM != 30 {
+		t.Errorf("got %+v, want ok with snap_m 30", h)
+	}
+}
+
+func TestHandleHealth_farEdgeIsNotOK(t *testing.T) {
+	h := healthFromStub(t, locateStub(`[{"edges":[{"correlated_lat":40.0,"correlated_lon":-75.5,"distance":900}]}]`))
+	if h.OK || h.SnapM != 900 {
+		t.Errorf("got %+v, want not ok with snap_m 900", h)
+	}
+	want := "Nearest road to Testville is 900 m away; routing near the map center may be unreliable."
+	if h.Message != want {
+		t.Errorf("message = %q, want %q", h.Message, want)
+	}
+	if strings.Contains(h.Message, "rebuild") {
+		t.Errorf("far-edge message must not advise a rebuild: %q", h.Message)
+	}
+}
+
+func TestHandleHealth_serverError(t *testing.T) {
+	h := healthFromStub(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	})
+	if h.OK || h.SnapM != 0 {
+		t.Errorf("got %+v, want not ok with snap_m 0", h)
+	}
+	if !strings.Contains(h.Message, "unreachable") {
+		t.Errorf("message should mention unreachable: %q", h.Message)
+	}
+}
+
 func TestHandleRouteLeg_badJSON(t *testing.T) {
 	srv := &buildServer{}
 	req := httptest.NewRequest("POST", "/api/route-leg", strings.NewReader("not json"))

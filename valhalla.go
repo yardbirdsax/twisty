@@ -24,6 +24,7 @@ const (
 	valhallaImage         = "ghcr.io/valhalla/valhalla:latest"
 	osmiumImage           = "iboates/osmium"
 	defaultValhallaPort   = 8002
+	builtMarkerName       = ".built"
 )
 
 func newValhallaCmd() *cobra.Command {
@@ -78,17 +79,21 @@ func newValhallaStopCmd() *cobra.Command {
 }
 
 func newValhallaStatusCmd() *cobra.Command {
-	var port int
+	var (
+		port    int
+		dataDir string
+	)
 	cmd := &cobra.Command{
 		Use:           "status",
 		Short:         "Show status of the local Valhalla routing server",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValhallaStatus(port, cmd.ErrOrStderr())
+			return runValhallaStatus(port, dataDir, cmd.ErrOrStderr())
 		},
 	}
 	cmd.Flags().IntVar(&port, "port", defaultValhallaPort, "Port the Valhalla server is running on")
+	cmd.Flags().StringVar(&dataDir, "data-dir", "", "Directory for Valhalla data files")
 	return cmd
 }
 
@@ -147,6 +152,7 @@ func runValhallaStart(regions string, port int, dataDir string, stderr io.Writer
 
 	tilesDir := filepath.Join(dataDir, "tiles")
 	stampFile := filepath.Join(dataDir, ".regions")
+	markerFile := filepath.Join(dataDir, builtMarkerName)
 	pbfDir := resolvePBFDir("")
 
 	if err := os.MkdirAll(pbfDir, 0o755); err != nil {
@@ -212,14 +218,25 @@ func runValhallaStart(regions string, port int, dataDir string, stderr io.Writer
 		downloadProgress.Done()
 	}
 
-	// Build tiles if not already built.
-	entries, _ := os.ReadDir(tilesDir)
-	if len(entries) == 0 {
+	// Build tiles unless a previous build finished and left complete tiles.
+	rebuilt := false
+	if build, reason := needsBuild(dataDir); build {
+		rebuilt = true
+		fmt.Fprintf(stderr, "%s; rebuilding.\n", reason)
+		if err := os.Remove(markerFile); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing build marker: %w", err)
+		}
+		if err := os.RemoveAll(tilesDir); err != nil {
+			return fmt.Errorf("removing tiles dir: %w", err)
+		}
+		if err := os.MkdirAll(tilesDir, 0o755); err != nil {
+			return fmt.Errorf("recreating tiles dir: %w", err)
+		}
 		fmt.Fprintf(stderr, "Building Valhalla tiles...\n")
 
-		// Stamp the intended regions before launching the build so that a
-		// crash or OOM kill does not cause the next invocation to wipe and
-		// restart from scratch when tiles are already partially built.
+		// Stamp the intended regions before launching the build so that the
+		// regions record stays consistent across a crash or OOM kill; the
+		// next invocation still rebuilds, since no marker was written.
 		if err := stampRegions(stampFile, allRegions); err != nil {
 			return err
 		}
@@ -263,6 +280,10 @@ func runValhallaStart(regions string, port int, dataDir string, stderr io.Writer
 		if err := dockerCmdStreaming("docker", buildArgs...); err != nil {
 			return fmt.Errorf("building Valhalla tiles: %w", err)
 		}
+		// Only a build that ran to completion earns the marker.
+		if err := os.WriteFile(markerFile, nil, 0o644); err != nil {
+			return fmt.Errorf("writing build marker: %w", err)
+		}
 	} else {
 		fmt.Fprintf(stderr, "Tiles already exist: %s\n", tilesDir)
 		if err := stampRegions(stampFile, allRegions); err != nil {
@@ -270,10 +291,14 @@ func runValhallaStart(regions string, port int, dataDir string, stderr io.Writer
 		}
 	}
 
-	// If container is already running, just report the URL.
 	if isContainerRunning(valhallaContainerName) {
-		fmt.Fprintf(stderr, "Valhalla routing server already running: http://localhost:%d\n", port)
-		return nil
+		if !rebuilt {
+			fmt.Fprintf(stderr, "Valhalla routing server already running: http://localhost:%d\n", port)
+			return nil
+		}
+		// The running container is serving stale tiles; replace it.
+		fmt.Fprintf(stderr, "Restarting Valhalla routing server to pick up rebuilt tiles.\n")
+		dockerCmd("stop", valhallaContainerName) //nolint:errcheck
 	}
 
 	// Remove any pre-existing stopped container.
@@ -329,16 +354,69 @@ func runValhallaStop(stderr io.Writer) error {
 	return nil
 }
 
-func runValhallaStatus(port int, stderr io.Writer) error {
+func runValhallaStatus(port int, dataDir string, stderr io.Writer) error {
 	if stderr == nil {
 		stderr = os.Stderr
 	}
+	dataDir = resolveValhallaDataDir(dataDir)
 	if isContainerRunning(valhallaContainerName) {
 		fmt.Fprintf(stderr, "Valhalla routing server is running: http://localhost:%d\n", port)
 	} else {
 		fmt.Fprintln(stderr, "Valhalla routing server is not running.")
 	}
+	if ok, problem := tilesComplete(filepath.Join(dataDir, "tiles")); !ok {
+		fmt.Fprintf(stderr, "WARNING: Valhalla tiles on disk are incomplete (%s); run 'twisty valhalla start' to rebuild.\n", problem)
+	}
 	return nil
+}
+
+// tilesComplete reports whether tilesDir (the directory mounted as
+// /custom_files) holds finished Valhalla tiles: at least one .gph file under
+// each of levels 0, 1 and 2. A build killed part-way leaves only some levels.
+func tilesComplete(tilesDir string) (ok bool, problem string) {
+	for _, level := range []string{"0", "1", "2"} {
+		found := false
+		filepath.WalkDir(filepath.Join(tilesDir, "tiles", level), func(path string, d os.DirEntry, err error) error { //nolint:errcheck
+			if err == nil && !d.IsDir() && strings.HasSuffix(path, ".gph") {
+				found = true
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if !found {
+			return false, fmt.Sprintf("no .gph files for level %s", level)
+		}
+	}
+	return true, ""
+}
+
+// leftoverBuildFiles reports whether intermediate *.bin files remain directly
+// in tilesDir/tiles. Finished builds clean these up; interrupted ones do not.
+func leftoverBuildFiles(tilesDir string) bool {
+	matches, _ := filepath.Glob(filepath.Join(tilesDir, "tiles", "*.bin"))
+	return len(matches) > 0
+}
+
+// needsBuild decides whether the tiles under dataDir must be (re)built. Tiles
+// count as built only when the completion marker exists and tilesComplete
+// agrees. Complete tiles without a marker (installs that predate it) get the
+// marker written and are not rebuilt, unless intermediate build files remain,
+// which means the build was interrupted after the tile levels were written.
+func needsBuild(dataDir string) (build bool, reason string) {
+	markerFile := filepath.Join(dataDir, builtMarkerName)
+	tilesDir := filepath.Join(dataDir, "tiles")
+	ok, problem := tilesComplete(tilesDir)
+	if !ok {
+		return true, fmt.Sprintf("Tiles incomplete (%s)", problem)
+	}
+	if _, err := os.Stat(markerFile); err != nil && leftoverBuildFiles(tilesDir) {
+		return true, "Tiles incomplete (leftover intermediate build files from an interrupted build)"
+	}
+	if _, err := os.Stat(markerFile); err != nil {
+		// Best effort: if the write fails we just re-check next time.
+		os.WriteFile(markerFile, nil, 0o644) //nolint:errcheck
+	}
+	return false, ""
 }
 
 func runValhallaClean(dataDir string, stderr io.Writer) error {

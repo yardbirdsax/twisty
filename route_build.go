@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -95,6 +96,7 @@ func execBuild(p buildParams) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", srv.handleIndex)
 	mux.HandleFunc("/api/route-leg", srv.handleRouteLeg)
+	mux.HandleFunc("/api/health", srv.handleHealth)
 	mux.HandleFunc("/api/score", srv.handleScore)
 	mux.HandleFunc("/api/score/viewport", srv.handleViewportScore)
 	mux.HandleFunc("/api/export", srv.handleExport)
@@ -115,6 +117,9 @@ func execBuild(p buildParams) error {
 
 	fmt.Fprintf(os.Stderr, "Map centered on %s (%.5f, %.5f)\n", center.DisplayName, center.Lat, center.Lon)
 	fmt.Fprintf(os.Stderr, "Listening on http://127.0.0.1:%d\n", p.port)
+	if h := probeRouting(p.valhallaURL, center); !h.OK {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", h.Message)
+	}
 	return http.Serve(ln, loggingMiddleware(mux))
 }
 
@@ -313,6 +318,11 @@ type routeLegResponse struct {
 	Points   [][2]float64 `json:"points"`
 	Duration float64      `json:"duration"`
 	Distance float64      `json:"distance"`
+	// SnapFromM and SnapToM are how far (meters) the route's first and last
+	// points are from the requested endpoints. Large values mean Valhalla
+	// snapped to a distant road, typically because of incomplete tiles.
+	SnapFromM float64 `json:"snap_from_m"`
+	SnapToM   float64 `json:"snap_to_m"`
 }
 
 func (s *buildServer) handleRouteLeg(w http.ResponseWriter, r *http.Request) {
@@ -350,9 +360,102 @@ func (s *buildServer) handleRouteLeg(w http.ResponseWriter, r *http.Request) {
 		Duration: best.Duration,
 		Distance: best.Distance,
 	}
+	if n := len(best.Points); n > 0 {
+		resp.SnapFromM = math.Round(geo.Haversine(origin, best.Points[0]))
+		resp.SnapToM = math.Round(geo.Haversine(dest, best.Points[n-1]))
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// healthSnapMaxMeters is the farthest the nearest road may be from the map
+// center before routing is considered unhealthy.
+const healthSnapMaxMeters = 200
+
+// routingHealth is the result of probing Valhalla near the map center.
+type routingHealth struct {
+	OK      bool    `json:"ok"`
+	Message string  `json:"message"`
+	SnapM   float64 `json:"snap_m"`
+}
+
+// isLocalURL reports whether rawURL points at this machine, i.e. at the
+// container that 'twisty valhalla' manages.
+func isLocalURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
+// noRoadDataMessage is the health message for a server that returns no edges
+// near the map center. Rebuild advice applies only to the local container.
+func noRoadDataMessage(name, valhallaURL string) string {
+	if !isLocalURL(valhallaURL) {
+		return fmt.Sprintf("Routing server has no road data near %s. It is a remote server, so check its tiles directly.", name)
+	}
+	return fmt.Sprintf("Routing server has no road data near %s. Its tiles may be incomplete; rebuild with 'twisty valhalla clean' then 'twisty valhalla start'.", name)
+}
+
+// probeRouting asks Valhalla's /locate for the road nearest the map center and
+// reports whether routing looks usable. A server with incomplete tiles
+// answers 200 but returns no edges, or edges far from the point.
+func probeRouting(valhallaURL string, center geocode.Result) routingHealth {
+	if valhallaURL == "" {
+		valhallaURL = route.ValhallaBaseURL
+	}
+	unreachable := func(err error) routingHealth {
+		return routingHealth{Message: "Routing server is unreachable: " + err.Error()}
+	}
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"locations": []map[string]float64{{"lat": center.Lat, "lon": center.Lon}},
+		"verbose":   true,
+	})
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Post(strings.TrimRight(valhallaURL, "/")+"/locate", "application/json", strings.NewReader(string(reqBody)))
+	if err != nil {
+		return unreachable(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return unreachable(fmt.Errorf("HTTP %d", resp.StatusCode))
+	}
+	var locs []struct {
+		Edges []struct {
+			Distance float64 `json:"distance"`
+		} `json:"edges"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&locs); err != nil {
+		return unreachable(err)
+	}
+	if len(locs) == 0 || len(locs[0].Edges) == 0 {
+		return routingHealth{Message: noRoadDataMessage(center.DisplayName, valhallaURL)}
+	}
+	nearest := locs[0].Edges[0].Distance
+	for _, e := range locs[0].Edges[1:] {
+		nearest = math.Min(nearest, e.Distance)
+	}
+	if nearest > healthSnapMaxMeters {
+		return routingHealth{
+			Message: fmt.Sprintf("Nearest road to %s is %.0f m away; routing near the map center may be unreliable.", center.DisplayName, nearest),
+			SnapM:   nearest,
+		}
+	}
+	return routingHealth{OK: true, SnapM: nearest}
+}
+
+func (s *buildServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]routingHealth{
+		"routing": probeRouting(s.valhallaURL, s.center),
+	})
 }
 
 func tilesForPolyline(points [][2]float64, tileSizeDeg float64) []quality.Tile {
@@ -765,10 +868,10 @@ func (s *buildServer) tilesInBBox(west, south, east, north float64) []quality.Ti
 }
 
 type segmentsResponse struct {
-	Type         string            `json:"type"`
-	Features     []geoJSONFeature  `json:"features"`
-	PendingTiles int               `json:"pending_tiles"`
-	FailedTiles  int               `json:"failed_tiles"`
+	Type         string           `json:"type"`
+	Features     []geoJSONFeature `json:"features"`
+	PendingTiles int              `json:"pending_tiles"`
+	FailedTiles  int              `json:"failed_tiles"`
 }
 
 func (s *buildServer) handleSegments(w http.ResponseWriter, r *http.Request) {
