@@ -234,7 +234,7 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 		filename := pbfFilename(region)
 		destPath := filepath.Join(pbfDir, filename)
 		if _, err := os.Stat(destPath); os.IsNotExist(err) {
-			url := geofabrikBaseURL + "/" + region + "-latest.osm.pbf"
+			url := geofabrikPBFURL(geofabrikBaseURL, region)
 			fmt.Fprintf(stderr, "Downloading %s -> %s\n", url, destPath)
 			missingURLs = append(missingURLs, url)
 			missingPaths = append(missingPaths, destPath)

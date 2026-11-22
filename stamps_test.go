@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -114,13 +115,13 @@ func TestBackfillUpstreamStamps_SeedsFromMtime_NoOverwrite(t *testing.T) {
 
 type fixedUpstream map[string]time.Time
 
+func (f fixedUpstream) Download(context.Context, string, string) (UpstreamInfo, error) {
+	return UpstreamInfo{}, errors.New("fixedUpstream: no downloads")
+}
+
 func (f fixedUpstream) Head(_ context.Context, region string) (UpstreamInfo, error) {
 	return UpstreamInfo{LastModified: f[region]}, nil
 }
-
-type noRuntime struct{}
-
-func (noRuntime) IsRunning(string) bool { return false }
 
 func TestUpdateAfterBackfill_UnchangedOnlyIfNotRepublishedSinceMtime(t *testing.T) {
 	root := DataRoot{
@@ -143,7 +144,7 @@ func TestUpdateAfterBackfill_UnchangedOnlyIfNotRepublishedSinceMtime(t *testing.
 			"europe/malta":  mtime.Add(-time.Hour), // published before download finished
 			"europe/monaco": mtime.Add(time.Hour),  // republished since
 		},
-		Runtime:          noRuntime{},
+		Runtime:          newFakeRuntime(),
 		Root:             root,
 		Clock:            func() time.Time { return mtime },
 		PBFDataTimestamp: func(string) (time.Time, bool, error) { return time.Time{}, false, nil },

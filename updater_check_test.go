@@ -54,7 +54,7 @@ func TestUpdate_ForceBypassesUnchangedCheck(t *testing.T) {
 	e := newUpdaterEnv(t)
 	e.load("valhalla", "north-america/us/vermont", t1, t1)
 
-	rep, _ := Update(context.Background(), e.deps(), UpdateOptions{Force: true})
+	rep, _ := Update(context.Background(), e.deps(), UpdateOptions{Force: true, DryRun: true})
 
 	v := findService(t, rep, "valhalla")
 	if v.Outcome != OutcomeChanged {

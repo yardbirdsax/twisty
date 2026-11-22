@@ -54,7 +54,7 @@ func TestE2E_DownloadPBFs(t *testing.T) {
 			t.Logf("PBF already exists: %s", destPath)
 			continue
 		}
-		url := geofabrikBaseURL + "/" + region + "-latest.osm.pbf"
+		url := geofabrikPBFURL(geofabrikBaseURL, region)
 		t.Logf("Downloading %s -> %s", url, destPath)
 		fp := progress.StartFile(destPath, i, len(e2eRegions5), -1)
 		if err := downloadPBF(url, destPath, fp); err != nil {

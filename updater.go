@@ -18,18 +18,15 @@ type UpstreamInfo struct {
 	ContentLength int64
 }
 
-// UpstreamClient talks to the upstream extract provider (Geofabrik). Later
-// tickets add a Download method for fetching changed PBFs.
+// UpstreamClient talks to the upstream extract provider (Geofabrik).
 type UpstreamClient interface {
 	// Head returns the Last-Modified and Content-Length of a region's extract.
 	Head(ctx context.Context, region string) (UpstreamInfo, error)
-}
-
-// ContainerRuntime drives the Docker containers behind the two services. Later
-// tickets add run, stop, remove and readiness-probe methods for the swap
-// sequences.
-type ContainerRuntime interface {
-	IsRunning(name string) bool
+	// Download fetches a region's current extract to destPath, atomically
+	// (nothing is left at destPath or beside it on error), and returns the
+	// upstream Last-Modified of the version it fetched. It does not write the
+	// upstream stamp; the updater does that once the refresh has succeeded.
+	Download(ctx context.Context, region, destPath string) (UpstreamInfo, error)
 }
 
 // DataRoot locates twisty's on-disk state. Tests point it at a temp directory.
@@ -52,6 +49,10 @@ type UpdateDeps struct {
 	// PBFDataTimestamp returns the osmosis_replication_timestamp from a PBF
 	// header (the true age of the data it holds). ok is false if absent.
 	PBFDataTimestamp func(pbfPath string) (ts time.Time, ok bool, err error)
+	// ValhallaPort is the host port of the Valhalla container (0 = default).
+	ValhallaPort int
+	// ReadyTimeout bounds each readiness probe (0 = 5 minutes).
+	ReadyTimeout time.Duration
 }
 
 // ─── options and results ─────────────────────────────────────────────────────
@@ -68,9 +69,11 @@ type Outcome string
 
 const (
 	OutcomeUnchanged Outcome = "unchanged"
-	// OutcomeChanged means upstream has newer data for at least one region.
-	// Refreshing it is implemented by later tickets.
+	// OutcomeChanged means upstream has newer data for at least one region and
+	// the service was not refreshed (a dry run, or refresh not implemented yet).
 	OutcomeChanged Outcome = "changed"
+	// OutcomeUpdated means the service was refreshed and is serving new data.
+	OutcomeUpdated Outcome = "updated"
 	OutcomeFailed  Outcome = "failed"
 )
 
@@ -144,6 +147,17 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 		rep.Services = append(rep.Services, checkService(ctx, deps, opts, svc))
 	}
 	runPreflight(deps, opts, &rep)
+
+	if !opts.DryRun {
+		run := newUpdateRun(deps)
+		for i := range rep.Services {
+			sr := &rep.Services[i]
+			// Overpass refresh arrives with its own ticket; it stays "changed".
+			if sr.Service == "valhalla" && sr.Outcome == OutcomeChanged {
+				run.updateValhalla(ctx, sr)
+			}
+		}
+	}
 	return rep, nil
 }
 

@@ -66,7 +66,7 @@ func runUpdate(ctx context.Context, opts UpdateOptions, out io.Writer) error {
 
 func productionUpdateDeps() UpdateDeps {
 	return UpdateDeps{
-		Upstream: geofabrikUpstream{client: http.DefaultClient},
+		Upstream: geofabrikUpstream{client: http.DefaultClient, progress: newDownloadProgress(os.Stderr)},
 		Runtime:  dockerRuntime{},
 		Root: DataRoot{
 			OverpassDir: resolveOverpassDataDir(""),
@@ -82,11 +82,43 @@ func productionUpdateDeps() UpdateDeps {
 	}
 }
 
-// geofabrikUpstream is the production UpstreamClient.
-type geofabrikUpstream struct{ client *http.Client }
+// geofabrikUpstream is the production UpstreamClient. baseURL defaults to
+// Geofabrik; progress (optional) reports download progress.
+type geofabrikUpstream struct {
+	client   *http.Client
+	baseURL  string
+	progress DownloadProgress
+}
+
+func (g geofabrikUpstream) url(region string) string {
+	base := g.baseURL
+	if base == "" {
+		base = geofabrikBaseURL
+	}
+	return geofabrikPBFURL(base, region)
+}
+
+func (g geofabrikUpstream) Download(ctx context.Context, region, destPath string) (UpstreamInfo, error) {
+	var fp FileDownloadProgress = NoopFileDownloadProgress{}
+	if g.progress != nil {
+		fp = g.progress.StartFile(destPath, 0, 1, -1)
+	}
+	h, err := fetchToFile(ctx, g.client, g.url(region), destPath, fp)
+	if err != nil {
+		return UpstreamInfo{}, err
+	}
+	fp.FileComplete()
+	lm, err := http.ParseTime(h.Get("Last-Modified"))
+	if err != nil {
+		// No usable header: the zero time makes the region count as changed
+		// again on the next run, the safe direction.
+		return UpstreamInfo{}, nil
+	}
+	return UpstreamInfo{LastModified: lm.UTC()}, nil
+}
 
 func (g geofabrikUpstream) Head(ctx context.Context, region string) (UpstreamInfo, error) {
-	url := geofabrikBaseURL + "/" + region + "-latest.osm.pbf"
+	url := g.url(region)
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return UpstreamInfo{}, err
@@ -105,11 +137,6 @@ func (g geofabrikUpstream) Head(ctx context.Context, region string) (UpstreamInf
 	}
 	return UpstreamInfo{LastModified: lm.UTC(), ContentLength: resp.ContentLength}, nil
 }
-
-// dockerRuntime is the production ContainerRuntime, over the existing docker helpers.
-type dockerRuntime struct{}
-
-func (dockerRuntime) IsRunning(name string) bool { return isContainerRunning(name) }
 
 func diskFreeBytes(path string) (uint64, error) {
 	var st syscall.Statfs_t
@@ -131,7 +158,7 @@ func readPBFDataTimestamp(path string) (time.Time, bool, error) {
 // ─── output ──────────────────────────────────────────────────────────────────
 
 func renderUpdateReport(w io.Writer, rep UpdateReport, opts UpdateOptions) {
-	anyChanged := false
+	anyChanged, anyUpdated := false, false
 	for _, s := range rep.Services {
 		fmt.Fprintf(w, "%s: %s", s.Service, s.Outcome)
 		if s.Detail != "" {
@@ -155,15 +182,18 @@ func renderUpdateReport(w io.Writer, rep UpdateReport, opts UpdateOptions) {
 		if s.Outcome == OutcomeChanged {
 			anyChanged = true
 		}
+		if s.Outcome == OutcomeUpdated {
+			anyUpdated = true
+		}
 	}
 	renderPreflight(w, rep.Preflight)
 	switch {
 	case opts.DryRun:
 		fmt.Fprintln(w, "dry run: nothing was modified")
-	case !anyChanged && !rep.Failed():
+	case !anyChanged && !anyUpdated && !rep.Failed():
 		fmt.Fprintln(w, "Nothing to update.")
 	case anyChanged:
-		fmt.Fprintln(w, "Refreshing changed data is not implemented yet; nothing was modified.")
+		fmt.Fprintln(w, "Refreshing changed Overpass data is not implemented yet; it was not modified.")
 	}
 }
 

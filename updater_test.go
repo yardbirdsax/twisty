@@ -16,6 +16,24 @@ type fakeUpstream struct {
 	info  map[string]UpstreamInfo
 	err   map[string]error
 	heads []string
+	// downloads lists regions fetched, in order. Download writes
+	// "<region> @ <Last-Modified>" to destPath so tests can tell versions apart;
+	// downloadErr makes a region's download fail.
+	downloads   []string
+	downloadErr map[string]error
+}
+
+func (f *fakeUpstream) Download(_ context.Context, region, destPath string) (UpstreamInfo, error) {
+	f.downloads = append(f.downloads, region)
+	if err := f.downloadErr[region]; err != nil {
+		return UpstreamInfo{}, err
+	}
+	info, ok := f.info[region]
+	if !ok {
+		return UpstreamInfo{}, fmt.Errorf("fake upstream: unknown region %q", region)
+	}
+	body := fmt.Sprintf("%s @ %s", region, info.LastModified.Format(time.RFC3339))
+	return info, os.WriteFile(destPath, []byte(body), 0o644)
 }
 
 func (f *fakeUpstream) Head(_ context.Context, region string) (UpstreamInfo, error) {
@@ -28,15 +46,6 @@ func (f *fakeUpstream) Head(_ context.Context, region string) (UpstreamInfo, err
 		return UpstreamInfo{}, fmt.Errorf("fake upstream: unknown region %q", region)
 	}
 	return info, nil
-}
-
-type fakeRuntime struct {
-	calls []string
-}
-
-func (f *fakeRuntime) IsRunning(name string) bool {
-	f.calls = append(f.calls, "IsRunning "+name)
-	return true
 }
 
 // updaterEnv is a temp-dir data root plus fakes, wired into UpdateDeps.
@@ -59,8 +68,8 @@ func newUpdaterEnv(t *testing.T) *updaterEnv {
 			ValhallaDir: filepath.Join(base, "valhalla"),
 			PBFDir:      filepath.Join(base, "pbf"),
 		},
-		upstream: &fakeUpstream{info: map[string]UpstreamInfo{}, err: map[string]error{}},
-		runtime:  &fakeRuntime{},
+		upstream: &fakeUpstream{info: map[string]UpstreamInfo{}, err: map[string]error{}, downloadErr: map[string]error{}},
+		runtime:  newFakeRuntime(),
 		now:      time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC),
 		headers:  map[string]time.Time{},
 	}
