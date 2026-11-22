@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -120,140 +119,60 @@ func atStage(stage string, err error) error {
 	return &stageError{stage: stage, err: err}
 }
 
-// updateValhalla refreshes the Valhalla tiles for the changed regions in sr.
+// refreshValhalla refreshes the Valhalla tiles for the changed regions in sr.
 // The old container keeps serving while new tiles build into a staging
 // directory beside the live ones. The swap is stop, remove, move, run; the old
 // tiles are deleted only once the new container answers /status. On any
 // failure the staging data is discarded and the old tiles and container are
-// restored, and sr is marked failed with the stage that broke.
-func (u *updateRun) updateValhalla(ctx context.Context, sr *ServiceReport) {
-	if err := u.runValhallaUpdate(ctx, sr); err != nil {
-		sr.Outcome = OutcomeFailed
-		sr.Detail = err.Error()
-		return
-	}
-	sr.Outcome = OutcomeUpdated
-}
-
-func (u *updateRun) runValhallaUpdate(ctx context.Context, sr *ServiceReport) error {
+// restored, and the error names the stage that broke. The returned detail
+// carries warnings about cleanup that failed after the new data went live.
+func (u *updateRun) refreshValhalla(ctx context.Context, sr *ServiceReport) (string, error) {
 	deps := u.deps
-	rt := deps.Runtime
 	dir := deps.Root.ValhallaDir
-	all := loadedRegions(deps.Root, ServiceValhalla)
-	var changed []string
-	for _, r := range sr.Regions {
-		if r.Changed {
-			changed = append(changed, r.Region)
-		}
+
+	if err := u.fetchRegions(ctx, ServiceValhalla, sr.changedRegions()); err != nil {
+		return "", atStage(stageDownload, err)
 	}
 
-	// Stage: download.
-	if err := u.fetchRegions(ctx, ServiceValhalla, changed); err != nil {
-		return atStage(stageDownload, err)
-	}
-
-	// Stage: build into staging while the old container keeps serving.
-	staging := filepath.Join(dir, "tiles.staging")
+	// Build into staging while the old container keeps serving.
 	live := filepath.Join(dir, "tiles")
-	old := filepath.Join(dir, "tiles.old")
-	if err := u.buildValhallaTiles(ctx, all, staging); err != nil {
-		os.RemoveAll(staging)
-		return atStage(stageBuild, err)
-	}
-
-	// Recover from a crash that died between the two renames of a swap.
-	if _, err := os.Stat(live); os.IsNotExist(err) {
-		if _, oldErr := os.Stat(old); oldErr == nil {
-			if err := os.Rename(old, live); err != nil {
-				os.RemoveAll(staging)
-				return atStage(stageSwap, fmt.Errorf("restoring tiles left by an interrupted swap: %w", err))
-			}
-		}
-	}
-	os.RemoveAll(old)
-
 	absLive, err := filepath.Abs(live)
 	if err != nil {
-		os.RemoveAll(staging)
-		return atStage(stageSwap, err)
+		return "", atStage(stageSwap, err)
 	}
-	port := deps.ValhallaPort
-	if port == 0 {
-		port = defaultValhallaPort
+	port := deps.valhallaPort()
+	d := dirSwap{
+		container: valhallaContainerName,
+		live:      live,
+		staging:   filepath.Join(dir, "tiles.staging"),
+		old:       filepath.Join(dir, "tiles.old"),
+		noun:      "tiles",
+		spec:      valhallaContainerSpec(port, absLive),
+		ready: func(ctx context.Context) error {
+			return u.waitReady(ctx, valhallaStatusURL(port), defaultReadyTimeout)
+		},
 	}
-	spec := valhallaContainerSpec(port, absLive)
-	wasRunning := rt.IsRunning(valhallaContainerName)
+	if err := u.buildValhallaTiles(ctx, loadedRegions(deps.Root, ServiceValhalla), d.staging); err != nil {
+		os.RemoveAll(d.staging)
+		return "", atStage(stageBuild, err)
+	}
+	if err := restoreInterruptedSwap(d); err != nil {
+		os.RemoveAll(d.staging)
+		return "", atStage(stageSwap, err)
+	}
 
-	// Stage: swap, then probe the new container.
-	movedOld, movedNew := false, false
-	swapErr := func() error {
-		if err := rt.Stop(ctx, valhallaContainerName); err != nil {
-			return atStage(stageSwap, err)
-		}
-		if err := rt.Remove(ctx, valhallaContainerName); err != nil {
-			return atStage(stageSwap, err)
-		}
-		if err := os.Rename(live, old); err != nil {
-			return atStage(stageSwap, err)
-		}
-		movedOld = true
-		if err := os.Rename(staging, live); err != nil {
-			return atStage(stageSwap, err)
-		}
-		movedNew = true
-		if err := rt.Run(ctx, spec); err != nil {
-			return atStage(stageSwap, err)
-		}
-		timeout := deps.ReadyTimeout
-		if timeout == 0 {
-			timeout = defaultReadyTimeout
-		}
-		probeCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		if err := rt.WaitReady(probeCtx, valhallaStatusURL(port)); err != nil {
-			return atStage(stageProbe, err)
-		}
-		return nil
-	}()
-
-	if swapErr != nil {
-		var notes []string
-		// Rollback uses a context that survives cancellation of ctx itself.
-		rctx := context.WithoutCancel(ctx)
-		rt.Stop(rctx, valhallaContainerName)   //nolint:errcheck
-		rt.Remove(rctx, valhallaContainerName) //nolint:errcheck
-		if movedNew {
-			if err := os.RemoveAll(live); err != nil {
-				notes = append(notes, fmt.Sprintf("removing new tiles: %v", err))
-			}
-		}
-		if movedOld {
-			if err := os.Rename(old, live); err != nil {
-				notes = append(notes, fmt.Sprintf("restoring old tiles from %s: %v", old, err))
-			}
-		}
-		os.RemoveAll(staging)
-		if wasRunning {
-			if err := rt.Run(rctx, spec); err != nil {
-				notes = append(notes, fmt.Sprintf("restarting old container: %v", err))
-			} else if err := rt.WaitReady(rctx, valhallaStatusURL(port)); err != nil {
-				notes = append(notes, fmt.Sprintf("old container did not become ready: %v", err))
-			}
-		}
-		if len(notes) > 0 {
-			return fmt.Errorf("%w; rollback problems: %s", swapErr, strings.Join(notes, "; "))
-		}
-		return fmt.Errorf("%w (rolled back; old tiles and container restored)", swapErr)
+	if err := u.swap(ctx, d); err != nil {
+		return "", err
 	}
 
 	// The new container passed its probe: only now is the old data expendable.
-	if err := os.RemoveAll(old); err != nil {
-		return atStage(stageCleanup, err)
-	}
+	// The new data is live, so failures from here on are warnings.
+	var warnings []string
+	warnings = append(warnings, discardOld(d.old, d.noun))
 	if err := os.WriteFile(filepath.Join(dir, builtMarkerName), nil, 0o644); err != nil {
-		return atStage(stageCleanup, err)
+		warnings = append(warnings, warning("could not record the tiles as built: %v", err))
 	}
-	return nil
+	return joinDetail(warnings...), nil
 }
 
 // buildValhallaTiles builds tiles for all regions into staging (merging their

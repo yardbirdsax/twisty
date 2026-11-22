@@ -16,12 +16,12 @@ const (
 	// defaultOverpassStagingPort is the spare host port the temporary staging
 	// container listens on while the live container keeps serving.
 	defaultOverpassStagingPort = 8081
+	// defaultOverpassImportTimeout bounds the staged import (hours in practice).
+	defaultOverpassImportTimeout = 6 * time.Hour
 	// overpassImportedMarker lives in the database directory and records that
 	// an import into it completed and the container served from it. It lets
 	// `start` know the merged archive is no longer needed.
-	// defaultOverpassImportTimeout bounds the staged import (hours in practice).
-	defaultOverpassImportTimeout = 6 * time.Hour
-	overpassImportedMarker       =".twisty-imported"
+	overpassImportedMarker = ".twisty-imported"
 )
 
 // overpassContainerSpec describes an Overpass container serving (or importing
@@ -72,210 +72,167 @@ func markOverpassImported(dbDir string) error {
 	return os.WriteFile(filepath.Join(dbDir, overpassImportedMarker), nil, 0o644)
 }
 
-// updateOverpass refreshes the Overpass database for the changed regions in
-// sr. The new database is imported by a temporary staging container on a spare
-// port while the live container keeps serving; the swap is stop, move, start.
-// The old database is deleted only once the new container answers its probe,
-// and on any failure it is moved back and the old container restarted.
-func (u *updateRun) updateOverpass(ctx context.Context, sr *ServiceReport) {
-	detail, err := u.runOverpassUpdate(ctx, sr)
-	if err != nil {
-		sr.Outcome = OutcomeFailed
-		sr.Detail = err.Error()
-		return
-	}
-	sr.Outcome = OutcomeUpdated
-	sr.Detail = detail
+// overpassPaths are the on-disk locations of an Overpass refresh: the live and
+// staging databases, where the replaced one waits, and the merged archive.
+type overpassPaths struct {
+	live, staging, old  string
+	absLive, absStaging string
+	absMerged           string
 }
 
-func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (string, error) {
+func newOverpassPaths(dir string) (overpassPaths, error) {
+	p := overpassPaths{
+		live:    filepath.Join(dir, "db"),
+		staging: filepath.Join(dir, "db.staging"),
+		old:     filepath.Join(dir, "db.old"),
+	}
+	var err error
+	if p.absLive, err = filepath.Abs(p.live); err != nil {
+		return p, err
+	}
+	if p.absStaging, err = filepath.Abs(p.staging); err != nil {
+		return p, err
+	}
+	p.absMerged, err = filepath.Abs(filepath.Join(dir, "merged.osm.bz2"))
+	return p, err
+}
+
+// prepareOverpassData downloads the changed regions and re-converts them into
+// the merged archive, both while the old database still serves, so a failure
+// costs no downtime and loses nothing. Shared by the staged and in-place
+// refreshes.
+func (u *updateRun) prepareOverpassData(ctx context.Context, sr *ServiceReport) error {
+	if err := u.fetchRegions(ctx, ServiceOverpass, sr.changedRegions()); err != nil {
+		return atStage(stageDownload, err)
+	}
+	if err := u.convertOverpass(ctx, loadedRegions(u.deps.Root, ServiceOverpass)); err != nil {
+		return atStage(stageConvert, err)
+	}
+	return nil
+}
+
+// refreshOverpassStaged refreshes the Overpass database for the changed
+// regions in sr. The new database is imported by a temporary staging container
+// on a spare port while the live container keeps serving; the swap is stop,
+// move, start. The old database is deleted only once the new container answers
+// its probe, and on any failure it is moved back and the old container
+// restarted. The returned detail says what was cleared and carries warnings
+// about cleanup that failed after the new data went live.
+func (u *updateRun) refreshOverpassStaged(ctx context.Context, sr *ServiceReport) (string, error) {
 	deps := u.deps
-	rt := deps.Runtime
-	liveName, stagingName := deps.overpassNames()
-	dir := deps.Root.OverpassDir
-	all := loadedRegions(deps.Root, ServiceOverpass)
-	var changed []string
-	for _, r := range sr.Regions {
-		if r.Changed {
-			changed = append(changed, r.Region)
-		}
+	liveName, _ := deps.overpassNames()
+	if err := u.prepareOverpassData(ctx, sr); err != nil {
+		return "", err
 	}
-
-	// Stage: download, then convert changed regions and rebuild the archive.
-	if err := u.fetchRegions(ctx, ServiceOverpass, changed); err != nil {
-		return "", atStage(stageDownload, err)
-	}
-	if err := u.convertOverpass(ctx, all); err != nil {
-		return "", atStage(stageConvert, err)
-	}
-
-	live := filepath.Join(dir, "db")
-	staging := filepath.Join(dir, "db.staging")
-	old := filepath.Join(dir, "db.old")
-	merged := filepath.Join(dir, "merged.osm.bz2")
-	absLive, err := filepath.Abs(live)
+	p, err := newOverpassPaths(deps.Root.OverpassDir)
 	if err != nil {
 		return "", atStage(stageImport, err)
 	}
-	absStaging, err := filepath.Abs(staging)
-	if err != nil {
-		return "", atStage(stageImport, err)
+	port := deps.overpassPort()
+	d := dirSwap{
+		container: liveName,
+		live:      p.live,
+		staging:   p.staging,
+		old:       p.old,
+		noun:      "database",
+		spec:      overpassContainerSpec(liveName, port, p.absLive, p.absMerged),
+		ready: func(ctx context.Context) error {
+			return u.waitReady(ctx, overpassReadyURL(port), defaultReadyTimeout)
+		},
 	}
-	absMerged, err := filepath.Abs(merged)
-	if err != nil {
-		return "", atStage(stageImport, err)
+	if err := restoreInterruptedSwap(d); err != nil {
+		return "", atStage(stageSwap, err)
 	}
-	port := deps.OverpassPort
-	if port == 0 {
-		port = defaultOverpassPort
+	if err := u.importIntoStaging(ctx, p); err != nil {
+		return "", err
 	}
-	stagePort := deps.OverpassStagingPort
-	if stagePort == 0 {
-		stagePort = defaultOverpassStagingPort
-	}
-	probe := func(ctx context.Context, port int, dflt time.Duration) error {
-		timeout := deps.ReadyTimeout
-		if timeout == 0 {
-			timeout = dflt
-		}
-		pctx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		return rt.WaitReady(pctx, overpassReadyURL(port))
-	}
-
-	// Recover from a crash that died between the two renames of a swap.
-	if _, err := os.Stat(live); os.IsNotExist(err) {
-		if _, oldErr := os.Stat(old); oldErr == nil {
-			if err := os.Rename(old, live); err != nil {
-				return "", atStage(stageSwap, fmt.Errorf("restoring database left by an interrupted swap: %w", err))
-			}
-		}
-	}
-	os.RemoveAll(old)
-
-	// Stage: import into a fresh staging database while the old container serves.
-	discardStaging := func() {
-		rctx := context.WithoutCancel(ctx)
-		rt.Stop(rctx, stagingName)   //nolint:errcheck
-		rt.Remove(rctx, stagingName) //nolint:errcheck
-		os.RemoveAll(staging)
-	}
-	if err := os.RemoveAll(staging); err != nil {
-		return "", atStage(stageImport, err)
-	}
-	if err := os.MkdirAll(staging, 0o755); err != nil {
-		return "", atStage(stageImport, err)
-	}
-	rt.Remove(ctx, stagingName) //nolint:errcheck // stale one from a crashed run
-	stageSpec := overpassContainerSpec(stagingName, stagePort, absStaging, absMerged)
-	if err := rt.Run(ctx, stageSpec); err != nil {
-		discardStaging()
-		return "", atStage(stageImport, err)
-	}
-	if err := probe(ctx, stagePort, defaultOverpassImportTimeout); err != nil {
-		discardStaging()
-		return "", atStage(stageImport, err)
-	}
-	if err := markOverpassImported(staging); err != nil {
-		discardStaging()
-		return "", atStage(stageImport, err)
-	}
-	if err := rt.Stop(ctx, stagingName); err != nil {
-		discardStaging()
-		return "", atStage(stageImport, err)
-	}
-	if err := rt.Remove(ctx, stagingName); err != nil {
-		discardStaging()
-		return "", atStage(stageImport, err)
-	}
-
-	// Stage: swap, then probe the new container.
-	liveSpec := overpassContainerSpec(liveName, port, absLive, absMerged)
-	wasRunning := rt.IsRunning(liveName)
-	movedOld, movedNew := false, false
-	swapErr := func() error {
-		if err := rt.Stop(ctx, liveName); err != nil {
-			return atStage(stageSwap, err)
-		}
-		if err := rt.Remove(ctx, liveName); err != nil {
-			return atStage(stageSwap, err)
-		}
-		if err := os.Rename(live, old); err != nil {
-			return atStage(stageSwap, err)
-		}
-		movedOld = true
-		if err := os.Rename(staging, live); err != nil {
-			return atStage(stageSwap, err)
-		}
-		movedNew = true
-		if err := rt.Run(ctx, liveSpec); err != nil {
-			return atStage(stageSwap, err)
-		}
-		if err := probe(ctx, port, defaultReadyTimeout); err != nil {
-			return atStage(stageProbe, err)
-		}
-		return nil
-	}()
-
-	if swapErr != nil {
-		var notes []string
-		rctx := context.WithoutCancel(ctx)
-		rt.Stop(rctx, liveName)   //nolint:errcheck
-		rt.Remove(rctx, liveName) //nolint:errcheck
-		if movedNew {
-			if err := os.RemoveAll(live); err != nil {
-				notes = append(notes, fmt.Sprintf("removing new database: %v", err))
-			}
-		}
-		if movedOld {
-			if err := os.Rename(old, live); err != nil {
-				notes = append(notes, fmt.Sprintf("restoring old database from %s: %v", old, err))
-			}
-		}
-		os.RemoveAll(staging)
-		if wasRunning {
-			if err := rt.Run(rctx, liveSpec); err != nil {
-				notes = append(notes, fmt.Sprintf("restarting old container: %v", err))
-			} else if err := probe(rctx, port, defaultReadyTimeout); err != nil {
-				notes = append(notes, fmt.Sprintf("old container did not become ready: %v", err))
-			}
-		}
-		if len(notes) > 0 {
-			return "", fmt.Errorf("%w; rollback problems: %s", swapErr, strings.Join(notes, "; "))
-		}
-		return "", fmt.Errorf("%w (rolled back; old database and container restored)", swapErr)
+	if err := u.swap(ctx, d); err != nil {
+		return "", err
 	}
 
 	// The new container passed its probe: only now is the old data expendable.
-	if err := os.RemoveAll(old); err != nil {
-		return "", atStage(stageCleanup, err)
-	}
+	// The new data is live, so failures from here on are warnings.
+	cleared, cacheWarnings := clearDerivedCaches(deps.Root)
+	return joinDetail(discardOld(d.old, d.noun), cleared, cacheWarnings), nil
+}
 
-	return clearDerivedCaches(deps.Root)
+// importIntoStaging imports the merged archive into a fresh staging database
+// with a temporary staging container, while the live container keeps serving.
+// On failure the staging container and database are discarded.
+func (u *updateRun) importIntoStaging(ctx context.Context, p overpassPaths) error {
+	deps := u.deps
+	rt := deps.Runtime
+	_, stagingName := deps.overpassNames()
+	stagePort := deps.overpassStagingPort()
+
+	fail := func(err error) error {
+		rctx := context.WithoutCancel(ctx)
+		rt.Stop(rctx, stagingName)   //nolint:errcheck
+		rt.Remove(rctx, stagingName) //nolint:errcheck
+		os.RemoveAll(p.staging)
+		return atStage(stageImport, err)
+	}
+	if err := os.RemoveAll(p.staging); err != nil {
+		return atStage(stageImport, err)
+	}
+	if err := os.MkdirAll(p.staging, 0o755); err != nil {
+		return atStage(stageImport, err)
+	}
+	rt.Remove(ctx, stagingName) //nolint:errcheck // stale one from a crashed run
+	if err := rt.Run(ctx, overpassContainerSpec(stagingName, stagePort, p.absStaging, p.absMerged)); err != nil {
+		return fail(err)
+	}
+	if err := u.waitReady(ctx, overpassReadyURL(stagePort), defaultOverpassImportTimeout); err != nil {
+		return fail(err)
+	}
+	if err := markOverpassImported(p.staging); err != nil {
+		return fail(err)
+	}
+	if err := rt.Stop(ctx, stagingName); err != nil {
+		return fail(err)
+	}
+	if err := rt.Remove(ctx, stagingName); err != nil {
+		return fail(err)
+	}
+	return nil
 }
 
 // clearDerivedCaches runs after Overpass data changed: every derived result is
 // stale, and tiles are not tracked by region, so both caches are cleared
-// entirely. It returns a report line naming the caches that held entries.
-func clearDerivedCaches(root DataRoot) (string, error) {
-	var removed []string
-	for _, cache := range []string{root.TileCacheDir, root.ScoreCacheDir} {
-		if cache == "" {
-			continue
-		}
-		entries, _ := os.ReadDir(cache)
+// entirely. It returns a report line saying what was removed from which cache,
+// and a warning line for anything that could not be removed (the data is
+// already live, so that is not a failure).
+func clearDerivedCaches(root DataRoot) (cleared, warnings string) {
+	var removed, problems []string
+	for _, c := range root.derivedCaches() {
+		entries, _ := os.ReadDir(c.dir)
 		if len(entries) == 0 {
 			continue
 		}
+		n := 0
 		for _, en := range entries {
-			if err := os.RemoveAll(filepath.Join(cache, en.Name())); err != nil {
-				return "", atStage(stageCache, err)
+			if err := os.RemoveAll(filepath.Join(c.dir, en.Name())); err != nil {
+				problems = append(problems, fmt.Sprintf("%s %s: %v", c.label, c.dir, err))
+				continue
 			}
+			n++
 		}
-		removed = append(removed, cache)
+		if n > 0 {
+			removed = append(removed, fmt.Sprintf("%s %s (%d %s)", c.label, c.dir, n, plural(n, "entry", "entries")))
+		}
 	}
 	if len(removed) > 0 {
-		return "cleared caches: " + strings.Join(removed, ", "), nil
+		cleared = "cleared " + strings.Join(removed, ", ")
 	}
-	return "", nil
+	if len(problems) > 0 {
+		warnings = warning("the update succeeded but could not fully clear: %s", strings.Join(problems, "; "))
+	}
+	return cleared, warnings
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }

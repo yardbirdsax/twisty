@@ -39,6 +39,21 @@ type DataRoot struct {
 	ScoreCacheDir string
 }
 
+type namedDir struct{ label, dir string }
+
+// derivedCaches lists the configured derived Overpass caches, labelled for
+// messages.
+func (r DataRoot) derivedCaches() []namedDir {
+	var out []namedDir
+	if r.TileCacheDir != "" {
+		out = append(out, namedDir{"tile cache", r.TileCacheDir})
+	}
+	if r.ScoreCacheDir != "" {
+		out = append(out, namedDir{"score cache", r.ScoreCacheDir})
+	}
+	return out
+}
+
 // UpdateDeps bundles everything the updater touches outside itself.
 type UpdateDeps struct {
 	Upstream  UpstreamClient
@@ -136,6 +151,29 @@ type ServiceReport struct {
 	Regions []RegionStatus
 }
 
+// changedRegions lists the regions of this service that need refreshing.
+func (sr ServiceReport) changedRegions() []string {
+	var out []string
+	for _, r := range sr.Regions {
+		if r.Changed {
+			out = append(out, r.Region)
+		}
+	}
+	return out
+}
+
+// finish records the result of a refresh: failed with the error, or updated
+// with detail (what was cleared, plus any warnings).
+func (sr *ServiceReport) finish(detail string, err error) {
+	if err != nil {
+		sr.Outcome = OutcomeFailed
+		sr.Detail = err.Error()
+		return
+	}
+	sr.Outcome = OutcomeUpdated
+	sr.Detail = detail
+}
+
 type UpdateReport struct {
 	Services []ServiceReport
 	// Preflight is the disk-space check; nil when nothing changed.
@@ -190,11 +228,11 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 			}
 			switch {
 			case sr.Service == ServiceValhalla:
-				run.updateValhalla(ctx, sr)
+				sr.finish(run.refreshValhalla(ctx, sr))
 			case sr.Service == ServiceOverpass && opts.InPlace:
-				run.updateOverpassInPlace(ctx, sr)
+				sr.finish(run.refreshOverpassInPlace(ctx, sr))
 			case sr.Service == ServiceOverpass:
-				run.updateOverpass(ctx, sr)
+				sr.finish(run.refreshOverpassStaged(ctx, sr))
 			}
 		}
 		run.stampRefreshed(rep.Services)
@@ -271,4 +309,3 @@ func loadedRegions(root DataRoot, svc Service) []string {
 	}
 	return out
 }
-
