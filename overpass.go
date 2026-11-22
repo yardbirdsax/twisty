@@ -55,6 +55,7 @@ func newOverpassStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "start",
 		Short:         "Start the local Overpass API container",
+		PreRunE:       refuseDuringUpdate,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -98,6 +99,7 @@ func newOverpassCleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "clean",
 		Short:         "Stop the container and remove all Overpass data",
+		PreRunE:       refuseDuringUpdate,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

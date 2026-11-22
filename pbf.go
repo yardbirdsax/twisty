@@ -119,6 +119,9 @@ func downloadPBF(url, destPath string, fp FileDownloadProgress) error {
 	if err := os.Rename(tmpName, destPath); err != nil {
 		return fmt.Errorf("renaming temp file: %w", err)
 	}
+	if err := recordUpstreamStampForDownload(destPath, resp.Header); err != nil {
+		return fmt.Errorf("recording upstream stamp: %w", err)
+	}
 	fp.FileComplete()
 	return nil
 }
