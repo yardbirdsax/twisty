@@ -91,6 +91,7 @@ func (u *updateRun) updateOverpass(ctx context.Context, sr *ServiceReport) {
 func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (string, error) {
 	deps := u.deps
 	rt := deps.Runtime
+	liveName, stagingName := deps.overpassNames()
 	dir := deps.Root.OverpassDir
 	all := loadedRegions(deps.Root, "overpass")
 	var changed []string
@@ -155,8 +156,8 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 	// Stage: import into a fresh staging database while the old container serves.
 	discardStaging := func() {
 		rctx := context.WithoutCancel(ctx)
-		rt.Stop(rctx, overpassStagingContainerName)   //nolint:errcheck
-		rt.Remove(rctx, overpassStagingContainerName) //nolint:errcheck
+		rt.Stop(rctx, stagingName)   //nolint:errcheck
+		rt.Remove(rctx, stagingName) //nolint:errcheck
 		os.RemoveAll(staging)
 	}
 	if err := os.RemoveAll(staging); err != nil {
@@ -165,8 +166,8 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 	if err := os.MkdirAll(staging, 0o755); err != nil {
 		return "", atStage("import", err)
 	}
-	rt.Remove(ctx, overpassStagingContainerName) //nolint:errcheck // stale one from a crashed run
-	stageSpec := overpassContainerSpec(overpassStagingContainerName, stagePort, absStaging, absMerged)
+	rt.Remove(ctx, stagingName) //nolint:errcheck // stale one from a crashed run
+	stageSpec := overpassContainerSpec(stagingName, stagePort, absStaging, absMerged)
 	if err := rt.Run(ctx, stageSpec); err != nil {
 		discardStaging()
 		return "", atStage("import", err)
@@ -179,24 +180,24 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 		discardStaging()
 		return "", atStage("import", err)
 	}
-	if err := rt.Stop(ctx, overpassStagingContainerName); err != nil {
+	if err := rt.Stop(ctx, stagingName); err != nil {
 		discardStaging()
 		return "", atStage("import", err)
 	}
-	if err := rt.Remove(ctx, overpassStagingContainerName); err != nil {
+	if err := rt.Remove(ctx, stagingName); err != nil {
 		discardStaging()
 		return "", atStage("import", err)
 	}
 
 	// Stage: swap, then probe the new container.
-	liveSpec := overpassContainerSpec(overpassContainerName, port, absLive, absMerged)
-	wasRunning := rt.IsRunning(overpassContainerName)
+	liveSpec := overpassContainerSpec(liveName, port, absLive, absMerged)
+	wasRunning := rt.IsRunning(liveName)
 	movedOld, movedNew := false, false
 	swapErr := func() error {
-		if err := rt.Stop(ctx, overpassContainerName); err != nil {
+		if err := rt.Stop(ctx, liveName); err != nil {
 			return atStage("swap", err)
 		}
-		if err := rt.Remove(ctx, overpassContainerName); err != nil {
+		if err := rt.Remove(ctx, liveName); err != nil {
 			return atStage("swap", err)
 		}
 		if err := os.Rename(live, old); err != nil {
@@ -219,8 +220,8 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 	if swapErr != nil {
 		var notes []string
 		rctx := context.WithoutCancel(ctx)
-		rt.Stop(rctx, overpassContainerName)   //nolint:errcheck
-		rt.Remove(rctx, overpassContainerName) //nolint:errcheck
+		rt.Stop(rctx, liveName)   //nolint:errcheck
+		rt.Remove(rctx, liveName) //nolint:errcheck
 		if movedNew {
 			if err := os.RemoveAll(live); err != nil {
 				notes = append(notes, fmt.Sprintf("removing new database: %v", err))
