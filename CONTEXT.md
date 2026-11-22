@@ -6,7 +6,7 @@ Twisty finds and scores twisty roads (roads with sustained curvature that make t
 
 **Tile**:
 A rectangular geographic area, identified by its south/west corner, used to chunk map-data fetches from Overpass into bounded, cacheable requests.
-_Avoid_: Bounding box, region, chunk
+_Avoid_: Bounding box, chunk (and "region", which means a Geofabrik extract, below)
 
 **Way**:
 An OSM highway segment with its tags and ordered geometry, as returned by Overpass. The raw unit of input to the scoring pipeline, before curvature scoring is applied.
@@ -55,6 +55,26 @@ _Avoid_: Curve radius, radius of curvature
 **Hard filter**:
 The stage that removes Ways outright before scoring — unpaved surfaces, private/restricted access, and non-motor-vehicle highway types (tracks, footways, cycleways, etc.) never enter the curvature pipeline.
 _Avoid_: Pre-filter, exclusion filter
+
+**Region**:
+A Geofabrik extract path (for example `north-america/us/vermont`) whose PBF a service loads. `update` refreshes only regions already loaded and never adds one.
+_Avoid_: Area, extract (when the loaded set is meant)
+
+**Upstream**:
+Geofabrik, the source of region extracts. A region is "changed" when its upstream `Last-Modified` is newer than the stamp a service holds.
+_Avoid_: Remote, server
+
+**Stamp**:
+The upstream `Last-Modified` of the version of a region a service was built from, kept per service so one service's refresh never hides staleness from the other. A missing stamp counts as changed.
+_Avoid_: Version, timestamp (the PBF header timestamp is a different thing)
+
+**Staging**:
+Fresh data built beside the live data (`db.staging`, `tiles.staging`) while the old container keeps serving, so a failure costs nothing.
+_Avoid_: Temp, scratch
+
+**Swap**:
+Replacing live data with staged data: stop the container, move the directories, start the container on the new data, probe it. The old data is deleted only once the probe passes; any failure rolls back.
+_Avoid_: Cutover, deploy
 
 **Viewport**:
 The visible map area in the build UI, expressed as a south/west/north/east bounding box. Drives on-demand tile fetching and scoring for only the roads currently in view, capped at a maximum number of tiles per request.

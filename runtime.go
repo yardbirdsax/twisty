@@ -59,8 +59,8 @@ func (s ContainerSpec) dockerRunArgs(detached bool) []string {
 }
 
 // ContainerRuntime drives the Docker containers behind the services. It is
-// service-agnostic: the Valhalla update uses it now, and the Overpass swap and
-// rollback reuse it unchanged.
+// service-agnostic: the Valhalla and Overpass updates both use it, through the
+// shared directory swap and rollback.
 //
 // Contract: Stop and Remove are idempotent (a container that does not exist is
 // not an error). Run fails if the name is already in use, so callers must

@@ -68,18 +68,22 @@ type UpdateDeps struct {
 	ValhallaPort int
 	// OverpassPort is the host port of the live Overpass container (0 = default).
 	OverpassPort int
+	// ReadyTimeout bounds each readiness probe (0 = the per-probe default).
+	ReadyTimeout time.Duration
+
+	// Test seams: production leaves these zero. They let tests (including the
+	// Docker end-to-end test) run against throwaway containers, ports and a
+	// stubbed converter.
+
 	// OverpassStagingPort is the spare host port of the temporary staging
 	// container used by the staged import (0 = default).
 	OverpassStagingPort int
 	// OverpassContainerName names the live Overpass container; the staging
-	// container is that name plus "-staging" (empty = default). It lets an
-	// end-to-end test run against throwaway containers.
+	// container is that name plus "-staging" (empty = default).
 	OverpassContainerName string
 	// ConvertOverpass rebuilds merged.osm.bz2 from the region PBFs for the given
 	// regions (nil = the real incremental conversion).
 	ConvertOverpass func(ctx context.Context, regions []string) error
-	// ReadyTimeout bounds each readiness probe (0 = 5 minutes).
-	ReadyTimeout time.Duration
 }
 
 // overpassNames returns the live and staging Overpass container names.
