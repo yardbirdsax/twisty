@@ -13,7 +13,7 @@ import (
 
 func TestUpdateCmd_FlagsMapToOptions(t *testing.T) {
 	var got UpdateOptions
-	cmd := newUpdateCmdWith(func(_ context.Context, opts UpdateOptions, _ io.Writer) error {
+	cmd := newUpdateCmdWith(func(_ context.Context, opts UpdateOptions, _ UpdateLocations, _ io.Writer) error {
 		got = opts
 		return nil
 	})
@@ -31,7 +31,7 @@ func TestUpdateCmd_FlagsMapToOptions(t *testing.T) {
 
 func TestUpdateCmd_DefaultsAreOff(t *testing.T) {
 	var got UpdateOptions
-	cmd := newUpdateCmdWith(func(_ context.Context, opts UpdateOptions, _ io.Writer) error {
+	cmd := newUpdateCmdWith(func(_ context.Context, opts UpdateOptions, _ UpdateLocations, _ io.Writer) error {
 		got = opts
 		return nil
 	})
@@ -46,7 +46,7 @@ func TestUpdateCmd_DefaultsAreOff(t *testing.T) {
 
 func TestUpdateCmd_RunnerErrorIsReturned(t *testing.T) {
 	want := errors.New("boom")
-	cmd := newUpdateCmdWith(func(context.Context, UpdateOptions, io.Writer) error { return want })
+	cmd := newUpdateCmdWith(func(context.Context, UpdateOptions, UpdateLocations, io.Writer) error { return want })
 	cmd.SetArgs(nil)
 	if err := cmd.Execute(); !errors.Is(err, want) {
 		t.Errorf("err = %v, want %v", err, want)

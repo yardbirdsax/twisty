@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -15,10 +16,23 @@ import (
 	"github.com/yardbirdsax/twisty/osmconv"
 )
 
-// updateRunner executes an update with the given options, writing user-facing
-// output to out. The production runner wires real dependencies; tests inject a
-// capturing runner to check flag mapping.
-type updateRunner func(ctx context.Context, opts UpdateOptions, out io.Writer) error
+// UpdateLocations are the user-chosen directories of `twisty update`; empty
+// means the default under ~/.twisty.
+type UpdateLocations struct {
+	// DataDir is the base directory holding the services' data: Overpass under
+	// <DataDir>/overpass and Valhalla under <DataDir>/valhalla, i.e. what the
+	// `start` commands' --data-dir would be for each service. The shared PBF
+	// directory (and so the update lock) is not moved by it, as for `start`.
+	DataDir string
+	// CacheDir is the Overpass tile cache directory (as for `score --cache-dir`);
+	// the score cache lives beside it in a sibling "scores" directory.
+	CacheDir string
+}
+
+// updateRunner executes an update with the given options and locations, writing
+// user-facing output to out. The production runner wires real dependencies;
+// tests inject a capturing runner to check flag mapping.
+type updateRunner func(ctx context.Context, opts UpdateOptions, loc UpdateLocations, out io.Writer) error
 
 func newUpdateCmd() *cobra.Command {
 	return newUpdateCmdWith(runUpdate)
@@ -26,6 +40,7 @@ func newUpdateCmd() *cobra.Command {
 
 func newUpdateCmdWith(run updateRunner) *cobra.Command {
 	var opts UpdateOptions
+	var loc UpdateLocations
 	cmd := &cobra.Command{
 		Use:   "update",
 		Short: "Refresh the local Overpass and Valhalla data for the regions already loaded",
@@ -36,7 +51,7 @@ func newUpdateCmdWith(run updateRunner) *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return run(cmd.Context(), opts, cmd.ErrOrStderr())
+			return run(cmd.Context(), opts, loc, cmd.ErrOrStderr())
 		},
 	}
 	f := cmd.Flags()
@@ -44,13 +59,15 @@ func newUpdateCmdWith(run updateRunner) *cobra.Command {
 	f.BoolVar(&opts.Force, "force", false, "Treat every region as changed, skipping the upstream comparison")
 	f.BoolVar(&opts.DryRun, "dry-run", false, "Report what would happen without modifying anything")
 	f.BoolVar(&opts.InPlace, "in-place", false, "Re-import Overpass in place (full downtime) instead of staging")
-	cmd.AddCommand(newUpdateBackfillCmd())
+	f.StringVar(&loc.CacheDir, "cache-dir", "", "Overpass tile cache directory to clear after an Overpass refresh (default: ~/.twisty/cache/overpass/)")
+	cmd.PersistentFlags().StringVar(&loc.DataDir, "data-dir", "", "Base directory holding the overpass/ and valhalla/ data directories (default: ~/.twisty)")
+	cmd.AddCommand(newUpdateBackfillCmd(&loc))
 	return cmd
 }
 
 // runUpdate is the production updateRunner.
-func runUpdate(ctx context.Context, opts UpdateOptions, out io.Writer) error {
-	return runUpdateWith(ctx, productionUpdateDeps(), opts, out)
+func runUpdate(ctx context.Context, opts UpdateOptions, loc UpdateLocations, out io.Writer) error {
+	return runUpdateWith(ctx, productionUpdateDepsAt(loc), opts, out)
 }
 
 // runUpdateWith runs the update with injected dependencies, writes the report
@@ -80,18 +97,32 @@ func renderUpdateSummary(w io.Writer, rep UpdateReport) {
 	}
 }
 
-func productionUpdateDeps() UpdateDeps {
-	return UpdateDeps{
-		Upstream: geofabrikUpstream{client: http.DefaultClient, progress: newDownloadProgress(os.Stderr)},
-		Runtime:  dockerRuntime{},
-		Root: DataRoot{
-			OverpassDir: resolveOverpassDataDir(""),
-			ValhallaDir: resolveValhallaDataDir(""),
-			PBFDir:      resolvePBFDir(""),
+// dataRootFor resolves where twisty's state lives for the given locations.
+func dataRootFor(loc UpdateLocations) DataRoot {
+	root := DataRoot{
+		OverpassDir: resolveOverpassDataDir(""),
+		ValhallaDir: resolveValhallaDataDir(""),
+		PBFDir:      resolvePBFDir(""),
 
-			TileCacheDir:  defaultTileCacheDir(),
-			ScoreCacheDir: defaultScoreCacheDir(),
-		},
+		TileCacheDir:  defaultTileCacheDir(),
+		ScoreCacheDir: defaultScoreCacheDir(),
+	}
+	if loc.DataDir != "" {
+		root.OverpassDir = filepath.Join(loc.DataDir, "overpass")
+		root.ValhallaDir = filepath.Join(loc.DataDir, "valhalla")
+	}
+	if loc.CacheDir != "" {
+		root.TileCacheDir = loc.CacheDir
+		root.ScoreCacheDir = filepath.Join(filepath.Dir(loc.CacheDir), "scores")
+	}
+	return root
+}
+
+func productionUpdateDepsAt(loc UpdateLocations) UpdateDeps {
+	return UpdateDeps{
+		Upstream:         geofabrikUpstream{client: http.DefaultClient, progress: newDownloadProgress(os.Stderr)},
+		Runtime:          dockerRuntime{},
+		Root:             dataRootFor(loc),
 		Clock:            time.Now,
 		FreeSpace:        diskFreeBytes,
 		PBFDataTimestamp: readPBFDataTimestamp,

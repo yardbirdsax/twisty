@@ -8,7 +8,7 @@ import (
 
 // newUpdateBackfillCmd is `twisty update backfill-stamps`, the one-off
 // migration that seeds upstream stamps from PBF modification times.
-func newUpdateBackfillCmd() *cobra.Command {
+func newUpdateBackfillCmd(loc *UpdateLocations) *cobra.Command {
 	return &cobra.Command{
 		Use:   "backfill-stamps",
 		Short: "One-off: seed missing upstream stamps from PBF modification times",
@@ -19,7 +19,7 @@ func newUpdateBackfillCmd() *cobra.Command {
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			seeded, err := BackfillUpstreamStamps(productionUpdateDeps().Root)
+			seeded, err := BackfillUpstreamStamps(dataRootFor(*loc))
 			if err != nil {
 				return err
 			}
