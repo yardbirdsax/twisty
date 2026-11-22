@@ -44,6 +44,7 @@ func newUpdateCmdWith(run updateRunner) *cobra.Command {
 	f.BoolVar(&opts.Force, "force", false, "Treat every region as changed, skipping the upstream comparison")
 	f.BoolVar(&opts.DryRun, "dry-run", false, "Report what would happen without modifying anything")
 	f.BoolVar(&opts.InPlace, "in-place", false, "Re-import Overpass in place (full downtime) instead of staging")
+	cmd.AddCommand(newUpdateBackfillCmd())
 	return cmd
 }
 
