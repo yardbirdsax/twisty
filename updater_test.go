@@ -90,6 +90,11 @@ func (e *updaterEnv) deps() UpdateDeps {
 		FreeSpace: func(string) (uint64, error) {
 			return 1 << 40, nil
 		},
+		// Tests not about the Overpass refresh must not run the real converter
+		// on fake PBFs; the refresh stops at its first stage, touching nothing.
+		OverpassConvert: func([]string, string, string) error {
+			return fmt.Errorf("conversion is not under test")
+		},
 		PBFDataTimestamp: func(path string) (time.Time, bool, error) {
 			for region, ts := range e.headers {
 				if filepath.Base(path) == pbfFilename(region) {

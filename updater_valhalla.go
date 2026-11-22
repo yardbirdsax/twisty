@@ -46,26 +46,54 @@ func (u *updateRun) fetchRegions(ctx context.Context, regions []string) error {
 	return nil
 }
 
-// stampFetched records the upstream version of each given region fetched this
-// run. A region whose download carried no Last-Modified loses its stamp, so it
-// counts as changed next time.
-func (u *updateRun) stampFetched(regions []string) error {
-	for _, region := range regions {
-		info, ok := u.fetched[region]
-		if !ok {
-			continue
-		}
-		if info.LastModified.IsZero() {
-			if err := os.Remove(upstreamStampPath(u.deps.Root.PBFDir, region)); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-			continue
-		}
-		if err := writeUpstreamStamp(u.deps.Root.PBFDir, region, info.LastModified); err != nil {
-			return fmt.Errorf("writing stamp for %s: %w", region, err)
+// stampRefreshed records the upstream version of each region fetched this run,
+// but only for regions every service that loads them was refreshed with. The
+// stamp is per region and shared by both services, so stamping after one
+// service alone would make the other think the region is current and never
+// refresh it. A region left unstamped reads as changed next run (the safe
+// direction). A region whose download carried no Last-Modified loses its
+// stamp. A stamping error fails the services that load the region.
+func (u *updateRun) stampRefreshed(services []ServiceReport) {
+	updated := map[string]bool{}
+	for _, s := range services {
+		if s.Outcome == OutcomeUpdated {
+			updated[s.Service] = true
 		}
 	}
-	return nil
+	for region, info := range u.fetched {
+		ready := true
+		var loaders []string
+		for _, svc := range []string{"overpass", "valhalla"} {
+			for _, r := range loadedRegions(u.deps.Root, svc) {
+				if r == region {
+					loaders = append(loaders, svc)
+					ready = ready && updated[svc]
+				}
+			}
+		}
+		if !ready || len(loaders) == 0 {
+			continue
+		}
+		var err error
+		if info.LastModified.IsZero() {
+			if rmErr := os.Remove(upstreamStampPath(u.deps.Root.PBFDir, region)); rmErr != nil && !os.IsNotExist(rmErr) {
+				err = rmErr
+			}
+		} else {
+			err = writeUpstreamStamp(u.deps.Root.PBFDir, region, info.LastModified)
+		}
+		if err == nil {
+			continue
+		}
+		for i := range services {
+			for _, svc := range loaders {
+				if services[i].Service == svc && services[i].Outcome == OutcomeUpdated {
+					services[i].Outcome = OutcomeFailed
+					services[i].Detail = fmt.Sprintf("stage stamp: writing stamp for %s: %v", region, err)
+				}
+			}
+		}
+	}
 }
 
 // stageError names the stage of a service update that failed.
@@ -216,9 +244,6 @@ func (u *updateRun) runValhallaUpdate(ctx context.Context, sr *ServiceReport) er
 	}
 	if err := os.WriteFile(filepath.Join(dir, builtMarkerName), nil, 0o644); err != nil {
 		return atStage("cleanup", err)
-	}
-	if err := u.stampFetched(changed); err != nil {
-		return atStage("stamp", err)
 	}
 	return nil
 }

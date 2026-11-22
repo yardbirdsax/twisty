@@ -19,6 +19,17 @@ func (e *updaterEnv) writeSized(path string, n int) {
 	}
 }
 
+// preflightFailed reports whether any service failed at the disk preflight (as
+// opposed to a later stage, which these tests stub out).
+func preflightFailed(rep UpdateReport) bool {
+	for _, s := range rep.Services {
+		if s.Outcome == OutcomeFailed && strings.HasPrefix(s.Detail, "disk preflight") {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *updaterEnv) exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
@@ -96,7 +107,7 @@ func TestPreflight_FitsProceedsWithoutReclaiming(t *testing.T) {
 			t.Errorf("%s should not have been deleted", f)
 		}
 	}
-	if rep.Failed() {
+	if preflightFailed(rep) {
 		t.Error("update should not fail when it fits")
 	}
 }
@@ -114,7 +125,7 @@ func TestPreflight_ReclaimsDerivedDataOnlyUntilItFits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !rep.Preflight.Fits || rep.Failed() {
+	if !rep.Preflight.Fits || preflightFailed(rep) {
 		t.Fatalf("expected fit after reclaim, got %+v", rep.Preflight)
 	}
 	if p.exists(p.tileCache) || p.exists(p.scoreCache) {

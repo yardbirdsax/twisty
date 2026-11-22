@@ -51,6 +51,13 @@ type UpdateDeps struct {
 	PBFDataTimestamp func(pbfPath string) (ts time.Time, ok bool, err error)
 	// ValhallaPort is the host port of the Valhalla container (0 = default).
 	ValhallaPort int
+	// OverpassPort / OverpassStagingPort are the host ports of the live and
+	// the temporary staging Overpass containers (0 = defaults).
+	OverpassPort        int
+	OverpassStagingPort int
+	// OverpassConvert converts changed regions' PBFs to per-region caches and
+	// rebuilds the merged archive in dataDir (nil = convertRegionsIncremental).
+	OverpassConvert func(allRegions []string, dataDir, pbfDir string) error
 	// ReadyTimeout bounds each readiness probe (0 = 5 minutes).
 	ReadyTimeout time.Duration
 }
@@ -152,11 +159,18 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 		run := newUpdateRun(deps)
 		for i := range rep.Services {
 			sr := &rep.Services[i]
-			// Overpass refresh arrives with its own ticket; it stays "changed".
-			if sr.Service == "valhalla" && sr.Outcome == OutcomeChanged {
+			if sr.Outcome != OutcomeChanged {
+				continue
+			}
+			switch {
+			case sr.Service == "valhalla":
 				run.updateValhalla(ctx, sr)
+			case sr.Service == "overpass" && !opts.InPlace:
+				// --in-place arrives with its own ticket; it stays "changed".
+				run.updateOverpass(ctx, sr)
 			}
 		}
+		run.stampRefreshed(rep.Services)
 	}
 	return rep, nil
 }

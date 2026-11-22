@@ -250,12 +250,16 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 	}
 
 	// Convert PBF files to per-region caches and merge into BZ2.
-	if _, err := os.Stat(mergedBZ2); os.IsNotExist(err) {
+	// The archive is only needed until the import completes; once it has, a
+	// removed archive is not a reason to convert again.
+	if overpassNeedsConversion(dataDir) {
 		if err := convertRegionsWithProfile(allRegions, dataDir, pbfDir, cpuprofile, stderr); err != nil {
 			return fmt.Errorf("converting regions: %w", err)
 		}
-	} else {
+	} else if _, err := os.Stat(mergedBZ2); err == nil {
 		fmt.Fprintf(stderr, "BZ2 already exists: %s\n", mergedBZ2)
+	} else {
+		fmt.Fprintf(stderr, "Import already completed; merged archive not needed.\n")
 	}
 
 	// Write stamp file.
@@ -286,8 +290,11 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 	if err != nil {
 		return fmt.Errorf("resolving merged BZ2 path: %w", err)
 	}
+	if _, statErr := os.Stat(mergedBZ2); statErr != nil {
+		absMergedBZ2 = "" // imported database, archive removed: nothing to mount
+	}
 
-	runArgs := overpassDockerRunArgs(port, absDataDir+"/db", absMergedBZ2)
+	runArgs := overpassContainerSpec(overpassContainerName, port, absDataDir+"/db", absMergedBZ2).dockerRunArgs(true)
 	out, err := dockerCmd(runArgs...)
 	if err != nil {
 		return fmt.Errorf("starting overpass container: %v\n%s", err, out)
@@ -321,6 +328,9 @@ func runOverpassStart(regions string, port int, dataDir string, cpuprofile strin
 		return fmt.Errorf("overpass API failed to become ready: %w", err)
 	}
 
+	if err := markOverpassImported(filepath.Join(dataDir, "db")); err != nil {
+		fmt.Fprintf(stderr, "warning: could not record completed import: %v\n", err)
+	}
 	fmt.Fprintf(stderr, "\nOverpass API is ready: %s\n", endpoint)
 	return nil
 }

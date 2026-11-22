@@ -25,6 +25,7 @@ type ContainerSpec struct {
 	Image   string
 	Ports   []PortMapping
 	Mounts  []Mount
+	Env     []string // KEY=VALUE
 	Restart string // docker restart policy, e.g. "unless-stopped"; empty for none
 	Command []string
 }
@@ -49,6 +50,9 @@ func (s ContainerSpec) dockerRunArgs(detached bool) []string {
 	}
 	for _, m := range s.Mounts {
 		args = append(args, "-v", m.Host+":"+m.Container)
+	}
+	for _, e := range s.Env {
+		args = append(args, "-e", e)
 	}
 	args = append(args, s.Image)
 	return append(args, s.Command...)
