@@ -92,7 +92,7 @@ func (e *updaterEnv) deps() UpdateDeps {
 		},
 		// Tests not about the Overpass refresh must not run the real converter
 		// on fake PBFs; the refresh stops at its first stage, touching nothing.
-		OverpassConvert: func([]string, string, string) error {
+		ConvertOverpass: func(context.Context, []string) error {
 			return fmt.Errorf("conversion is not under test")
 		},
 		PBFDataTimestamp: func(path string) (time.Time, bool, error) {

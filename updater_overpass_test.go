@@ -10,11 +10,11 @@ import (
 	"testing"
 )
 
-// overpassEnv is an updaterEnv with a live Overpass install: an old database on
+// stagedOverpassEnv is an updaterEnv with a live Overpass install: an old database on
 // disk and the old container running. The fake converter writes the merged
 // archive; the fake staging container "imports" by writing "new" into the
 // database directory it mounts.
-type overpassEnv struct {
+type stagedOverpassEnv struct {
 	*updaterEnv
 	liveDB    string
 	merged    string
@@ -26,9 +26,9 @@ type overpassEnv struct {
 
 const stagingName = overpassContainerName + "-staging"
 
-func newOverpassEnv(t *testing.T, regions ...string) *overpassEnv {
+func newStagedOverpassEnv(t *testing.T, regions ...string) *stagedOverpassEnv {
 	t.Helper()
-	e := &overpassEnv{updaterEnv: newUpdaterEnv(t)}
+	e := &stagedOverpassEnv{updaterEnv: newUpdaterEnv(t)}
 	e.liveDB = filepath.Join(e.root.OverpassDir, "db")
 	e.merged = filepath.Join(e.root.OverpassDir, "merged.osm.bz2")
 	base := filepath.Dir(e.root.OverpassDir)
@@ -60,20 +60,20 @@ func newOverpassEnv(t *testing.T, regions ...string) *overpassEnv {
 	return e
 }
 
-func (e *overpassEnv) deps() UpdateDeps {
+func (e *stagedOverpassEnv) deps() UpdateDeps {
 	d := e.updaterEnv.deps()
 	d.Root = e.root
-	d.OverpassConvert = func(all []string, dataDir, pbfDir string) error {
+	d.ConvertOverpass = func(_ context.Context, all []string) error {
 		e.converted = append(e.converted, all)
 		if e.convErr != nil {
 			return e.convErr
 		}
-		return os.WriteFile(filepath.Join(dataDir, "merged.osm.bz2"), []byte("new merged"), 0o644)
+		return os.WriteFile(e.merged, []byte("new merged"), 0o644)
 	}
 	return d
 }
 
-func (e *overpassEnv) writeDB(t *testing.T, dir, content string) {
+func (e *stagedOverpassEnv) writeDB(t *testing.T, dir, content string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func (e *overpassEnv) writeDB(t *testing.T, dir, content string) {
 	}
 }
 
-func (e *overpassEnv) liveData(t *testing.T) string {
+func (e *stagedOverpassEnv) liveData(t *testing.T) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(e.liveDB, "data"))
 	if err != nil {
@@ -92,11 +92,11 @@ func (e *overpassEnv) liveData(t *testing.T) string {
 	return string(b)
 }
 
-func (e *overpassEnv) makeChanged(region string) {
+func (e *stagedOverpassEnv) makeChanged(region string) {
 	e.upstream.info[region] = UpstreamInfo{LastModified: t1, ContentLength: 100}
 }
 
-func (e *overpassEnv) update(t *testing.T, opts UpdateOptions) UpdateReport {
+func (e *stagedOverpassEnv) update(t *testing.T, opts UpdateOptions) UpdateReport {
 	t.Helper()
 	rep, err := Update(context.Background(), e.deps(), opts)
 	if err != nil {
@@ -105,7 +105,7 @@ func (e *overpassEnv) update(t *testing.T, opts UpdateOptions) UpdateReport {
 	return rep
 }
 
-func (e *overpassEnv) assertNoLeftovers(t *testing.T) {
+func (e *stagedOverpassEnv) assertNoLeftovers(t *testing.T) {
 	t.Helper()
 	entries, _ := os.ReadDir(e.root.OverpassDir)
 	for _, en := range entries {
@@ -125,7 +125,7 @@ func stampOf(t *testing.T, e *updaterEnv, region string) string {
 }
 
 func TestOverpassUpdate_StagedSwapKeepsOldServingUntilProbePasses(t *testing.T) {
-	e := newOverpassEnv(t, vermont)
+	e := newStagedOverpassEnv(t, vermont)
 	e.makeChanged(vermont)
 
 	var oldServingDuringImport bool
@@ -195,7 +195,7 @@ func TestOverpassUpdate_StagedSwapKeepsOldServingUntilProbePasses(t *testing.T) 
 }
 
 func TestOverpassUpdate_ClearsDerivedCachesAfterSwapAndReportsThem(t *testing.T) {
-	e := newOverpassEnv(t, vermont)
+	e := newStagedOverpassEnv(t, vermont)
 	e.makeChanged(vermont)
 
 	rep := e.update(t, UpdateOptions{Only: "overpass"})
@@ -212,7 +212,7 @@ func TestOverpassUpdate_ClearsDerivedCachesAfterSwapAndReportsThem(t *testing.T)
 }
 
 func TestOverpassUpdate_OnlyChangedRegionsDownloadedAllConverted(t *testing.T) {
-	e := newOverpassEnv(t, vermont, maine)
+	e := newStagedOverpassEnv(t, vermont, maine)
 	e.makeChanged(vermont)
 
 	e.update(t, UpdateOptions{Only: "overpass"})
@@ -229,7 +229,7 @@ func TestOverpassUpdate_OnlyChangedRegionsDownloadedAllConverted(t *testing.T) {
 }
 
 func TestOverpassUpdate_FailedImportDiscardsStagingAndLeavesOldServing(t *testing.T) {
-	e := newOverpassEnv(t, vermont)
+	e := newStagedOverpassEnv(t, vermont)
 	e.makeChanged(vermont)
 	e.runtime.OnWaitReady = func(url string) error {
 		if url == overpassReadyURL(defaultOverpassStagingPort) {
@@ -269,7 +269,7 @@ func TestOverpassUpdate_FailedImportDiscardsStagingAndLeavesOldServing(t *testin
 }
 
 func TestOverpassUpdate_ProbeFailureRestoresOldDatabaseAndContainer(t *testing.T) {
-	e := newOverpassEnv(t, vermont)
+	e := newStagedOverpassEnv(t, vermont)
 	e.makeChanged(vermont)
 	liveURL := overpassReadyURL(defaultOverpassPort)
 	probes := 0
@@ -308,7 +308,7 @@ func TestOverpassUpdate_ProbeFailureRestoresOldDatabaseAndContainer(t *testing.T
 }
 
 func TestOverpassUpdate_ConvertFailureTouchesNothingLive(t *testing.T) {
-	e := newOverpassEnv(t, vermont)
+	e := newStagedOverpassEnv(t, vermont)
 	e.makeChanged(vermont)
 	e.convErr = errors.New("bad pbf")
 
@@ -327,7 +327,7 @@ func TestOverpassUpdate_ConvertFailureTouchesNothingLive(t *testing.T) {
 }
 
 func TestOverpassUpdate_StaleStagingAndInterruptedSwapAreRecovered(t *testing.T) {
-	e := newOverpassEnv(t, vermont)
+	e := newStagedOverpassEnv(t, vermont)
 	e.makeChanged(vermont)
 	// A crash left stale staging data, and died between the two renames.
 	e.writeDB(t, filepath.Join(e.root.OverpassDir, "db.staging"), "junk")
@@ -347,7 +347,7 @@ func TestOverpassUpdate_StaleStagingAndInterruptedSwapAreRecovered(t *testing.T)
 }
 
 func TestOverpassUpdate_DryRunDoesNothing(t *testing.T) {
-	e := newOverpassEnv(t, vermont)
+	e := newStagedOverpassEnv(t, vermont)
 	e.makeChanged(vermont)
 
 	rep := e.update(t, UpdateOptions{Only: "overpass", DryRun: true})
@@ -364,16 +364,16 @@ func TestOverpassUpdate_DryRunDoesNothing(t *testing.T) {
 
 // Both services load vermont. A stamp is per region, so it may only move once
 // every service loading the region has been refreshed.
-func newBothServicesEnv(t *testing.T) *overpassEnv {
+func newBothServicesEnv(t *testing.T) *stagedOverpassEnv {
 	t.Helper()
-	e := newOverpassEnv(t, vermont)
+	e := newStagedOverpassEnv(t, vermont)
 	e.load("valhalla", vermont, t0, t1) // same upstream info; valhalla side of the region
 	e.makeChanged(vermont)
 	e.liveTilesFor(t)
 	return e
 }
 
-func (e *overpassEnv) liveTilesFor(t *testing.T) {
+func (e *stagedOverpassEnv) liveTilesFor(t *testing.T) {
 	t.Helper()
 	live := filepath.Join(e.root.ValhallaDir, "tiles")
 	if err := writeFakeValhallaTiles(live, "old"); err != nil {

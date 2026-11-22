@@ -104,13 +104,7 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 	if err := u.fetchRegions(ctx, changed); err != nil {
 		return "", atStage("download", err)
 	}
-	convert := deps.OverpassConvert
-	if convert == nil {
-		convert = func(all []string, dataDir, pbfDir string) error {
-			return convertRegionsIncremental(all, dataDir, pbfDir, newConvertProgress(os.Stderr), os.Stderr)
-		}
-	}
-	if err := convert(all, dir, deps.Root.PBFDir); err != nil {
+	if err := u.convertOverpass(ctx, all); err != nil {
 		return "", atStage("convert", err)
 	}
 
