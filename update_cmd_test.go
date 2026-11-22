@@ -99,3 +99,31 @@ func TestRenderUpdateReport_NothingChanged(t *testing.T) {
 		t.Errorf("output = %q", buf.String())
 	}
 }
+
+func TestRenderUpdateReport_PrintsClearedCaches(t *testing.T) {
+	rep := UpdateReport{Services: []ServiceReport{
+		{Service: "overpass", Outcome: OutcomeUpdated, Detail: "cleared caches: /c/overpass, /c/scores"},
+	}}
+	var buf bytes.Buffer
+
+	renderUpdateReport(&buf, rep, UpdateOptions{})
+
+	out := buf.String()
+	if !strings.Contains(out, "cleared caches: /c/overpass, /c/scores") {
+		t.Errorf("output missing cache removals:\n%s", out)
+	}
+	if strings.Contains(out, "not implemented") {
+		t.Errorf("output has stale message:\n%s", out)
+	}
+}
+
+func TestRenderUpdateReport_UnrefreshedChangeIsNotClaimedUnimplemented(t *testing.T) {
+	rep := UpdateReport{Services: []ServiceReport{{Service: "overpass", Outcome: OutcomeChanged}}}
+	var buf bytes.Buffer
+
+	renderUpdateReport(&buf, rep, UpdateOptions{})
+
+	if strings.Contains(buf.String(), "not implemented") {
+		t.Errorf("stale message in output:\n%s", buf.String())
+	}
+}

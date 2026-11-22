@@ -20,7 +20,15 @@ func (u *updateRun) updateOverpassInPlace(ctx context.Context, sr *ServiceReport
 		sr.Detail = err.Error()
 		return
 	}
+	// The re-import changed the data, so derived caches are stale.
+	detail, err := clearDerivedCaches(u.deps.Root)
+	if err != nil {
+		sr.Outcome = OutcomeFailed
+		sr.Detail = err.Error()
+		return
+	}
 	sr.Outcome = OutcomeUpdated
+	sr.Detail = detail
 }
 
 func (u *updateRun) runOverpassInPlace(ctx context.Context, sr *ServiceReport) error {

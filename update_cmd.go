@@ -192,8 +192,6 @@ func renderUpdateReport(w io.Writer, rep UpdateReport, opts UpdateOptions) {
 		fmt.Fprintln(w, "dry run: nothing was modified")
 	case !anyChanged && !anyUpdated && !rep.Failed():
 		fmt.Fprintln(w, "Nothing to update.")
-	case anyChanged:
-		fmt.Fprintln(w, "Refreshing changed Overpass data is not implemented yet; it was not modified.")
 	}
 }
 

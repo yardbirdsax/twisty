@@ -250,10 +250,15 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 		return "", atStage("cleanup", err)
 	}
 
-	// The data changed, so every derived result is stale. Tiles are not tracked
-	// by region, so clear the caches entirely.
+	return clearDerivedCaches(deps.Root)
+}
+
+// clearDerivedCaches runs after Overpass data changed: every derived result is
+// stale, and tiles are not tracked by region, so both caches are cleared
+// entirely. It returns a report line naming the caches that held entries.
+func clearDerivedCaches(root DataRoot) (string, error) {
 	var removed []string
-	for _, cache := range []string{deps.Root.TileCacheDir, deps.Root.ScoreCacheDir} {
+	for _, cache := range []string{root.TileCacheDir, root.ScoreCacheDir} {
 		if cache == "" {
 			continue
 		}
