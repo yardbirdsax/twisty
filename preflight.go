@@ -15,6 +15,8 @@ const dbSafetyMarginPercent = 115
 // ReclaimItem is a derived-data path the preflight may delete to make room.
 type ReclaimItem struct {
 	Path string
+	// What says what the path holds, for reports: "Overpass tile cache".
+	What string
 	Size int64
 }
 
@@ -33,6 +35,10 @@ type PreflightReport struct {
 	Planned []ReclaimItem
 	// Reclaimed lists what was actually deleted (empty on --dry-run).
 	Reclaimed []ReclaimItem
+	// SuggestInPlace is set when --in-place would help: Overpass is being
+	// refreshed in staged mode, so a second copy of its database is part of
+	// the estimate. It is not true for a Valhalla-only shortfall.
+	SuggestInPlace bool
 }
 
 func defaultTileCacheDir() string {
@@ -101,12 +107,12 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 		need += n
 	}
 	var reclaimable []ReclaimItem // in reclaim order
-	addReclaim := func(path string) {
+	addReclaim := func(path, what string) {
 		if path == "" {
 			return
 		}
 		if size := dirSize(path); size > 0 {
-			reclaimable = append(reclaimable, ReclaimItem{Path: path, Size: size})
+			reclaimable = append(reclaimable, ReclaimItem{Path: path, What: what, Size: size})
 		}
 	}
 
@@ -118,18 +124,18 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 		need += dirSize(merged)
 		// Order: tile+score caches, old merged archive, conversion caches of
 		// changed regions (Valhalla's merged PBF slots in before them below).
-		addReclaim(root.TileCacheDir)
-		addReclaim(root.ScoreCacheDir)
-		addReclaim(merged)
+		addReclaim(root.TileCacheDir, "Overpass tile cache")
+		addReclaim(root.ScoreCacheDir, "Overpass score cache")
+		addReclaim(merged, "old Overpass merged archive")
 	}
 	if changed[ServiceValhalla] {
 		mergedPBF := filepath.Join(root.ValhallaDir, "merged.osm.pbf")
 		need += dirSize(mergedPBF) + dirSize(filepath.Join(root.ValhallaDir, "tiles"))
-		addReclaim(mergedPBF)
+		addReclaim(mergedPBF, "old Valhalla merged PBF")
 	}
 	for _, region := range changedOverpassRegions {
-		addReclaim(filepath.Join(root.OverpassDir, "cache", cacheFilename(region)))
-		addReclaim(filepath.Join(root.OverpassDir, "cache", cacheFilename(region)+".meta.json"))
+		addReclaim(filepath.Join(root.OverpassDir, "cache", cacheFilename(region)), "Overpass conversion cache for "+region)
+		addReclaim(filepath.Join(root.OverpassDir, "cache", cacheFilename(region)+".meta.json"), "Overpass conversion cache metadata for "+region)
 	}
 
 	freeDir := root.OverpassDir
@@ -142,7 +148,8 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 		return
 	}
 
-	pf := &PreflightReport{Needed: uint64(need), Free: free}
+	pf := &PreflightReport{Needed: uint64(need), Free: free,
+		SuggestInPlace: changed[ServiceOverpass] && !opts.InPlace}
 	rep.Preflight = pf
 
 	avail := free
@@ -164,9 +171,13 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 		if opts.DryRun {
 			return
 		}
+		hint := ""
+		if pf.SuggestInPlace {
+			hint = " or re-run with --in-place"
+		}
 		failChanged(rep, fmt.Sprintf(
 			"disk preflight: need %d bytes, have %d free; short by %d bytes even after reclaiming derived data; "+
-				"free up space or re-run with --in-place", pf.Needed, free, pf.Shortfall))
+				"free up space%s", pf.Needed, free, pf.Shortfall, hint))
 		return
 	}
 	pf.Fits = true
@@ -204,11 +215,15 @@ func renderPreflight(w io.Writer, pf *PreflightReport) {
 				verb = "reclaimed"
 			}
 		}
-		fmt.Fprintf(w, "  %s %s (%d bytes)\n", verb, item.Path, item.Size)
+		fmt.Fprintf(w, "  %s %s %s (%d bytes)\n", verb, item.What, item.Path, item.Size)
 	}
 	if !pf.Fits && pf.Warn {
 		fmt.Fprintf(w, "  warning: short by %d bytes even after reclaiming; continuing because --in-place was given\n", pf.Shortfall)
 	} else if !pf.Fits {
-		fmt.Fprintf(w, "  short by %d bytes even after reclaiming; free up space or use --in-place\n", pf.Shortfall)
+		hint := ""
+		if pf.SuggestInPlace {
+			hint = " or use --in-place"
+		}
+		fmt.Fprintf(w, "  short by %d bytes even after reclaiming; free up space%s\n", pf.Shortfall, hint)
 	}
 }
