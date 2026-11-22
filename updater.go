@@ -123,6 +123,15 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 		return UpdateReport{}, fmt.Errorf("invalid --only value %q: want overpass or valhalla", opts.Only)
 	}
 
+	// A dry run modifies nothing, so it neither needs nor takes the lock.
+	if !opts.DryRun {
+		release, err := acquireUpdateLock(deps.Root.PBFDir)
+		if err != nil {
+			return UpdateReport{}, err
+		}
+		defer release()
+	}
+
 	var rep UpdateReport
 	for _, svc := range services {
 		rep.Services = append(rep.Services, checkService(ctx, deps, opts, svc))

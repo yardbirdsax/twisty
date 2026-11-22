@@ -53,6 +53,7 @@ func newValhallaStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "start",
 		Short:         "Start the local Valhalla routing server",
+		PreRunE:       refuseDuringUpdate,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -102,6 +103,7 @@ func newValhallaCleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "clean",
 		Short:         "Stop the container and remove all Valhalla data",
+		PreRunE:       refuseDuringUpdate,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
