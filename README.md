@@ -12,7 +12,7 @@ Heavily influenced by the amazing [Curvature](https://roadcurvature.com/) projec
 - `twisty build` — interactively build a route on a map with live curvature scoring
 - `twisty overpass` — manage a local Overpass API instance running in Docker
 - `twisty valhalla` — manage a local Valhalla routing server running in Docker
-- `twisty update` — check the local Overpass and Valhalla data against Geofabrik for newer extracts
+- `twisty update` — refresh the local Overpass and Valhalla data for the loaded regions from Geofabrik
 - `twisty gpx` — export a Google Maps driving route as a GPX file
 
 ## Installation
@@ -553,17 +553,94 @@ Both images are pulled automatically on first use.
 
 ## twisty update
 
-Checks whether the regions you already loaded with `twisty overpass start` / `twisty valhalla start` have newer extracts on Geofabrik. `update` never adds regions; use `start --regions` for that.
+Refreshes the local Overpass and Valhalla data from Geofabrik with minimal disruption. The old instances keep serving while the new data is built in a staging location, the swap is a short stop-and-start, and nothing live is deleted until the replacement answers its readiness probe.
 
 ```
 twisty update [--only overpass|valhalla] [--force] [--dry-run] [--in-place]
+twisty update backfill-stamps
 ```
 
-Each loaded region gets a HEAD request; its upstream `Last-Modified` is compared with the stamp recorded for the version you hold (`<pbf dir>/<region>-latest.osm.pbf.upstream`). A region with no stamp counts as changed. If nothing changed and `--force` is not set, `update` exits early and touches nothing.
+### Which regions are refreshed
 
-`--dry-run` lists changed and unchanged regions and the age of the data you hold (the PBF header's `osmosis_replication_timestamp`).
+`update` refreshes only the regions that are already loaded, read from each service's `.regions` file (`~/.twisty/overpass/.regions`, `~/.twisty/valhalla/.regions`). It never adds a region. To add regions, use `twisty overpass start --regions ...` or `twisty valhalla start --regions ...`; to remove them, use `clean`.
 
-Currently `update` only reports; refreshing the data (staged swaps, disk preflight, cache clearing) is being added incrementally, and `--in-place` is accepted but not yet acted on.
+### Flags
+
+| Flag | Effect |
+|---|---|
+| `--only overpass\|valhalla` | Refresh just one service. |
+| `--force` | Treat every loaded region as changed, skipping the upstream comparison (for example to rebuild after a corrupt import). |
+| `--dry-run` | Report what would happen and modify nothing: changed and unchanged regions, the age of the data you hold (the PBF header's `osmosis_replication_timestamp`), the disk estimate against free space, and what would be reclaimed. Takes no lock. |
+| `--in-place` | Overpass only. Stop the container, wipe the database and re-import, instead of importing into a staging copy. Full downtime for the import (hours), but needs no second copy of the database. Opt-in only. |
+
+### What it does
+
+1. **Staleness check.** Each loaded region gets a HEAD request to Geofabrik. Its `Last-Modified` is compared with the stamp recorded for the version you hold (`~/.twisty/pbf/<region>-latest.osm.pbf.upstream`). A region with no stamp counts as changed, so the failure mode is refreshing too much, never missing an update. If nothing changed and `--force` is not set, `update` exits without touching anything.
+2. **Disk preflight.** The estimate is the current Overpass database size plus a 15% margin, the exact `Content-Length` of the changed downloads, and the intermediate files (the Overpass merged archive, the Valhalla merged PBF and staging tiles). With `--in-place` the database term is dropped.
+3. **Reclaim, only if needed.** If the estimate does not fit in free space, derived data is deleted in this order until it does: the per-tile Overpass cache and the score cache, the old Overpass merged archive, the old Valhalla merged PBF, then the per-region conversion caches of regions that changed. The live database, live tiles and the individual region PBFs are never touched. If it still does not fit, `update` aborts before changing anything, prints the exact shortfall in bytes, and suggests `--in-place`. With `--in-place` a shortfall is reported as a warning and the run continues.
+4. **Valhalla first, then Overpass.** The quick service finishes before the heavy one starts, so the two builds never compete for Docker. A failure in one service does not stop the other from being attempted.
+5. **Valhalla.** Changed regions are downloaded, tiles are built into `tiles.staging` while the old container serves, then the container is stopped, removed and started against the new tiles. The old tiles are deleted only after `/status` answers.
+6. **Overpass.** Changed regions are downloaded and re-converted (unchanged regions reuse their conversion cache), and the new database is imported by a temporary staging container on port 8081 while the live container keeps serving. Then the live container is stopped, the database directories are swapped, and the container is started against the new database. The old database is deleted only after the readiness probe passes. Overpass is always fully re-imported; there is no partial or diff-based update.
+7. **Rollback.** A failed download, build, import or readiness probe discards the staging data, restores the old data and container, and reports which service and stage failed.
+8. **Cache clearing.** After a successful Overpass swap, the per-tile Overpass cache (`~/.twisty/cache/overpass`) and the score cache (`~/.twisty/cache/scores`) are cleared entirely, because tiles are not tracked by region, and what was removed is printed. A Valhalla-only update leaves them alone.
+9. **Stamps.** A region's stamp is written only after every service that loads it was refreshed, so a failed refresh is retried on the next run.
+
+The run ends with a summary listing each service as `updated`, `unchanged` or `failed`. The exit code is non-zero if any service failed.
+
+### Lock
+
+`update` holds a lock file (`~/.twisty/pbf/update.lock`, containing its PID) for its whole run. A second `update` fails immediately, and `overpass start`, `overpass clean`, `valhalla start` and `valhalla clean` refuse to run with a message naming the owning PID. A lock whose process is no longer alive is stale and is ignored, so a crash never locks you out.
+
+### Existing installs: backfill the stamps
+
+Installs that predate `update` have no stamps, so the first run would treat every region as changed. Run the one-off migration first:
+
+```
+twisty update backfill-stamps
+```
+
+It seeds each loaded region's stamp from its PBF file's modification time (always later than the upstream `Last-Modified` of that version, so it is safe) and never overwrites an existing stamp. After that, the first `update` skips regions that are already current. New downloads from `start` record their stamp automatically.
+
+### Scheduling with launchd
+
+Scheduling is not built in; `twisty update` is a manual command. To run it automatically on macOS, use `launchd`. Save this as `~/Library/LaunchAgents/com.example.twisty-update.plist`, adjusting the binary path and username:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.twisty-update</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/twisty</string>
+    <string>update</string>
+  </array>
+  <!-- Every Sunday at 03:00 -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>0</integer>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/you/.twisty/update.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/.twisty/update.log</string>
+</dict>
+</plist>
+```
+
+Load it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.twisty-update.plist`. The `PATH` entry matters because `update` shells out to `docker`, which launchd's minimal environment would not otherwise find. Docker must be running when the job fires. Because `update` exits early when nothing changed, running it frequently is cheap; because the preflight refuses when space is short, an unattended run cannot fill the disk.
 
 ## twisty gpx
 
