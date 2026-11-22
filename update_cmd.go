@@ -71,6 +71,9 @@ func productionUpdateDeps() UpdateDeps {
 			OverpassDir: resolveOverpassDataDir(""),
 			ValhallaDir: resolveValhallaDataDir(""),
 			PBFDir:      resolvePBFDir(""),
+
+			TileCacheDir:  defaultTileCacheDir(),
+			ScoreCacheDir: defaultScoreCacheDir(),
 		},
 		Clock:            time.Now,
 		FreeSpace:        diskFreeBytes,
@@ -152,6 +155,7 @@ func renderUpdateReport(w io.Writer, rep UpdateReport, opts UpdateOptions) {
 			anyChanged = true
 		}
 	}
+	renderPreflight(w, rep.Preflight)
 	switch {
 	case opts.DryRun:
 		fmt.Fprintln(w, "dry run: nothing was modified")

@@ -37,6 +37,9 @@ type DataRoot struct {
 	OverpassDir string // holds .regions, db/, merged.osm.bz2, cache/
 	ValhallaDir string // holds .regions, tiles/
 	PBFDir      string // shared region PBFs and their upstream stamps
+	// Derived Overpass caches (empty means none); reclaimable by the preflight.
+	TileCacheDir  string
+	ScoreCacheDir string
 }
 
 // UpdateDeps bundles everything the updater touches outside itself.
@@ -85,7 +88,9 @@ type RegionStatus struct {
 	// DataAge is the age of the data we hold, from the PBF header timestamp.
 	DataAge    time.Duration
 	HasDataAge bool
-	Err        error
+	// ContentLength is the upstream download size of the current extract.
+	ContentLength int64
+	Err           error
 }
 
 type ServiceReport struct {
@@ -97,6 +102,8 @@ type ServiceReport struct {
 
 type UpdateReport struct {
 	Services []ServiceReport
+	// Preflight is the disk-space check; nil when nothing changed.
+	Preflight *PreflightReport
 }
 
 // Failed reports whether any service failed.
@@ -127,6 +134,7 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 	for _, svc := range services {
 		rep.Services = append(rep.Services, checkService(ctx, deps, opts, svc))
 	}
+	runPreflight(deps, opts, &rep)
 	return rep, nil
 }
 
@@ -148,6 +156,7 @@ func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc 
 			continue
 		}
 		rs.Upstream = info.LastModified
+		rs.ContentLength = info.ContentLength
 		held, hasStamp := readUpstreamStamp(deps.Root.PBFDir, region)
 		rs.HeldStamp = held
 		switch {
