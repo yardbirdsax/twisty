@@ -27,6 +27,8 @@ type PreflightReport struct {
 	// Shortfall is how many bytes are still missing after reclaiming everything
 	// reclaimable (zero when Fits).
 	Shortfall uint64
+	// Warn is set when a shortfall is only reported, not enforced (--in-place).
+	Warn bool
 	// Planned lists what would be (or was) reclaimed to make the estimate fit.
 	Planned []ReclaimItem
 	// Reclaimed lists what was actually deleted (empty on --dry-run).
@@ -154,6 +156,11 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 	if avail < pf.Needed {
 		pf.Shortfall = pf.Needed - avail
 		pf.Planned = nil // reclaiming cannot make it fit, so reclaim nothing
+		if opts.InPlace {
+			// The user chose the low-disk path: report the shortfall, don't abort.
+			pf.Warn = true
+			return
+		}
 		if opts.DryRun {
 			return
 		}
@@ -199,7 +206,9 @@ func renderPreflight(w io.Writer, pf *PreflightReport) {
 		}
 		fmt.Fprintf(w, "  %s %s (%d bytes)\n", verb, item.Path, item.Size)
 	}
-	if !pf.Fits {
+	if !pf.Fits && pf.Warn {
+		fmt.Fprintf(w, "  warning: short by %d bytes even after reclaiming; continuing because --in-place was given\n", pf.Shortfall)
+	} else if !pf.Fits {
 		fmt.Fprintf(w, "  short by %d bytes even after reclaiming; free up space or use --in-place\n", pf.Shortfall)
 	}
 }
