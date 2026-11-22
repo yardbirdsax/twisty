@@ -26,6 +26,7 @@ func (u *updateRun) updateOverpassInPlace(ctx context.Context, sr *ServiceReport
 func (u *updateRun) runOverpassInPlace(ctx context.Context, sr *ServiceReport) error {
 	deps := u.deps
 	rt := deps.Runtime
+	liveName, _ := deps.overpassNames()
 	dir := deps.Root.OverpassDir
 	all := loadedRegions(deps.Root, "overpass")
 	var changed []string
@@ -58,10 +59,10 @@ func (u *updateRun) runOverpassInPlace(ctx context.Context, sr *ServiceReport) e
 	}
 
 	// Stage: point of no return. Stop, wipe, and let the fresh container import.
-	if err := rt.Stop(ctx, overpassContainerName); err != nil {
+	if err := rt.Stop(ctx, liveName); err != nil {
 		return atStage("import", err)
 	}
-	if err := rt.Remove(ctx, overpassContainerName); err != nil {
+	if err := rt.Remove(ctx, liveName); err != nil {
 		return atStage("import", err)
 	}
 	if err := os.RemoveAll(db); err != nil {
@@ -70,7 +71,7 @@ func (u *updateRun) runOverpassInPlace(ctx context.Context, sr *ServiceReport) e
 	if err := os.MkdirAll(db, 0o755); err != nil {
 		return atStage("import", err)
 	}
-	if err := rt.Run(ctx, overpassContainerSpec(overpassContainerName, port, db, merged)); err != nil {
+	if err := rt.Run(ctx, overpassContainerSpec(liveName, port, db, merged)); err != nil {
 		return atStage("import", err)
 	}
 	timeout := deps.ReadyTimeout

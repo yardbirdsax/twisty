@@ -56,11 +56,24 @@ type UpdateDeps struct {
 	// OverpassStagingPort is the spare host port of the temporary staging
 	// container used by the staged import (0 = default).
 	OverpassStagingPort int
+	// OverpassContainerName names the live Overpass container; the staging
+	// container is that name plus "-staging" (empty = default). It lets an
+	// end-to-end test run against throwaway containers.
+	OverpassContainerName string
 	// ConvertOverpass rebuilds merged.osm.bz2 from the region PBFs for the given
 	// regions (nil = the real incremental conversion).
 	ConvertOverpass func(ctx context.Context, regions []string) error
 	// ReadyTimeout bounds each readiness probe (0 = 5 minutes).
 	ReadyTimeout time.Duration
+}
+
+// overpassNames returns the live and staging Overpass container names.
+func (d UpdateDeps) overpassNames() (live, staging string) {
+	live = d.OverpassContainerName
+	if live == "" {
+		live = overpassContainerName
+	}
+	return live, live + "-staging"
 }
 
 // ─── options and results ─────────────────────────────────────────────────────
