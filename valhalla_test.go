@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValhallaDockerBuildArgs_SingleRegion(t *testing.T) {
@@ -432,5 +433,24 @@ func TestNeedsBuild_MarkerAndCompleteTiles(t *testing.T) {
 	}
 	if build, reason := needsBuild(dataDir); build {
 		t.Errorf("expected no rebuild, got %q", reason)
+	}
+}
+
+func TestTilesNewerThan(t *testing.T) {
+	dataDir := completeDataDir(t)
+	tilesDir := filepath.Join(dataDir, "tiles")
+	mtime := time.Date(2026, 10, 31, 15, 44, 0, 0, time.UTC)
+	for _, l := range []string{"0", "1", "2"} {
+		p := filepath.Join(tilesDir, "tiles", l, "000", "123.gph")
+		if err := os.Chtimes(p, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if !tilesNewerThan(tilesDir, mtime.Add(-4*24*time.Hour)) {
+		t.Error("tiles written after the container started should count as newer")
+	}
+	if tilesNewerThan(tilesDir, mtime.Add(time.Hour)) {
+		t.Error("tiles older than the container start should not count as newer")
 	}
 }

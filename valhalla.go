@@ -292,7 +292,8 @@ func runValhallaStart(regions string, port int, dataDir string, stderr io.Writer
 	}
 
 	if isContainerRunning(valhallaContainerName) {
-		if !rebuilt {
+		stale := rebuilt || containerServesStaleTiles(valhallaContainerName, tilesDir)
+		if !stale {
 			fmt.Fprintf(stderr, "Valhalla routing server already running: http://localhost:%d\n", port)
 			return nil
 		}
@@ -361,6 +362,9 @@ func runValhallaStatus(port int, dataDir string, stderr io.Writer) error {
 	dataDir = resolveValhallaDataDir(dataDir)
 	if isContainerRunning(valhallaContainerName) {
 		fmt.Fprintf(stderr, "Valhalla routing server is running: http://localhost:%d\n", port)
+		if containerServesStaleTiles(valhallaContainerName, filepath.Join(dataDir, "tiles")) {
+			fmt.Fprintln(stderr, "WARNING: Valhalla is serving tiles older than those on disk; run 'twisty valhalla start' to restart it.")
+		}
 	} else {
 		fmt.Fprintln(stderr, "Valhalla routing server is not running.")
 	}
@@ -388,6 +392,43 @@ func tilesComplete(tilesDir string) (ok bool, problem string) {
 		}
 	}
 	return true, ""
+}
+
+// tilesNewerThan reports whether any .gph tile under tilesDir was modified
+// after since. Valhalla loads tiles at startup, so a container started before
+// the newest tile was written is serving a stale tile set.
+func tilesNewerThan(tilesDir string, since time.Time) bool {
+	newer := false
+	filepath.WalkDir(tilesDir, func(path string, d os.DirEntry, err error) error { //nolint:errcheck
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".gph") {
+			return nil
+		}
+		if info, err := d.Info(); err == nil && info.ModTime().After(since) {
+			newer = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return newer
+}
+
+// containerStartedAt returns when the named container last started.
+func containerStartedAt(name string) (time.Time, error) {
+	out, err := dockerCmd("inspect", "-f", "{{.State.StartedAt}}", name)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Parse(time.RFC3339Nano, strings.TrimSpace(out))
+}
+
+// containerServesStaleTiles reports whether the running container started
+// before the tiles on disk were last written.
+func containerServesStaleTiles(name, tilesDir string) bool {
+	started, err := containerStartedAt(name)
+	if err != nil {
+		return false
+	}
+	return tilesNewerThan(tilesDir, started)
 }
 
 // leftoverBuildFiles reports whether intermediate *.bin files remain directly
