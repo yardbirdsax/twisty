@@ -89,7 +89,7 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 			}
 		}
 	}
-	if len(changed) == 0 {
+	if len(changed) == 0 || deps.FreeSpace == nil {
 		return
 	}
 	root := deps.Root
