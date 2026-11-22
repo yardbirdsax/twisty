@@ -91,7 +91,7 @@ type Outcome string
 const (
 	OutcomeUnchanged Outcome = "unchanged"
 	// OutcomeChanged means upstream has newer data for at least one region and
-	// the service was not refreshed (a dry run, or refresh not implemented yet).
+	// the service was not refreshed (a dry run).
 	OutcomeChanged Outcome = "changed"
 	// OutcomeUpdated means the service was refreshed and is serving new data.
 	OutcomeUpdated Outcome = "updated"

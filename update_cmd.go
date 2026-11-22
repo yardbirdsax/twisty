@@ -50,18 +50,34 @@ func newUpdateCmdWith(run updateRunner) *cobra.Command {
 
 // runUpdate is the production updateRunner.
 func runUpdate(ctx context.Context, opts UpdateOptions, out io.Writer) error {
+	return runUpdateWith(ctx, productionUpdateDeps(), opts, out)
+}
+
+// runUpdateWith runs the update with injected dependencies, writes the report
+// and a closing per-service summary to out, and returns a non-nil error if any
+// service failed (so the process exits non-zero).
+func runUpdateWith(ctx context.Context, deps UpdateDeps, opts UpdateOptions, out io.Writer) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	rep, err := Update(ctx, productionUpdateDeps(), opts)
+	rep, err := Update(ctx, deps, opts)
 	if err != nil {
 		return err
 	}
 	renderUpdateReport(out, rep, opts)
+	renderUpdateSummary(out, rep)
 	if rep.Failed() {
 		return fmt.Errorf("update failed")
 	}
 	return nil
+}
+
+// renderUpdateSummary lists each service's final outcome, one per line.
+func renderUpdateSummary(w io.Writer, rep UpdateReport) {
+	fmt.Fprintln(w, "Summary:")
+	for _, s := range rep.Services {
+		fmt.Fprintf(w, "  %s: %s\n", s.Service, s.Outcome)
+	}
 }
 
 func productionUpdateDeps() UpdateDeps {
@@ -192,8 +208,6 @@ func renderUpdateReport(w io.Writer, rep UpdateReport, opts UpdateOptions) {
 		fmt.Fprintln(w, "dry run: nothing was modified")
 	case !anyChanged && !anyUpdated && !rep.Failed():
 		fmt.Fprintln(w, "Nothing to update.")
-	case anyChanged:
-		fmt.Fprintln(w, "Refreshing changed Overpass data is not implemented yet; it was not modified.")
 	}
 }
 

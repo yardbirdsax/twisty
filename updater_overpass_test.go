@@ -517,3 +517,22 @@ func TestOverpassContainerSpec_WithoutArchiveOmitsPlanetMount(t *testing.T) {
 		t.Errorf("db mount = %q", hostDB)
 	}
 }
+
+func TestValhallaOnlyUpdate_LeavesDerivedCachesUntouched(t *testing.T) {
+	e := newBothServicesEnv(t)
+
+	rep := e.update(t, UpdateOptions{Only: "valhalla"})
+
+	v := findService(t, rep, "valhalla")
+	if v.Outcome != OutcomeUpdated {
+		t.Fatalf("valhalla = %v (%s)", v.Outcome, v.Detail)
+	}
+	for _, d := range []string{e.root.TileCacheDir, e.root.ScoreCacheDir} {
+		if entries, _ := os.ReadDir(d); len(entries) != 1 {
+			t.Errorf("%s has %d entries, want the 1 original", d, len(entries))
+		}
+	}
+	if strings.Contains(v.Detail, "cache") {
+		t.Errorf("valhalla detail mentions caches: %q", v.Detail)
+	}
+}
