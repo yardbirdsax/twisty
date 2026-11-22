@@ -247,3 +247,31 @@ func TestOverpassInPlace_ImportFailureIsReportedAndNotStamped(t *testing.T) {
 		t.Errorf("stamp = %v, want old stamp kept so the next run retries", got)
 	}
 }
+
+func TestOverpassInPlace_ClearsDerivedCachesAndReportsThem(t *testing.T) {
+	e := newOverpassEnv(t, vermont)
+	e.makeChanged(vermont)
+	base := filepath.Dir(e.root.OverpassDir)
+	e.root.TileCacheDir = filepath.Join(base, "cache", "overpass")
+	e.root.ScoreCacheDir = filepath.Join(base, "cache", "scores")
+	for _, d := range []string{e.root.TileCacheDir, e.root.ScoreCacheDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "entry.json"), []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rep := e.update(t, UpdateOptions{InPlace: true})
+
+	for _, d := range []string{e.root.TileCacheDir, e.root.ScoreCacheDir} {
+		if entries, _ := os.ReadDir(d); len(entries) != 0 {
+			t.Errorf("%s still holds %d entries", d, len(entries))
+		}
+	}
+	op := findService(t, rep, "overpass")
+	if !strings.Contains(op.Detail, e.root.TileCacheDir) || !strings.Contains(op.Detail, e.root.ScoreCacheDir) {
+		t.Errorf("detail should name the removed caches, got %q", op.Detail)
+	}
+}
