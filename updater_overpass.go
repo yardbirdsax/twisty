@@ -93,7 +93,7 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 	rt := deps.Runtime
 	liveName, stagingName := deps.overpassNames()
 	dir := deps.Root.OverpassDir
-	all := loadedRegions(deps.Root, "overpass")
+	all := loadedRegions(deps.Root, ServiceOverpass)
 	var changed []string
 	for _, r := range sr.Regions {
 		if r.Changed {
@@ -102,11 +102,11 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 	}
 
 	// Stage: download, then convert changed regions and rebuild the archive.
-	if err := u.fetchRegions(ctx, changed); err != nil {
-		return "", atStage("download", err)
+	if err := u.fetchRegions(ctx, ServiceOverpass, changed); err != nil {
+		return "", atStage(stageDownload, err)
 	}
 	if err := u.convertOverpass(ctx, all); err != nil {
-		return "", atStage("convert", err)
+		return "", atStage(stageConvert, err)
 	}
 
 	live := filepath.Join(dir, "db")
@@ -115,15 +115,15 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 	merged := filepath.Join(dir, "merged.osm.bz2")
 	absLive, err := filepath.Abs(live)
 	if err != nil {
-		return "", atStage("import", err)
+		return "", atStage(stageImport, err)
 	}
 	absStaging, err := filepath.Abs(staging)
 	if err != nil {
-		return "", atStage("import", err)
+		return "", atStage(stageImport, err)
 	}
 	absMerged, err := filepath.Abs(merged)
 	if err != nil {
-		return "", atStage("import", err)
+		return "", atStage(stageImport, err)
 	}
 	port := deps.OverpassPort
 	if port == 0 {
@@ -147,7 +147,7 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 	if _, err := os.Stat(live); os.IsNotExist(err) {
 		if _, oldErr := os.Stat(old); oldErr == nil {
 			if err := os.Rename(old, live); err != nil {
-				return "", atStage("swap", fmt.Errorf("restoring database left by an interrupted swap: %w", err))
+				return "", atStage(stageSwap, fmt.Errorf("restoring database left by an interrupted swap: %w", err))
 			}
 		}
 	}
@@ -161,32 +161,32 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 		os.RemoveAll(staging)
 	}
 	if err := os.RemoveAll(staging); err != nil {
-		return "", atStage("import", err)
+		return "", atStage(stageImport, err)
 	}
 	if err := os.MkdirAll(staging, 0o755); err != nil {
-		return "", atStage("import", err)
+		return "", atStage(stageImport, err)
 	}
 	rt.Remove(ctx, stagingName) //nolint:errcheck // stale one from a crashed run
 	stageSpec := overpassContainerSpec(stagingName, stagePort, absStaging, absMerged)
 	if err := rt.Run(ctx, stageSpec); err != nil {
 		discardStaging()
-		return "", atStage("import", err)
+		return "", atStage(stageImport, err)
 	}
 	if err := probe(ctx, stagePort, defaultOverpassImportTimeout); err != nil {
 		discardStaging()
-		return "", atStage("import", err)
+		return "", atStage(stageImport, err)
 	}
 	if err := markOverpassImported(staging); err != nil {
 		discardStaging()
-		return "", atStage("import", err)
+		return "", atStage(stageImport, err)
 	}
 	if err := rt.Stop(ctx, stagingName); err != nil {
 		discardStaging()
-		return "", atStage("import", err)
+		return "", atStage(stageImport, err)
 	}
 	if err := rt.Remove(ctx, stagingName); err != nil {
 		discardStaging()
-		return "", atStage("import", err)
+		return "", atStage(stageImport, err)
 	}
 
 	// Stage: swap, then probe the new container.
@@ -195,24 +195,24 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 	movedOld, movedNew := false, false
 	swapErr := func() error {
 		if err := rt.Stop(ctx, liveName); err != nil {
-			return atStage("swap", err)
+			return atStage(stageSwap, err)
 		}
 		if err := rt.Remove(ctx, liveName); err != nil {
-			return atStage("swap", err)
+			return atStage(stageSwap, err)
 		}
 		if err := os.Rename(live, old); err != nil {
-			return atStage("swap", err)
+			return atStage(stageSwap, err)
 		}
 		movedOld = true
 		if err := os.Rename(staging, live); err != nil {
-			return atStage("swap", err)
+			return atStage(stageSwap, err)
 		}
 		movedNew = true
 		if err := rt.Run(ctx, liveSpec); err != nil {
-			return atStage("swap", err)
+			return atStage(stageSwap, err)
 		}
 		if err := probe(ctx, port, defaultReadyTimeout); err != nil {
-			return atStage("probe", err)
+			return atStage(stageProbe, err)
 		}
 		return nil
 	}()
@@ -248,7 +248,7 @@ func (u *updateRun) runOverpassUpdate(ctx context.Context, sr *ServiceReport) (s
 
 	// The new container passed its probe: only now is the old data expendable.
 	if err := os.RemoveAll(old); err != nil {
-		return "", atStage("cleanup", err)
+		return "", atStage(stageCleanup, err)
 	}
 
 	return clearDerivedCaches(deps.Root)
@@ -269,7 +269,7 @@ func clearDerivedCaches(root DataRoot) (string, error) {
 		}
 		for _, en := range entries {
 			if err := os.RemoveAll(filepath.Join(cache, en.Name())); err != nil {
-				return "", atStage("cache", err)
+				return "", atStage(stageCache, err)
 			}
 		}
 		removed = append(removed, cache)

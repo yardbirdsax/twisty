@@ -76,11 +76,23 @@ func (d UpdateDeps) overpassNames() (live, staging string) {
 	return live, live + "-staging"
 }
 
+// Service names one of the two local data services twisty keeps fresh.
+type Service string
+
+const (
+	ServiceValhalla Service = "valhalla"
+	ServiceOverpass Service = "overpass"
+)
+
+// allServices is every service, in the order `update` refreshes them: the
+// quick one (Valhalla) first.
+var allServices = []Service{ServiceValhalla, ServiceOverpass}
+
 // ─── options and results ─────────────────────────────────────────────────────
 
 // UpdateOptions are the user-facing flags of `twisty update`.
 type UpdateOptions struct {
-	Only    string // "", "overpass" or "valhalla"
+	Only    string // "", "overpass" or "valhalla" (the raw flag value)
 	Force   bool
 	DryRun  bool
 	InPlace bool
@@ -118,7 +130,7 @@ type RegionStatus struct {
 }
 
 type ServiceReport struct {
-	Service string // "overpass" or "valhalla"
+	Service Service
 	Outcome Outcome
 	Detail  string
 	Regions []RegionStatus
@@ -145,11 +157,11 @@ func (r UpdateReport) Failed() bool {
 // Update checks each loaded region against upstream and reports, per service,
 // what changed. Valhalla is considered before Overpass.
 func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateReport, error) {
-	services := []string{"valhalla", "overpass"} // quick service first
-	switch opts.Only {
+	services := allServices
+	switch Service(opts.Only) {
 	case "":
-	case "valhalla", "overpass":
-		services = []string{opts.Only}
+	case ServiceValhalla, ServiceOverpass:
+		services = []Service{Service(opts.Only)}
 	default:
 		return UpdateReport{}, fmt.Errorf("invalid --only value %q: want overpass or valhalla", opts.Only)
 	}
@@ -177,11 +189,11 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 				continue
 			}
 			switch {
-			case sr.Service == "valhalla":
+			case sr.Service == ServiceValhalla:
 				run.updateValhalla(ctx, sr)
-			case sr.Service == "overpass" && opts.InPlace:
+			case sr.Service == ServiceOverpass && opts.InPlace:
 				run.updateOverpassInPlace(ctx, sr)
-			case sr.Service == "overpass":
+			case sr.Service == ServiceOverpass:
 				run.updateOverpass(ctx, sr)
 			}
 		}
@@ -190,7 +202,7 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 	return rep, nil
 }
 
-func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc string) ServiceReport {
+func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc Service) ServiceReport {
 	sr := ServiceReport{Service: svc, Outcome: OutcomeUnchanged}
 	regions := loadedRegions(deps.Root, svc)
 	if len(regions) == 0 {
@@ -209,7 +221,7 @@ func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc 
 		}
 		rs.Upstream = info.LastModified
 		rs.ContentLength = info.ContentLength
-		held, hasStamp := readUpstreamStamp(deps.Root.PBFDir, region)
+		held, hasStamp := readServiceStamp(deps.Root.PBFDir, svc, region)
 		rs.HeldStamp = held
 		switch {
 		case opts.Force:
@@ -238,15 +250,15 @@ func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc 
 
 // ─── state on disk ───────────────────────────────────────────────────────────
 
-func serviceDir(root DataRoot, svc string) string {
-	if svc == "valhalla" {
+func serviceDir(root DataRoot, svc Service) string {
+	if svc == ServiceValhalla {
 		return root.ValhallaDir
 	}
 	return root.OverpassDir
 }
 
 // loadedRegions reads the region list from a service's .regions stamp file.
-func loadedRegions(root DataRoot, svc string) []string {
+func loadedRegions(root DataRoot, svc Service) []string {
 	b, err := os.ReadFile(filepath.Join(serviceDir(root, svc), ".regions"))
 	if err != nil {
 		return nil
@@ -260,25 +272,3 @@ func loadedRegions(root DataRoot, svc string) []string {
 	return out
 }
 
-func upstreamStampPath(pbfDir, region string) string {
-	return filepath.Join(pbfDir, pbfFilename(region)+".upstream")
-}
-
-// writeUpstreamStamp records the upstream Last-Modified of the PBF held for region.
-func writeUpstreamStamp(pbfDir, region string, lastModified time.Time) error {
-	return os.WriteFile(upstreamStampPath(pbfDir, region),
-		[]byte(lastModified.UTC().Format(time.RFC3339)), 0o644)
-}
-
-// readUpstreamStamp returns the stamp for region; ok is false if missing or unreadable.
-func readUpstreamStamp(pbfDir, region string) (time.Time, bool) {
-	b, err := os.ReadFile(upstreamStampPath(pbfDir, region))
-	if err != nil {
-		return time.Time{}, false
-	}
-	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(string(b)))
-	if err != nil {
-		return time.Time{}, false
-	}
-	return ts, true
-}

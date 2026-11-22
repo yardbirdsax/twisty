@@ -115,9 +115,9 @@ func (e *stagedOverpassEnv) assertNoLeftovers(t *testing.T) {
 	}
 }
 
-func stampOf(t *testing.T, e *updaterEnv, region string) string {
+func stampOf(t *testing.T, e *updaterEnv, svc Service, region string) string {
 	t.Helper()
-	ts, ok := readUpstreamStamp(e.root.PBFDir, region)
+	ts, ok := readServiceStamp(e.root.PBFDir, svc, region)
 	if !ok {
 		return "none"
 	}
@@ -189,7 +189,7 @@ func TestOverpassUpdate_StagedSwapKeepsOldServingUntilProbePasses(t *testing.T) 
 		t.Errorf("new container mounts %q, want live db path %q", host, e.liveDB)
 	}
 	e.assertNoLeftovers(t)
-	if got := stampOf(t, e.updaterEnv, vermont); got != "2026-11-15" {
+	if got := stampOf(t, e.updaterEnv, ServiceOverpass, vermont); got != "2026-11-15" {
 		t.Errorf("stamp = %s, want 2026-11-15", got)
 	}
 }
@@ -223,7 +223,7 @@ func TestOverpassUpdate_OnlyChangedRegionsDownloadedAllConverted(t *testing.T) {
 	if len(e.converted) != 1 || !reflect.DeepEqual(e.converted[0], []string{vermont, maine}) {
 		t.Errorf("converted = %v, want one conversion over both regions", e.converted)
 	}
-	if got := stampOf(t, e.updaterEnv, maine); got != "2026-11-01" {
+	if got := stampOf(t, e.updaterEnv, ServiceOverpass, maine); got != "2026-11-01" {
 		t.Errorf("unchanged region's stamp moved to %s", got)
 	}
 }
@@ -260,7 +260,7 @@ func TestOverpassUpdate_FailedImportDiscardsStagingAndLeavesOldServing(t *testin
 		t.Errorf("live db = %q, want old", d)
 	}
 	e.assertNoLeftovers(t)
-	if got := stampOf(t, e.updaterEnv, vermont); got != "2026-11-01" {
+	if got := stampOf(t, e.updaterEnv, ServiceOverpass, vermont); got != "2026-11-01" {
 		t.Errorf("stamp moved to %s after a failed update", got)
 	}
 	if entries, _ := os.ReadDir(e.root.TileCacheDir); len(entries) == 0 {
@@ -299,7 +299,7 @@ func TestOverpassUpdate_ProbeFailureRestoresOldDatabaseAndContainer(t *testing.T
 		t.Errorf("live probes = %d, want 2 (new, then restarted old)", probes)
 	}
 	e.assertNoLeftovers(t)
-	if got := stampOf(t, e.updaterEnv, vermont); got != "2026-11-01" {
+	if got := stampOf(t, e.updaterEnv, ServiceOverpass, vermont); got != "2026-11-01" {
 		t.Errorf("stamp moved to %s after a failed update", got)
 	}
 	if entries, _ := os.ReadDir(e.root.TileCacheDir); len(entries) == 0 {
@@ -407,7 +407,7 @@ func TestStamp_WrittenOnlyOnceEveryServiceLoadingTheRegionIsUpdated(t *testing.T
 			t.Fatalf("%s = %v (%s), want updated", s.Service, s.Outcome, s.Detail)
 		}
 	}
-	if got := stampOf(t, e.updaterEnv, vermont); got != "2026-11-15" {
+	if got := stampOf(t, e.updaterEnv, ServiceOverpass, vermont); got != "2026-11-15" {
 		t.Errorf("stamp = %s, want 2026-11-15 after both services updated", got)
 	}
 }
@@ -421,7 +421,7 @@ func TestStamp_OverpassFailureAfterValhallaSuccessLeavesRegionStale(t *testing.T
 	if v := findService(t, rep, "valhalla"); v.Outcome != OutcomeUpdated {
 		t.Fatalf("valhalla = %v (%s)", v.Outcome, v.Detail)
 	}
-	if got := stampOf(t, e.updaterEnv, vermont); got != "2026-11-01" {
+	if got := stampOf(t, e.updaterEnv, ServiceOverpass, vermont); got != "2026-11-01" {
 		t.Errorf("stamp = %s: overpass never got the new data, the region must still read as changed", got)
 	}
 	// And the next update, with overpass healthy, picks the region up again.
@@ -432,7 +432,7 @@ func TestStamp_OverpassFailureAfterValhallaSuccessLeavesRegionStale(t *testing.T
 	}
 }
 
-func TestStamp_OnlyValhallaDoesNotStampRegionOverpassAlsoLoads(t *testing.T) {
+func TestStamp_OnlyValhallaStampsValhallaWithoutHidingStalenessFromOverpass(t *testing.T) {
 	e := newBothServicesEnv(t)
 
 	rep := e.update(t, UpdateOptions{Only: "valhalla"})
@@ -440,22 +440,48 @@ func TestStamp_OnlyValhallaDoesNotStampRegionOverpassAlsoLoads(t *testing.T) {
 	if v := findService(t, rep, "valhalla"); v.Outcome != OutcomeUpdated {
 		t.Fatalf("valhalla = %v (%s)", v.Outcome, v.Detail)
 	}
-	if got := stampOf(t, e.updaterEnv, vermont); got != "2026-11-01" {
-		t.Errorf("stamp = %s, want unchanged so overpass still refreshes the region", got)
+	// Valhalla holds the new version now: re-running it must not rebuild.
+	rep = e.update(t, UpdateOptions{Only: "valhalla", DryRun: true})
+	if v := findService(t, rep, "valhalla"); v.Outcome != OutcomeUnchanged {
+		t.Errorf("valhalla after its own refresh = %v, want unchanged", v.Outcome)
 	}
+	// Overpass never got it.
 	rep = e.update(t, UpdateOptions{Only: "overpass", DryRun: true})
 	if o := findService(t, rep, "overpass"); o.Outcome != OutcomeChanged {
 		t.Errorf("overpass = %v, want changed", o.Outcome)
 	}
 }
 
-func TestStamp_OnlyOverpassDoesNotStampRegionValhallaAlsoLoads(t *testing.T) {
+func TestStamp_OnlyOverpassStampsOverpassWithoutHidingStalenessFromValhalla(t *testing.T) {
 	e := newBothServicesEnv(t)
 
-	e.update(t, UpdateOptions{Only: "overpass"})
+	rep := e.update(t, UpdateOptions{Only: "overpass"})
 
-	if got := stampOf(t, e.updaterEnv, vermont); got != "2026-11-01" {
-		t.Errorf("stamp = %s, want unchanged so valhalla still refreshes the region", got)
+	if o := findService(t, rep, "overpass"); o.Outcome != OutcomeUpdated {
+		t.Fatalf("overpass = %v (%s)", o.Outcome, o.Detail)
+	}
+	rep = e.update(t, UpdateOptions{Only: "overpass", DryRun: true})
+	if o := findService(t, rep, "overpass"); o.Outcome != OutcomeUnchanged {
+		t.Errorf("overpass after its own refresh = %v, want unchanged (hours-long rebuild must not repeat)", o.Outcome)
+	}
+	rep = e.update(t, UpdateOptions{Only: "valhalla", DryRun: true})
+	if v := findService(t, rep, "valhalla"); v.Outcome != OutcomeChanged {
+		t.Errorf("valhalla = %v, want changed", v.Outcome)
+	}
+}
+
+func TestStamp_FailedServiceDoesNotKeepSuccessfulServiceStale(t *testing.T) {
+	e := newBothServicesEnv(t)
+	e.convErr = errors.New("conversion failed")
+
+	e.update(t, UpdateOptions{})
+
+	rep := e.update(t, UpdateOptions{DryRun: true})
+	if v := findService(t, rep, "valhalla"); v.Outcome != OutcomeUnchanged {
+		t.Errorf("valhalla = %v, want unchanged: it was refreshed", v.Outcome)
+	}
+	if o := findService(t, rep, "overpass"); o.Outcome != OutcomeChanged {
+		t.Errorf("overpass = %v, want changed: it failed", o.Outcome)
 	}
 }
 
@@ -466,7 +492,7 @@ func TestStamp_ValhallaOnlyRegionStampsAfterValhallaAlone(t *testing.T) {
 
 	e.update(t, UpdateOptions{Only: "valhalla"})
 
-	if got := stampOf(t, e.updaterEnv, maine); got != "2026-11-15" {
+	if got := stampOf(t, e.updaterEnv, ServiceValhalla, maine); got != "2026-11-15" {
 		t.Errorf("maine stamp = %s, want 2026-11-15", got)
 	}
 }

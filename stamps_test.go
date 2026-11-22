@@ -57,7 +57,7 @@ func TestDownloadPBF_FailedDownload_LeavesOldStamp(t *testing.T) {
 	dir := t.TempDir()
 	region := "europe/malta"
 	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	writeUpstreamStamp(dir, region, old)
+	writeDownloadStamp(t, dir, region, old)
 	if err := downloadPBF(srv.URL+"/x", filepath.Join(dir, pbfFilename(region)), NoopFileDownloadProgress{}); err == nil {
 		t.Fatal("expected error")
 	}
@@ -93,7 +93,7 @@ func TestBackfillUpstreamStamps_SeedsFromMtime_NoOverwrite(t *testing.T) {
 	}
 	// andorra is loaded but its PBF is missing: skipped.
 	existing := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
-	writeUpstreamStamp(root.PBFDir, "europe/monaco", existing)
+	writeDownloadStamp(t, root.PBFDir, "europe/monaco", existing)
 
 	seeded, err := BackfillUpstreamStamps(root)
 	if err != nil {
@@ -102,13 +102,15 @@ func TestBackfillUpstreamStamps_SeedsFromMtime_NoOverwrite(t *testing.T) {
 	if len(seeded) != 1 || seeded[0] != "europe/malta" {
 		t.Fatalf("seeded = %v, want [europe/malta]", seeded)
 	}
-	if got, ok := readUpstreamStamp(root.PBFDir, "europe/malta"); !ok || !got.Equal(mtime) {
+	if got, ok := readServiceStamp(root.PBFDir, ServiceOverpass, "europe/malta"); !ok || !got.Equal(mtime) {
 		t.Errorf("malta stamp = %v %v, want %v", got, ok, mtime)
 	}
-	if got, _ := readUpstreamStamp(root.PBFDir, "europe/monaco"); !got.Equal(existing) {
-		t.Errorf("monaco stamp overwritten: %v", got)
+	for _, svc := range allServices {
+		if got, _ := readServiceStamp(root.PBFDir, svc, "europe/monaco"); !got.Equal(existing) {
+			t.Errorf("monaco %s stamp overwritten: %v", svc, got)
+		}
 	}
-	if _, ok := readUpstreamStamp(root.PBFDir, "europe/andorra"); ok {
+	if _, ok := readServiceStamp(root.PBFDir, ServiceValhalla, "europe/andorra"); ok {
 		t.Error("stamp invented for missing PBF")
 	}
 }

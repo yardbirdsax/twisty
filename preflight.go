@@ -74,7 +74,7 @@ func dirSize(path string) int64 {
 // reclaiming could not make the update fit anyway. Live databases, live tiles
 // and region PBFs are never candidates.
 func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
-	changed := map[string]bool{}
+	changed := map[Service]bool{}
 	downloads := map[string]int64{} // region -> bytes, deduped across services
 	changedOverpassRegions := []string{}
 	for _, s := range rep.Services {
@@ -85,7 +85,7 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 		for _, r := range s.Regions {
 			if r.Changed {
 				downloads[r.Region] = r.ContentLength
-				if s.Service == "overpass" {
+				if s.Service == ServiceOverpass {
 					changedOverpassRegions = append(changedOverpassRegions, r.Region)
 				}
 			}
@@ -110,7 +110,7 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 		}
 	}
 
-	if changed["overpass"] {
+	if changed[ServiceOverpass] {
 		if !opts.InPlace {
 			need += dirSize(filepath.Join(root.OverpassDir, "db")) * dbSafetyMarginPercent / 100
 		}
@@ -122,7 +122,7 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 		addReclaim(root.ScoreCacheDir)
 		addReclaim(merged)
 	}
-	if changed["valhalla"] {
+	if changed[ServiceValhalla] {
 		mergedPBF := filepath.Join(root.ValhallaDir, "merged.osm.pbf")
 		need += dirSize(mergedPBF) + dirSize(filepath.Join(root.ValhallaDir, "tiles"))
 		addReclaim(mergedPBF)
@@ -133,7 +133,7 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 	}
 
 	freeDir := root.OverpassDir
-	if !changed["overpass"] {
+	if !changed[ServiceOverpass] {
 		freeDir = root.ValhallaDir
 	}
 	free, err := deps.FreeSpace(freeDir)

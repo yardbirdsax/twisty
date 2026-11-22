@@ -18,17 +18,25 @@ type updateRun struct {
 	// by both services is downloaded once. Maps region to the upstream version
 	// fetched.
 	fetched map[string]UpstreamInfo
+	// held records, per service, the upstream version of each region on disk
+	// when that service built from it. A service that then succeeds is stamped
+	// with exactly these versions (see stampRefreshed).
+	held map[Service]map[string]UpstreamInfo
 }
 
 func newUpdateRun(deps UpdateDeps) *updateRun {
-	return &updateRun{deps: deps, fetched: map[string]UpstreamInfo{}}
+	return &updateRun{
+		deps:    deps,
+		fetched: map[string]UpstreamInfo{},
+		held:    map[Service]map[string]UpstreamInfo{},
+	}
 }
 
 // fetchRegions downloads each region's current extract into the shared PBF
-// directory, skipping regions already fetched this run. Stamps are NOT written
-// here: callers stamp only after their refresh succeeded, so a failed refresh
-// is retried next time.
-func (u *updateRun) fetchRegions(ctx context.Context, regions []string) error {
+// directory, skipping regions already fetched this run, and notes which fetched
+// versions svc will build from. Stamps are NOT written here: they are written
+// only after svc's refresh succeeded, so a failed refresh is retried next time.
+func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []string) error {
 	if err := os.MkdirAll(u.deps.Root.PBFDir, 0o755); err != nil {
 		return err
 	}
@@ -43,58 +51,58 @@ func (u *updateRun) fetchRegions(ctx context.Context, regions []string) error {
 		}
 		u.fetched[region] = info
 	}
+	// svc builds from every PBF on disk it loads, including ones an earlier
+	// service fetched this run.
+	held := map[string]UpstreamInfo{}
+	for _, region := range loadedRegions(u.deps.Root, svc) {
+		if info, ok := u.fetched[region]; ok {
+			held[region] = info
+		}
+	}
+	u.held[svc] = held
 	return nil
 }
 
-// stampRefreshed records the upstream version of each region fetched this run,
-// but only for regions every service that loads them was refreshed with. The
-// stamp is per region and shared by both services, so stamping after one
-// service alone would make the other think the region is current and never
-// refresh it. A region left unstamped reads as changed next run (the safe
-// direction). A region whose download carried no Last-Modified loses its
-// stamp. A stamping error fails the services that load the region.
+// stampRefreshed records, for each service that was refreshed this run, the
+// upstream version of every region it built from. Stamps are per service, so a
+// service that succeeded is never rebuilt because another failed, and a service
+// that was not refreshed keeps its old stamp and still reads as stale. A region
+// whose download carried no Last-Modified is recorded as unknown. A stamping
+// error fails that service.
 func (u *updateRun) stampRefreshed(services []ServiceReport) {
-	updated := map[string]bool{}
-	for _, s := range services {
-		if s.Outcome == OutcomeUpdated {
-			updated[s.Service] = true
-		}
-	}
-	for region, info := range u.fetched {
-		ready := true
-		var loaders []string
-		for _, svc := range []string{"overpass", "valhalla"} {
-			for _, r := range loadedRegions(u.deps.Root, svc) {
-				if r == region {
-					loaders = append(loaders, svc)
-					ready = ready && updated[svc]
-				}
-			}
-		}
-		if !ready || len(loaders) == 0 {
+	for i := range services {
+		sr := &services[i]
+		if sr.Outcome != OutcomeUpdated {
 			continue
 		}
-		var err error
-		if info.LastModified.IsZero() {
-			if rmErr := os.Remove(upstreamStampPath(u.deps.Root.PBFDir, region)); rmErr != nil && !os.IsNotExist(rmErr) {
-				err = rmErr
-			}
-		} else {
-			err = writeUpstreamStamp(u.deps.Root.PBFDir, region, info.LastModified)
-		}
-		if err == nil {
-			continue
-		}
-		for i := range services {
-			for _, svc := range loaders {
-				if services[i].Service == svc && services[i].Outcome == OutcomeUpdated {
-					services[i].Outcome = OutcomeFailed
-					services[i].Detail = fmt.Sprintf("stage stamp: writing stamp for %s: %v", region, err)
-				}
-			}
+		if err := u.stampService(sr.Service); err != nil {
+			sr.Outcome = OutcomeFailed
+			sr.Detail = atStage(stageStamp, err).Error()
 		}
 	}
 }
+
+func (u *updateRun) stampService(svc Service) error {
+	for region, info := range u.held[svc] {
+		if err := writeServiceStamp(u.deps.Root.PBFDir, svc, region, info.LastModified); err != nil {
+			return fmt.Errorf("writing stamp for %s: %w", region, err)
+		}
+	}
+	return nil
+}
+
+// Stages of a service update, as named in failure details.
+const (
+	stageDownload = "download"
+	stageConvert  = "convert"
+	stageBuild    = "build"
+	stageImport   = "import"
+	stageSwap     = "swap"
+	stageProbe    = "probe"
+	stageCleanup  = "cleanup"
+	stageCache    = "cache"
+	stageStamp    = "stamp"
+)
 
 // stageError names the stage of a service update that failed.
 type stageError struct {
@@ -131,7 +139,7 @@ func (u *updateRun) runValhallaUpdate(ctx context.Context, sr *ServiceReport) er
 	deps := u.deps
 	rt := deps.Runtime
 	dir := deps.Root.ValhallaDir
-	all := loadedRegions(deps.Root, "valhalla")
+	all := loadedRegions(deps.Root, ServiceValhalla)
 	var changed []string
 	for _, r := range sr.Regions {
 		if r.Changed {
@@ -140,8 +148,8 @@ func (u *updateRun) runValhallaUpdate(ctx context.Context, sr *ServiceReport) er
 	}
 
 	// Stage: download.
-	if err := u.fetchRegions(ctx, changed); err != nil {
-		return atStage("download", err)
+	if err := u.fetchRegions(ctx, ServiceValhalla, changed); err != nil {
+		return atStage(stageDownload, err)
 	}
 
 	// Stage: build into staging while the old container keeps serving.
@@ -150,7 +158,7 @@ func (u *updateRun) runValhallaUpdate(ctx context.Context, sr *ServiceReport) er
 	old := filepath.Join(dir, "tiles.old")
 	if err := u.buildValhallaTiles(ctx, all, staging); err != nil {
 		os.RemoveAll(staging)
-		return atStage("build", err)
+		return atStage(stageBuild, err)
 	}
 
 	// Recover from a crash that died between the two renames of a swap.
@@ -158,7 +166,7 @@ func (u *updateRun) runValhallaUpdate(ctx context.Context, sr *ServiceReport) er
 		if _, oldErr := os.Stat(old); oldErr == nil {
 			if err := os.Rename(old, live); err != nil {
 				os.RemoveAll(staging)
-				return atStage("swap", fmt.Errorf("restoring tiles left by an interrupted swap: %w", err))
+				return atStage(stageSwap, fmt.Errorf("restoring tiles left by an interrupted swap: %w", err))
 			}
 		}
 	}
@@ -167,7 +175,7 @@ func (u *updateRun) runValhallaUpdate(ctx context.Context, sr *ServiceReport) er
 	absLive, err := filepath.Abs(live)
 	if err != nil {
 		os.RemoveAll(staging)
-		return atStage("swap", err)
+		return atStage(stageSwap, err)
 	}
 	port := deps.ValhallaPort
 	if port == 0 {
@@ -180,21 +188,21 @@ func (u *updateRun) runValhallaUpdate(ctx context.Context, sr *ServiceReport) er
 	movedOld, movedNew := false, false
 	swapErr := func() error {
 		if err := rt.Stop(ctx, valhallaContainerName); err != nil {
-			return atStage("swap", err)
+			return atStage(stageSwap, err)
 		}
 		if err := rt.Remove(ctx, valhallaContainerName); err != nil {
-			return atStage("swap", err)
+			return atStage(stageSwap, err)
 		}
 		if err := os.Rename(live, old); err != nil {
-			return atStage("swap", err)
+			return atStage(stageSwap, err)
 		}
 		movedOld = true
 		if err := os.Rename(staging, live); err != nil {
-			return atStage("swap", err)
+			return atStage(stageSwap, err)
 		}
 		movedNew = true
 		if err := rt.Run(ctx, spec); err != nil {
-			return atStage("swap", err)
+			return atStage(stageSwap, err)
 		}
 		timeout := deps.ReadyTimeout
 		if timeout == 0 {
@@ -203,7 +211,7 @@ func (u *updateRun) runValhallaUpdate(ctx context.Context, sr *ServiceReport) er
 		probeCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		if err := rt.WaitReady(probeCtx, valhallaStatusURL(port)); err != nil {
-			return atStage("probe", err)
+			return atStage(stageProbe, err)
 		}
 		return nil
 	}()
@@ -240,10 +248,10 @@ func (u *updateRun) runValhallaUpdate(ctx context.Context, sr *ServiceReport) er
 
 	// The new container passed its probe: only now is the old data expendable.
 	if err := os.RemoveAll(old); err != nil {
-		return atStage("cleanup", err)
+		return atStage(stageCleanup, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, builtMarkerName), nil, 0o644); err != nil {
-		return atStage("cleanup", err)
+		return atStage(stageCleanup, err)
 	}
 	return nil
 }

@@ -96,7 +96,7 @@ func TestMultiService_OnlyLimitsToOneService(t *testing.T) {
 
 			rep := e.update(t, UpdateOptions{Only: only})
 
-			if len(rep.Services) != 1 || rep.Services[0].Service != only {
+			if len(rep.Services) != 1 || string(rep.Services[0].Service) != only {
 				t.Fatalf("services = %+v, want only %s", rep.Services, only)
 			}
 			for _, c := range e.runtime.calls {

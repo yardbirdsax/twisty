@@ -123,7 +123,7 @@ func TestE2E_OverpassStagedUpdate_NoReimportAfterSwap(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root.OverpassDir, ".regions"), []byte(region), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeUpstreamStamp(root.PBFDir, region, stale); err != nil {
+	if err := writeServiceStamp(root.PBFDir, ServiceOverpass, region, stale); err != nil {
 		t.Fatal(err)
 	}
 

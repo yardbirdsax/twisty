@@ -36,7 +36,7 @@ func (u *updateRun) runOverpassInPlace(ctx context.Context, sr *ServiceReport) e
 	rt := deps.Runtime
 	liveName, _ := deps.overpassNames()
 	dir := deps.Root.OverpassDir
-	all := loadedRegions(deps.Root, "overpass")
+	all := loadedRegions(deps.Root, ServiceOverpass)
 	var changed []string
 	for _, r := range sr.Regions {
 		if r.Changed {
@@ -46,20 +46,20 @@ func (u *updateRun) runOverpassInPlace(ctx context.Context, sr *ServiceReport) e
 
 	// Stage: download, then convert, both while the old database still serves,
 	// so a failure here costs no downtime and loses nothing.
-	if err := u.fetchRegions(ctx, changed); err != nil {
-		return atStage("download", err)
+	if err := u.fetchRegions(ctx, ServiceOverpass, changed); err != nil {
+		return atStage(stageDownload, err)
 	}
 	if err := u.convertOverpass(ctx, all); err != nil {
-		return atStage("convert", err)
+		return atStage(stageConvert, err)
 	}
 
 	db, err := filepath.Abs(filepath.Join(dir, "db"))
 	if err != nil {
-		return atStage("import", err)
+		return atStage(stageImport, err)
 	}
 	merged, err := filepath.Abs(filepath.Join(dir, "merged.osm.bz2"))
 	if err != nil {
-		return atStage("import", err)
+		return atStage(stageImport, err)
 	}
 	port := deps.OverpassPort
 	if port == 0 {
@@ -68,19 +68,19 @@ func (u *updateRun) runOverpassInPlace(ctx context.Context, sr *ServiceReport) e
 
 	// Stage: point of no return. Stop, wipe, and let the fresh container import.
 	if err := rt.Stop(ctx, liveName); err != nil {
-		return atStage("import", err)
+		return atStage(stageImport, err)
 	}
 	if err := rt.Remove(ctx, liveName); err != nil {
-		return atStage("import", err)
+		return atStage(stageImport, err)
 	}
 	if err := os.RemoveAll(db); err != nil {
-		return atStage("import", fmt.Errorf("wiping database: %w", err))
+		return atStage(stageImport, fmt.Errorf("wiping database: %w", err))
 	}
 	if err := os.MkdirAll(db, 0o755); err != nil {
-		return atStage("import", err)
+		return atStage(stageImport, err)
 	}
 	if err := rt.Run(ctx, overpassContainerSpec(liveName, port, db, merged)); err != nil {
-		return atStage("import", err)
+		return atStage(stageImport, err)
 	}
 	timeout := deps.ReadyTimeout
 	if timeout == 0 {
@@ -89,7 +89,7 @@ func (u *updateRun) runOverpassInPlace(ctx context.Context, sr *ServiceReport) e
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := rt.WaitReady(probeCtx, overpassReadyURL(port)); err != nil {
-		return atStage("import", fmt.Errorf("%w (the database was wiped; re-run `twisty update --in-place` or `twisty overpass start`)", err))
+		return atStage(stageImport, fmt.Errorf("%w (the database was wiped; re-run `twisty update --in-place` or `twisty overpass start`)", err))
 	}
 
 	// The shared per-region stamp is written by Update once every service

@@ -97,7 +97,7 @@ func TestOverpassInPlace_StopsWipesAndReimports(t *testing.T) {
 	if !reflect.DeepEqual(e.upstream.downloads, []string{vermont}) {
 		t.Errorf("downloads = %v", e.upstream.downloads)
 	}
-	if got, ok := readUpstreamStamp(e.root.PBFDir, vermont); !ok || !got.Equal(t1) {
+	if got, ok := readServiceStamp(e.root.PBFDir, ServiceOverpass, vermont); !ok || !got.Equal(t1) {
 		t.Errorf("stamp = %v (ok=%v), want %v", got, ok, t1)
 	}
 	if !e.runtime.IsRunning(overpassContainerName) {
@@ -243,7 +243,7 @@ func TestOverpassInPlace_ImportFailureIsReportedAndNotStamped(t *testing.T) {
 	if op.Outcome != OutcomeFailed || !strings.Contains(op.Detail, "import") {
 		t.Errorf("outcome = %v detail %q, want failed at import", op.Outcome, op.Detail)
 	}
-	if got, _ := readUpstreamStamp(e.root.PBFDir, vermont); !got.Equal(t0) {
+	if got, _ := readServiceStamp(e.root.PBFDir, ServiceOverpass, vermont); !got.Equal(t0) {
 		t.Errorf("stamp = %v, want old stamp kept so the next run retries", got)
 	}
 }

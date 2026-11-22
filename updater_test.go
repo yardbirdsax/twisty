@@ -109,10 +109,10 @@ func (e *updaterEnv) deps() UpdateDeps {
 // load records region as loaded for service ("overpass" or "valhalla"), with an
 // upstream stamp held locally (zero stamp means no stamp file) and an upstream
 // Last-Modified.
-func (e *updaterEnv) load(service, region string, held, upstream time.Time) {
+func (e *updaterEnv) load(service Service, region string, held, upstream time.Time) {
 	e.t.Helper()
 	dir := e.root.OverpassDir
-	if service == "valhalla" {
+	if service == ServiceValhalla {
 		dir = e.root.ValhallaDir
 	}
 	regionsFile := filepath.Join(dir, ".regions")
@@ -129,14 +129,14 @@ func (e *updaterEnv) load(service, region string, held, upstream time.Time) {
 		e.t.Fatal(err)
 	}
 	if !held.IsZero() {
-		if err := writeUpstreamStamp(e.root.PBFDir, region, held); err != nil {
+		if err := writeServiceStamp(e.root.PBFDir, service, region, held); err != nil {
 			e.t.Fatal(err)
 		}
 	}
 	e.upstream.info[region] = UpstreamInfo{LastModified: upstream, ContentLength: 100}
 }
 
-func findService(t *testing.T, rep UpdateReport, service string) ServiceReport {
+func findService(t *testing.T, rep UpdateReport, service Service) ServiceReport {
 	t.Helper()
 	for _, s := range rep.Services {
 		if s.Service == service {
@@ -180,5 +180,13 @@ func TestUpdate_RegionNewerUpstreamIsChanged(t *testing.T) {
 	}
 	if !findRegion(t, v, "north-america/us/vermont").Changed {
 		t.Error("vermont should be marked changed")
+	}
+}
+
+// writeDownloadStamp writes the stamp a `start` download leaves beside a PBF.
+func writeDownloadStamp(t *testing.T, pbfDir, region string, ts time.Time) {
+	t.Helper()
+	if err := os.WriteFile(upstreamStampPath(pbfDir, region), []byte(ts.UTC().Format(time.RFC3339)), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

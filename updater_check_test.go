@@ -20,7 +20,7 @@ func TestUpdate_UpToDateRegionsExitEarlyTouchingNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, svc := range []string{"valhalla", "overpass"} {
+	for _, svc := range allServices {
 		s := findService(t, rep, svc)
 		if s.Outcome != OutcomeUnchanged {
 			t.Errorf("%s outcome = %v, want unchanged", svc, s.Outcome)
@@ -193,4 +193,23 @@ func snapshotTree(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return sb.String()
+}
+
+// Installs that predate per-service stamps hold only the download stamp; both
+// services honour it until they get a stamp of their own.
+func TestUpdate_LegacyDownloadStampCountsForEveryService(t *testing.T) {
+	e := newUpdaterEnv(t)
+	e.load("valhalla", "north-america/us/vermont", time.Time{}, t1)
+	e.load("overpass", "north-america/us/vermont", time.Time{}, t1)
+	writeDownloadStamp(t, e.root.PBFDir, "north-america/us/vermont", t1)
+
+	rep, err := Update(context.Background(), e.deps(), UpdateOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, svc := range allServices {
+		if s := findService(t, rep, svc); s.Outcome != OutcomeUnchanged {
+			t.Errorf("%s = %v, want unchanged via the legacy stamp", svc, s.Outcome)
+		}
+	}
 }

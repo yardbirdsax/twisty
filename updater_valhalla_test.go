@@ -145,7 +145,7 @@ func TestValhallaUpdate_SwapsToNewTilesAndRecordsStamp(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(e.root.PBFDir, pbfFilename(vermont))); !strings.Contains(string(b), "2026-11-15") {
 		t.Errorf("PBF not refreshed: %q", b)
 	}
-	if got, ok := readUpstreamStamp(e.root.PBFDir, vermont); !ok || !got.Equal(t1) {
+	if got, ok := readServiceStamp(e.root.PBFDir, ServiceValhalla, vermont); !ok || !got.Equal(t1) {
 		t.Errorf("stamp = %v (%v), want %v", got, ok, t1)
 	}
 }
@@ -168,7 +168,7 @@ func TestValhallaUpdate_OnlyChangedRegionsAreDownloadedAllAreMerged(t *testing.T
 	if !reflect.DeepEqual(e.runtime.calls[:2], wantCalls) {
 		t.Errorf("first calls = %v, want %v", e.runtime.calls[:2], wantCalls)
 	}
-	if got, _ := readUpstreamStamp(e.root.PBFDir, maine); !got.Equal(t0) {
+	if got, _ := readServiceStamp(e.root.PBFDir, ServiceValhalla, maine); !got.Equal(t0) {
 		t.Errorf("unchanged region's stamp moved to %v", got)
 	}
 }
@@ -201,7 +201,7 @@ func TestValhallaUpdate_BuildFailureLeavesOldServiceUntouched(t *testing.T) {
 		t.Error("old container and tiles must be intact")
 	}
 	e.assertNoLeftovers(t)
-	if got, _ := readUpstreamStamp(e.root.PBFDir, vermont); !got.Equal(t0) {
+	if got, _ := readServiceStamp(e.root.PBFDir, ServiceValhalla, vermont); !got.Equal(t0) {
 		t.Errorf("stamp moved to %v after a failed update", got)
 	}
 }
@@ -259,7 +259,7 @@ func TestValhallaUpdate_ProbeFailureRollsBack(t *testing.T) {
 		t.Errorf("live tiles = %q, want the old tiles restored", e.liveTile(t))
 	}
 	e.assertNoLeftovers(t)
-	if got, _ := readUpstreamStamp(e.root.PBFDir, vermont); !got.Equal(t0) {
+	if got, _ := readServiceStamp(e.root.PBFDir, ServiceValhalla, vermont); !got.Equal(t0) {
 		t.Errorf("stamp moved to %v after a failed update", got)
 	}
 }
