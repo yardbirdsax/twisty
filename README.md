@@ -12,6 +12,7 @@ Heavily influenced by the amazing [Curvature](https://roadcurvature.com/) projec
 - `twisty build` — interactively build a route on a map with live curvature scoring
 - `twisty overpass` — manage a local Overpass API instance running in Docker
 - `twisty valhalla` — manage a local Valhalla routing server running in Docker
+- `twisty update` — check the local Overpass and Valhalla data against Geofabrik for newer extracts
 - `twisty gpx` — export a Google Maps driving route as a GPX file
 
 ## Installation
@@ -549,6 +550,20 @@ twisty valhalla clean [--data-dir <dir>]
 - [`iboates/osmium`](https://hub.docker.com/r/iboates/osmium) — used to merge multiple PBF files before tile-building when more than one region is requested.
 
 Both images are pulled automatically on first use.
+
+## twisty update
+
+Checks whether the regions you already loaded with `twisty overpass start` / `twisty valhalla start` have newer extracts on Geofabrik. `update` never adds regions; use `start --regions` for that.
+
+```
+twisty update [--only overpass|valhalla] [--force] [--dry-run] [--in-place]
+```
+
+Each loaded region gets a HEAD request; its upstream `Last-Modified` is compared with the stamp recorded for the version you hold (`<pbf dir>/<region>-latest.osm.pbf.upstream`). A region with no stamp counts as changed. If nothing changed and `--force` is not set, `update` exits early and touches nothing.
+
+`--dry-run` lists changed and unchanged regions and the age of the data you hold (the PBF header's `osmosis_replication_timestamp`).
+
+Currently `update` only reports; refreshing the data (staged swaps, disk preflight, cache clearing) is being added incrementally, and `--in-place` is accepted but not yet acted on.
 
 ## twisty gpx
 
