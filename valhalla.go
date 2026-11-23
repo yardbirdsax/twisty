@@ -53,6 +53,7 @@ func newValhallaStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "start",
 		Short:         "Start the local Valhalla routing server",
+		PreRunE:       refuseDuringUpdate,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -102,6 +103,7 @@ func newValhallaCleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "clean",
 		Short:         "Stop the container and remove all Valhalla data",
+		PreRunE:       refuseDuringUpdate,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -203,7 +205,7 @@ func runValhallaStart(regions string, port int, dataDir string, stderr io.Writer
 		filename := pbfFilename(region)
 		destPath := filepath.Join(pbfDir, filename)
 		if _, err := os.Stat(destPath); os.IsNotExist(err) {
-			url := geofabrikBaseURL + "/" + region + "-latest.osm.pbf"
+			url := geofabrikPBFURL(geofabrikBaseURL, region)
 			fmt.Fprintf(stderr, "Downloading %s -> %s\n", url, destPath)
 			missingURLs = append(missingURLs, url)
 			missingPaths = append(missingPaths, destPath)
@@ -496,11 +498,16 @@ func runValhallaLogs(lines int) error {
 // to the tiles directory, absPBFPaths and pbfFilenames are parallel slices of
 // absolute host paths and container-side filenames for each PBF.
 func valhallaDockerBuildArgs(absTilesDir string, absPBFPaths, pbfFilenames []string) []string {
-	args := []string{"run", "--rm", "-v", absTilesDir + ":/custom_files"}
+	return valhallaBuildSpec(absTilesDir, absPBFPaths, pbfFilenames).dockerRunArgs(false)
+}
+
+// valhallaBuildSpec is the one-shot container that builds tiles into
+// absTilesDir from the given PBFs.
+func valhallaBuildSpec(absTilesDir string, absPBFPaths, pbfFilenames []string) ContainerSpec {
+	mounts := []Mount{{Host: absTilesDir, Container: "/custom_files"}}
 	for i, path := range absPBFPaths {
-		args = append(args, "-v", path+":/pbf/"+pbfFilenames[i])
+		mounts = append(mounts, Mount{Host: path, Container: "/pbf/" + pbfFilenames[i]})
 	}
-	args = append(args, valhallaImage, "bash", "-c")
 
 	// Build the bash command that runs all four valhalla build steps.
 	// PBFs are mounted under /pbf/ to avoid conflicting with the /custom_files directory mount.
@@ -516,22 +523,13 @@ func valhallaDockerBuildArgs(absTilesDir string, absPBFPaths, pbfFilenames []str
 			"valhalla_build_tiles -c /custom_files/valhalla.json %s",
 		pbfArgs, pbfArgs,
 	)
-	args = append(args, bashCmd)
-	return args
+	return ContainerSpec{Image: valhallaImage, Mounts: mounts, Command: []string{"bash", "-c", bashCmd}}
 }
 
 // valhallaDockerRunArgs returns the `docker run -d` arguments to start the
 // Valhalla routing server. absTilesDir must be an absolute path.
 func valhallaDockerRunArgs(port int, absTilesDir string) []string {
-	return []string{
-		"run", "-d",
-		"--name", valhallaContainerName,
-		"--restart", "unless-stopped",
-		"-p", fmt.Sprintf("%d:8002", port),
-		"-v", absTilesDir + ":/custom_files",
-		valhallaImage,
-		"valhalla_service", "/custom_files/valhalla.json", "1",
-	}
+	return valhallaContainerSpec(port, absTilesDir).dockerRunArgs(true)
 }
 
 // probeValhalla sends a GET /status request to the Valhalla endpoint and
@@ -605,19 +603,20 @@ func validateRegion(r string) error {
 // host path for the output file; absPBFPaths are the absolute host paths of
 // the input PBF files.
 func osmiumMergeArgs(absMergedPBF string, absPBFPaths []string) []string {
-	outputDir := filepath.Dir(absMergedPBF)
-	outputFilename := filepath.Base(absMergedPBF)
+	return osmiumMergeSpec(absMergedPBF, absPBFPaths).dockerRunArgs(false)
+}
 
-	args := []string{"run", "--rm", "-v", outputDir + ":/output"}
+// osmiumMergeSpec is the one-shot container that merges absPBFPaths into
+// absMergedPBF.
+func osmiumMergeSpec(absMergedPBF string, absPBFPaths []string) ContainerSpec {
+	mounts := []Mount{{Host: filepath.Dir(absMergedPBF), Container: "/output"}}
+	cmd := []string{"merge", "-O", "-o", "/output/" + filepath.Base(absMergedPBF)}
 	for _, p := range absPBFPaths {
-		filename := filepath.Base(p)
-		args = append(args, "-v", p+":/pbf/"+filename)
+		name := filepath.Base(p)
+		mounts = append(mounts, Mount{Host: p, Container: "/pbf/" + name})
+		cmd = append(cmd, "/pbf/"+name)
 	}
-	args = append(args, osmiumImage, "merge", "-O", "-o", "/output/"+outputFilename)
-	for _, p := range absPBFPaths {
-		args = append(args, "/pbf/"+filepath.Base(p))
-	}
-	return args
+	return ContainerSpec{Image: osmiumImage, Mounts: mounts, Command: cmd}
 }
 
 // mergePBFsWithOsmium runs the osmium container to merge absPBFPaths into a

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -73,22 +74,54 @@ func downloadPBFsParallel(urls, destPaths []string, progress DownloadProgress) e
 	return nil
 }
 
+// geofabrikPBFURL returns the download URL of a region's latest extract. Geofabrik
+// keeps each region in a directory of its own name, with the file named for the
+// last path segment (north-america/us/vermont/vermont-latest.osm.pbf). The
+// older flat layout (north-america/us/vermont-latest.osm.pbf) now redirects to a
+// path that 404s.
+func geofabrikPBFURL(baseURL, region string) string {
+	last := region
+	if i := strings.LastIndex(region, "/"); i >= 0 {
+		last = region[i+1:]
+	}
+	return baseURL + "/" + region + "/" + last + "-latest.osm.pbf"
+}
+
 // downloadPBF downloads the file at url to destPath atomically via a temp file,
-// reporting progress via the provided FileDownloadProgress.
+// reporting progress via the provided FileDownloadProgress, and records the
+// upstream stamp beside it.
 func downloadPBF(url, destPath string, fp FileDownloadProgress) error {
-	resp, err := http.Get(url) //nolint:noctx
+	h, err := fetchToFile(context.Background(), http.DefaultClient, url, destPath, fp)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", url, err)
+		return err
+	}
+	if err := recordUpstreamStampForDownload(destPath, h); err != nil {
+		return fmt.Errorf("recording upstream stamp: %w", err)
+	}
+	fp.FileComplete()
+	return nil
+}
+
+// fetchToFile GETs url into destPath atomically via a temp file in the same
+// directory (nothing is left behind on error) and returns the response headers.
+func fetchToFile(ctx context.Context, client *http.Client, url, destPath string, fp FileDownloadProgress) (http.Header, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: unexpected status %s", url, resp.Status)
+		return nil, fmt.Errorf("GET %s: unexpected status %s", url, resp.Status)
 	}
 
 	dir := filepath.Dir(destPath)
 	tmp, err := os.CreateTemp(dir, ".download-*.osm.pbf")
 	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
+		return nil, fmt.Errorf("creating temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	defer func() {
@@ -101,7 +134,7 @@ func downloadPBF(url, destPath string, fp FileDownloadProgress) error {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
 			if _, writeErr := tmp.Write(buf[:n]); writeErr != nil {
-				return fmt.Errorf("writing temp file: %w", writeErr)
+				return nil, fmt.Errorf("writing temp file: %w", writeErr)
 			}
 			fp.BytesDownloaded(int64(n))
 		}
@@ -109,16 +142,15 @@ func downloadPBF(url, destPath string, fp FileDownloadProgress) error {
 			break
 		}
 		if readErr != nil {
-			return fmt.Errorf("reading response: %w", readErr)
+			return nil, fmt.Errorf("reading response: %w", readErr)
 		}
 	}
 
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing temp file: %w", err)
+		return nil, fmt.Errorf("closing temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, destPath); err != nil {
-		return fmt.Errorf("renaming temp file: %w", err)
+		return nil, fmt.Errorf("renaming temp file: %w", err)
 	}
-	fp.FileComplete()
-	return nil
+	return resp.Header, nil
 }

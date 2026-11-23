@@ -57,6 +57,7 @@ func newRootCmd() *cobra.Command {
 		newRandomCmd(),
 		newOverpassCmd(),
 		newValhallaCmd(),
+		newUpdateCmd(),
 		newGpxCmd(),
 		newDiagCmd(),
 		newBuildCmd(),
