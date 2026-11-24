@@ -129,6 +129,7 @@ type UpdateOptions struct {
 	Force   bool
 	DryRun  bool
 	InPlace bool
+	Verbose bool // log each step with timings to stderr
 }
 
 type Outcome string
@@ -233,9 +234,12 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 
 	var rep UpdateReport
 	for _, svc := range services {
+		deps.logf("checking service %s", svc)
 		rep.Services = append(rep.Services, checkService(ctx, deps, opts, svc))
 	}
+	deps.logf("running disk preflight")
 	runPreflight(deps, opts, &rep)
+	deps.logf("preflight done")
 
 	if !opts.DryRun {
 		run := newUpdateRun(deps, rep.Services)
@@ -262,6 +266,7 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc Service) ServiceReport {
 	sr := ServiceReport{Service: svc, Outcome: OutcomeUnchanged}
 	regions := loadedRegions(deps.Root, svc)
+	deps.logf("%s: loaded regions %v (from %s)", svc, regions, filepath.Join(serviceDir(deps.Root, svc), ".regions"))
 	if len(regions) == 0 {
 		sr.Detail = "no regions loaded"
 		return sr
@@ -269,7 +274,9 @@ func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc 
 	var failures []string
 	for _, region := range regions {
 		rs := RegionStatus{Region: region}
+		deps.logf("%s/%s: HEAD upstream", svc, region)
 		info, err := deps.Upstream.Head(ctx, region)
+		deps.logf("%s/%s: HEAD returned (err=%v)", svc, region, err)
 		if err != nil {
 			rs.Err = err
 			failures = append(failures, fmt.Sprintf("%s: %v", region, err))
@@ -293,7 +300,11 @@ func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc 
 		if rs.Changed {
 			sr.Outcome = OutcomeChanged
 		}
-		if ts, ok, err := deps.PBFDataTimestamp(filepath.Join(deps.Root.PBFDir, pbfFilename(region))); err == nil && ok {
+		pbfPath := filepath.Join(deps.Root.PBFDir, pbfFilename(region))
+		deps.logf("%s/%s: reading PBF header %s", svc, region, pbfPath)
+		ts, ok, err := deps.PBFDataTimestamp(pbfPath)
+		deps.logf("%s/%s: PBF header read (ok=%v err=%v)", svc, region, ok, err)
+		if err == nil && ok {
 			rs.DataAge, rs.HasDataAge = deps.Clock().Sub(ts), true
 		}
 		sr.Regions = append(sr.Regions, rs)
