@@ -111,7 +111,10 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 		if path == "" {
 			return
 		}
-		if size := dirSize(path); size > 0 {
+		deps.logf("preflight: sizing %s", path)
+		size := dirSize(path)
+		deps.logf("preflight: %s = %d bytes", path, size)
+		if size > 0 {
 			reclaimable = append(reclaimable, ReclaimItem{Path: path, What: what, Size: size})
 		}
 	}
@@ -142,6 +145,7 @@ func runPreflight(deps UpdateDeps, opts UpdateOptions, rep *UpdateReport) {
 	if !changed[ServiceOverpass] {
 		freeDir = root.ValhallaDir
 	}
+	deps.logf("preflight: statfs %s", freeDir)
 	free, err := deps.FreeSpace(freeDir)
 	if err != nil {
 		failChanged(rep, fmt.Sprintf("disk preflight: checking free space: %v", err))
