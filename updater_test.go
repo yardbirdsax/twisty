@@ -23,7 +23,7 @@ type fakeUpstream struct {
 	downloadErr map[string]error
 }
 
-func (f *fakeUpstream) Download(_ context.Context, region, destPath string) (UpstreamInfo, error) {
+func (f *fakeUpstream) Download(_ context.Context, region, destPath string, fp FileDownloadProgress) (UpstreamInfo, error) {
 	f.downloads = append(f.downloads, region)
 	if err := f.downloadErr[region]; err != nil {
 		return UpstreamInfo{}, err
@@ -33,6 +33,7 @@ func (f *fakeUpstream) Download(_ context.Context, region, destPath string) (Ups
 		return UpstreamInfo{}, fmt.Errorf("fake upstream: unknown region %q", region)
 	}
 	body := fmt.Sprintf("%s @ %s", region, info.LastModified.Format(time.RFC3339))
+	fp.BytesDownloaded(int64(len(body)))
 	return info, os.WriteFile(destPath, []byte(body), 0o644)
 }
 
@@ -56,6 +57,7 @@ type updaterEnv struct {
 	runtime  *fakeRuntime
 	now      time.Time
 	headers  map[string]time.Time // region -> PBF header data timestamp
+	progress DownloadProgress     // download progress sink (nil = none)
 }
 
 func newUpdaterEnv(t *testing.T) *updaterEnv {
@@ -84,6 +86,7 @@ func newUpdaterEnv(t *testing.T) *updaterEnv {
 func (e *updaterEnv) deps() UpdateDeps {
 	return UpdateDeps{
 		Upstream: e.upstream,
+		Progress: e.progress,
 		Runtime:  e.runtime,
 		Root:     e.root,
 		Clock:    func() time.Time { return e.now },

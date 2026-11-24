@@ -92,7 +92,7 @@ func TestGeofabrikUpstream_HeadAndDownload(t *testing.T) {
 	}
 
 	dest := filepath.Join(t.TempDir(), "v.osm.pbf")
-	got, err := up.Download(context.Background(), "north-america/us/vermont", dest)
+	got, err := up.Download(context.Background(), "north-america/us/vermont", dest, NoopFileDownloadProgress{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestGeofabrikUpstream_DownloadErrorLeavesNoFile(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "x.osm.pbf")
 
-	if _, err := up.Download(context.Background(), "europe/nowhere", dest); err == nil {
+	if _, err := up.Download(context.Background(), "europe/nowhere", dest, NoopFileDownloadProgress{}); err == nil {
 		t.Fatal("expected an error for a 404")
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {

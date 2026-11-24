@@ -120,7 +120,8 @@ func dataRootFor(loc UpdateLocations) DataRoot {
 
 func productionUpdateDepsAt(loc UpdateLocations) UpdateDeps {
 	return UpdateDeps{
-		Upstream:         geofabrikUpstream{client: http.DefaultClient, progress: newDownloadProgress(os.Stderr)},
+		Upstream:         geofabrikUpstream{client: http.DefaultClient},
+		Progress:         newSequentialDownloadProgress(os.Stderr),
 		Runtime:          dockerRuntime{},
 		Root:             dataRootFor(loc),
 		Clock:            time.Now,
@@ -130,11 +131,10 @@ func productionUpdateDepsAt(loc UpdateLocations) UpdateDeps {
 }
 
 // geofabrikUpstream is the production UpstreamClient. baseURL defaults to
-// Geofabrik; progress (optional) reports download progress.
+// Geofabrik.
 type geofabrikUpstream struct {
-	client   *http.Client
-	baseURL  string
-	progress DownloadProgress
+	client  *http.Client
+	baseURL string
 }
 
 func (g geofabrikUpstream) url(region string) string {
@@ -145,16 +145,11 @@ func (g geofabrikUpstream) url(region string) string {
 	return geofabrikPBFURL(base, region)
 }
 
-func (g geofabrikUpstream) Download(ctx context.Context, region, destPath string) (UpstreamInfo, error) {
-	var fp FileDownloadProgress = NoopFileDownloadProgress{}
-	if g.progress != nil {
-		fp = g.progress.StartFile(destPath, 0, 1, -1)
-	}
+func (g geofabrikUpstream) Download(ctx context.Context, region, destPath string, fp FileDownloadProgress) (UpstreamInfo, error) {
 	h, err := fetchToFile(ctx, g.client, g.url(region), destPath, fp)
 	if err != nil {
 		return UpstreamInfo{}, err
 	}
-	fp.FileComplete()
 	lm, err := http.ParseTime(h.Get("Last-Modified"))
 	if err != nil {
 		// No usable header: the zero time makes the region count as changed

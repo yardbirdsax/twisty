@@ -102,55 +102,163 @@ func downloadPBF(url, destPath string, fp FileDownloadProgress) error {
 	return nil
 }
 
-// fetchToFile GETs url into destPath atomically via a temp file in the same
-// directory (nothing is left behind on error) and returns the response headers.
+// fetchToFile GETs url into destPath and returns the response headers. The
+// bytes accumulate in a partial file beside destPath, which only a complete
+// download is renamed over, so destPath is never seen half written. A failure
+// keeps the partial, and the next call for the same destPath continues from it
+// if upstream still has the version it came from (see pbf_resume.go); a server
+// that no longer has it, or that ignores range requests, gets a full download.
 func fetchToFile(ctx context.Context, client *http.Client, url, destPath string, fp FileDownloadProgress) (http.Header, error) {
+	removeOrphanedPartials(filepath.Dir(destPath), destPath)
+	offset, held := resumePoint(destPath)
+	for {
+		resp, err := getFrom(ctx, client, url, offset, held)
+		if err != nil {
+			return nil, err
+		}
+		h, retry, err := receive(resp, destPath, offset, held, fp)
+		resp.Body.Close()
+		if retry {
+			// The partial cannot be continued: start again from nothing.
+			discardPartial(destPath)
+			offset, held = 0, version{}
+			continue
+		}
+		return h, err
+	}
+}
+
+// getFrom requests url, from byte offset on when a partial of version held is
+// being continued.
+func getFrom(ctx context.Context, client *http.Client, url string, offset int64, held version) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	if offset > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+		req.Header.Set("If-Range", held.ifRange())
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", url, err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: unexpected status %s", url, resp.Status)
+	return resp, nil
+}
+
+// receive writes resp's body to destPath's partial and, when it is complete,
+// renames it into place. offset is how many bytes of version held were already
+// on disk. retry is true when the response shows the partial cannot be
+// continued and the download should start over.
+func receive(resp *http.Response, destPath string, offset int64, held version, fp FileDownloadProgress) (h http.Header, retry bool, err error) {
+	var total int64 // size of the whole file when the server says, else -1
+	switch {
+	case resp.StatusCode == http.StatusPartialContent && offset > 0:
+		first, t, ok := contentRange(resp.Header.Get("Content-Range"))
+		if !ok || first != offset || !held.matches(resp.Header) {
+			// Not the bytes we asked for, or from another version: the server
+			// did not honour If-Range, so splicing would corrupt the file.
+			log.Printf("resume of %s: server sent a different version than the partial; starting over", filepath.Base(destPath))
+			return nil, true, nil
+		}
+		total = t
+		h = resp.Header.Clone()
+		if h.Get("Last-Modified") == "" && held.lastModified != "" {
+			h.Set("Last-Modified", held.lastModified)
+		}
+	case resp.StatusCode == http.StatusOK:
+		// A whole file: the first attempt, a server that ignores Range, or one
+		// that no longer has the version we held. Whatever is on disk is stale.
+		if offset > 0 {
+			log.Printf("resume of %s: upstream changed or does not support ranges; starting over", filepath.Base(destPath))
+		}
+		offset, total, h = 0, resp.ContentLength, resp.Header
+	case resp.StatusCode == http.StatusRequestedRangeNotSatisfiable && offset > 0:
+		log.Printf("resume of %s: partial does not fit the file upstream; starting over", filepath.Base(destPath))
+		return nil, true, nil
+	default:
+		return nil, false, fmt.Errorf("GET %s: unexpected status %s", resp.Request.URL, resp.Status)
 	}
 
-	dir := filepath.Dir(destPath)
-	tmp, err := os.CreateTemp(dir, ".download-*.osm.pbf")
+	flags := os.O_WRONLY | os.O_CREATE
+	if offset > 0 {
+		flags |= os.O_APPEND
+	} else {
+		flags |= os.O_TRUNC
+	}
+	f, err := os.OpenFile(partialPath(destPath), flags, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("creating temp file: %w", err)
+		discardPartial(destPath) // never leave a record describing bytes we do not hold
+		return nil, false, fmt.Errorf("opening partial file: %w", err)
 	}
-	tmpName := tmp.Name()
-	defer func() {
-		tmp.Close()
-		os.Remove(tmpName)
-	}()
+	if offset == 0 {
+		// Only once the partial is empty is it safe to say which version its
+		// bytes will be from.
+		if err := writeVersion(destPath, versionOf(resp.Header)); err != nil {
+			f.Close()
+			discardPartial(destPath)
+			return nil, false, err
+		}
+	}
+	// Reported only now that the response is known to continue the partial, so
+	// bytes of a discarded partial never reach the progress bar.
+	if offset > 0 {
+		fp.BytesDownloaded(offset)
+	}
 
+	size, err := copyCounting(f, resp.Body, offset, fp)
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("closing partial file: %w", cerr)
+	}
+	if err != nil {
+		return nil, false, err // the partial stays for the next attempt
+	}
+	if total >= 0 && size != total {
+		if size > total {
+			discardPartial(destPath)
+		}
+		return nil, false, errShortFile(size, total)
+	}
+	if err := os.Rename(partialPath(destPath), destPath); err != nil {
+		return nil, false, fmt.Errorf("renaming partial file: %w", err)
+	}
+	os.Remove(partialMetaPath(destPath)) //nolint:errcheck // a stray meta is cleaned up later
+	return h, false, nil
+}
+
+// writeVersion records the upstream version a fresh partial is being fetched
+// from, or clears the record when the response names none (such a partial can
+// never be continued).
+func writeVersion(destPath string, v version) error {
+	if v.ifRange() == "" {
+		os.Remove(partialMetaPath(destPath)) //nolint:errcheck // absent is fine
+		return nil
+	}
+	if err := os.WriteFile(partialMetaPath(destPath), v.encode(), 0o644); err != nil {
+		return fmt.Errorf("recording download version: %w", err)
+	}
+	return nil
+}
+
+// copyCounting copies src to dst, reporting each chunk to fp, and returns the
+// file's size: start plus the bytes copied.
+func copyCounting(dst io.Writer, src io.Reader, start int64, fp FileDownloadProgress) (int64, error) {
+	size := start
 	buf := make([]byte, 32*1024)
 	for {
-		n, readErr := resp.Body.Read(buf)
+		n, readErr := src.Read(buf)
 		if n > 0 {
-			if _, writeErr := tmp.Write(buf[:n]); writeErr != nil {
-				return nil, fmt.Errorf("writing temp file: %w", writeErr)
+			if _, err := dst.Write(buf[:n]); err != nil {
+				return size, fmt.Errorf("writing partial file: %w", err)
 			}
+			size += int64(n)
 			fp.BytesDownloaded(int64(n))
 		}
 		if readErr == io.EOF {
-			break
+			return size, nil
 		}
 		if readErr != nil {
-			return nil, fmt.Errorf("reading response: %w", readErr)
+			return size, fmt.Errorf("reading response: %w", readErr)
 		}
 	}
-
-	if err := tmp.Close(); err != nil {
-		return nil, fmt.Errorf("closing temp file: %w", err)
-	}
-	if err := os.Rename(tmpName, destPath); err != nil {
-		return nil, fmt.Errorf("renaming temp file: %w", err)
-	}
-	return resp.Header, nil
 }

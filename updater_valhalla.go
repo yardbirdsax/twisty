@@ -21,13 +21,74 @@ type updateRun struct {
 	// when that service built from it. A service that then succeeds is stamped
 	// with exactly these versions (see stampRefreshed).
 	held map[Service]map[string]UpstreamInfo
+	// plan lists the distinct regions this run will fetch, in fetch order, with
+	// the upstream size of each. A region changed for both services appears
+	// once. It fixes each download's position and the total for progress.
+	plan      []plannedFetch
+	downloads bool // some download has started, so progress needs closing
 }
 
-func newUpdateRun(deps UpdateDeps) *updateRun {
+// plannedFetch is one region this run expects to download.
+type plannedFetch struct {
+	region string
+	bytes  int64 // upstream size, -1 when unknown
+}
+
+func newUpdateRun(deps UpdateDeps, services []ServiceReport) *updateRun {
 	return &updateRun{
 		deps:    deps,
 		fetched: map[string]UpstreamInfo{},
 		held:    map[Service]map[string]UpstreamInfo{},
+		plan:    planFetches(services),
+	}
+}
+
+// planFetches lists the regions the services marked changed will download, each
+// once, in the order the services are refreshed.
+func planFetches(services []ServiceReport) []plannedFetch {
+	var plan []plannedFetch
+	seen := map[string]bool{}
+	for _, sr := range services {
+		if sr.Outcome != OutcomeChanged {
+			continue
+		}
+		for _, r := range sr.Regions {
+			if !r.Changed || seen[r.Region] {
+				continue
+			}
+			seen[r.Region] = true
+			size := r.ContentLength
+			if size <= 0 {
+				size = -1
+			}
+			plan = append(plan, plannedFetch{region: r.Region, bytes: size})
+		}
+	}
+	return plan
+}
+
+// startDownload opens progress for region's download and returns its handle.
+func (u *updateRun) startDownload(region, dest string) FileDownloadProgress {
+	if u.deps.Progress == nil {
+		return NoopFileDownloadProgress{}
+	}
+	u.downloads = true
+	for i, p := range u.plan {
+		if p.region == region {
+			return u.deps.Progress.StartFile(dest, i, len(u.plan), p.bytes)
+		}
+	}
+	// Not planned: it takes the next position, growing the total, so positions
+	// stay distinct and never exceed it.
+	u.plan = append(u.plan, plannedFetch{region: region, bytes: -1})
+	return u.deps.Progress.StartFile(dest, len(u.plan)-1, len(u.plan), -1)
+}
+
+// finishDownloads closes download progress once the run has fetched everything
+// it will.
+func (u *updateRun) finishDownloads() {
+	if u.downloads {
+		u.deps.Progress.Done()
 	}
 }
 
@@ -44,10 +105,12 @@ func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []str
 			continue
 		}
 		dest := filepath.Join(u.deps.Root.PBFDir, pbfFilename(region))
-		info, err := u.deps.Upstream.Download(ctx, region, dest)
+		fp := u.startDownload(region, dest)
+		info, err := u.deps.Upstream.Download(ctx, region, dest, fp)
 		if err != nil {
 			return fmt.Errorf("%s: %w", region, err)
 		}
+		fp.FileComplete()
 		u.fetched[region] = info
 	}
 	// svc builds from every PBF on disk it loads, including ones an earlier

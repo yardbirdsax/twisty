@@ -174,3 +174,62 @@ func TestNewDownloadProgress_NonTerminal(t *testing.T) {
 		t.Errorf("expected *logDownloadProgress for non-terminal, got %T", p)
 	}
 }
+
+func TestSequentialTermBar_ShowsPositionAndSize(t *testing.T) {
+	var buf bytes.Buffer
+	bar := &termDownloadBar{w: &buf, sequential: true}
+
+	fp := bar.StartFile("/pbf/vermont-latest.osm.pbf", 2, 10, 150*1024*1024)
+	fp.BytesDownloaded(50 * 1024 * 1024)
+
+	out := buf.String()
+	for _, want := range []string{"3/10", "50.0 / 150.0 MB", "vermont-latest.osm.pbf"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected %q in output, got: %q", want, out)
+		}
+	}
+}
+
+func TestSequentialTermBar_UnknownSizeStillShowsPosition(t *testing.T) {
+	var buf bytes.Buffer
+	bar := &termDownloadBar{w: &buf, sequential: true}
+
+	fp := bar.StartFile("/pbf/maine-latest.osm.pbf", 0, 4, -1)
+	fp.BytesDownloaded(7 * 1024 * 1024)
+
+	out := buf.String()
+	if !strings.Contains(out, "1/4") || !strings.Contains(out, "7.0 MB") {
+		t.Errorf("expected position and bytes, got: %q", out)
+	}
+	if strings.Contains(out, "/ ") {
+		t.Errorf("expected no total when size unknown, got: %q", out)
+	}
+}
+
+func TestSequentialLogProgress_ShowsPositionAndSize(t *testing.T) {
+	var buf bytes.Buffer
+	p := &logDownloadProgress{w: &buf, sequential: true}
+
+	p.StartFile("/pbf/vermont-latest.osm.pbf", 2, 10, 150*1024*1024)
+
+	out := buf.String()
+	if !strings.Contains(out, "3/10") || !strings.Contains(out, "150.0 MB") {
+		t.Errorf("expected position and size in start line, got: %q", out)
+	}
+}
+
+func TestParallelProgressRenderingIsUnchanged(t *testing.T) {
+	var term bytes.Buffer
+	bar := &termDownloadBar{w: &term}
+	bar.StartFile("a", 0, 3, -1).BytesDownloaded(5 * 1024 * 1024)
+	if want := "Downloading: 5.0 MB | 0/3 files"; !strings.Contains(term.String(), want) {
+		t.Errorf("term bar = %q, want it to contain %q", term.String(), want)
+	}
+
+	var log bytes.Buffer
+	p := &logDownloadProgress{w: &log}
+	p.StartFile("a", 0, 3, -1)
+	if got, want := log.String(), "Downloading a\n"; got != want {
+		t.Errorf("log start line = %q, want %q", got, want)
+	}
+}

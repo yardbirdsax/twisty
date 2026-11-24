@@ -51,7 +51,7 @@ func (u tinyPBFUpstream) Head(context.Context, string) (UpstreamInfo, error) {
 	return UpstreamInfo{LastModified: u.lastModified}, nil
 }
 
-func (u tinyPBFUpstream) Download(_ context.Context, _, destPath string) (UpstreamInfo, error) {
+func (u tinyPBFUpstream) Download(_ context.Context, _, destPath string, _ FileDownloadProgress) (UpstreamInfo, error) {
 	if err := os.WriteFile(destPath, osmconv.BuildMinimalPBFBytes(), 0o644); err != nil {
 		return UpstreamInfo{}, err
 	}

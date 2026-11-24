@@ -22,11 +22,13 @@ type UpstreamInfo struct {
 type UpstreamClient interface {
 	// Head returns the Last-Modified and Content-Length of a region's extract.
 	Head(ctx context.Context, region string) (UpstreamInfo, error)
-	// Download fetches a region's current extract to destPath, atomically
-	// (nothing is left at destPath or beside it on error), and returns the
-	// upstream Last-Modified of the version it fetched. It does not write the
-	// upstream stamp; the updater does that once the refresh has succeeded.
-	Download(ctx context.Context, region, destPath string) (UpstreamInfo, error)
+	// Download fetches a region's current extract to destPath, reporting bytes
+	// to fp, and returns the upstream Last-Modified of the version it fetched.
+	// destPath is only ever replaced by a complete file. On error it keeps any
+	// partial download beside destPath so the next attempt can resume it. It
+	// does not write the upstream stamp; the updater does that once the
+	// refresh has succeeded.
+	Download(ctx context.Context, region, destPath string, fp FileDownloadProgress) (UpstreamInfo, error)
 }
 
 // DataRoot locates twisty's on-disk state. Tests point it at a temp directory.
@@ -56,7 +58,9 @@ func (r DataRoot) derivedCaches() []namedDir {
 
 // UpdateDeps bundles everything the updater touches outside itself.
 type UpdateDeps struct {
-	Upstream  UpstreamClient
+	Upstream UpstreamClient
+	// Progress reports region downloads (nil = silent).
+	Progress  DownloadProgress
 	Runtime   ContainerRuntime
 	Root      DataRoot
 	Clock     func() time.Time
@@ -84,6 +88,16 @@ type UpdateDeps struct {
 	// ConvertOverpass rebuilds merged.osm.bz2 from the region PBFs for the given
 	// regions (nil = the real incremental conversion).
 	ConvertOverpass func(ctx context.Context, regions []string) error
+
+	// Logf receives verbose progress lines (nil = silent).
+	Logf func(format string, args ...any)
+}
+
+// logf writes a verbose progress line if logging is enabled.
+func (d UpdateDeps) logf(format string, args ...any) {
+	if d.Logf != nil {
+		d.Logf(format, args...)
+	}
 }
 
 // overpassNames returns the live and staging Overpass container names.
@@ -224,7 +238,7 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 	runPreflight(deps, opts, &rep)
 
 	if !opts.DryRun {
-		run := newUpdateRun(deps)
+		run := newUpdateRun(deps, rep.Services)
 		for i := range rep.Services {
 			sr := &rep.Services[i]
 			if sr.Outcome != OutcomeChanged {
@@ -239,6 +253,7 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 				sr.finish(run.refreshOverpassStaged(ctx, sr))
 			}
 		}
+		run.finishDownloads()
 		run.stampRefreshed(rep.Services)
 	}
 	return rep, nil
