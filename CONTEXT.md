@@ -68,6 +68,10 @@ _Avoid_: Remote, server
 The upstream `Last-Modified` of the version of a region a service was built from, kept per service so one service's refresh never hides staleness from the other. A missing stamp counts as changed.
 _Avoid_: Version, timestamp (the PBF header timestamp is a different thing)
 
+**Fetched marker**:
+A record beside a region's PBF that the file is a complete download of one upstream version, written by `update` whether or not any service has been built from it. Lets an interrupted run skip regions it already fetched. Never a Stamp: no service reads it as the version it holds.
+_Avoid_: Download stamp (that is the `start` record of the file on disk, which services fall back to)
+
 **Staging**:
 Fresh data built beside the live data (`db.staging`, `tiles.staging`) while the old container keeps serving, so a failure costs nothing.
 _Avoid_: Temp, scratch

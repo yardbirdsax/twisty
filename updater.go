@@ -181,6 +181,17 @@ func (sr ServiceReport) changedRegions() []string {
 	return out
 }
 
+// changedStatuses lists the statuses of the regions that need refreshing.
+func (sr ServiceReport) changedStatuses() []RegionStatus {
+	var out []RegionStatus
+	for _, r := range sr.Regions {
+		if r.Changed {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // finish records the result of a refresh: failed with the error, or updated
 // with detail (what was cleared, plus any warnings).
 func (sr *ServiceReport) finish(detail string, err error) {

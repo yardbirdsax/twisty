@@ -84,6 +84,17 @@ func (u *updateRun) startDownload(region, dest string) FileDownloadProgress {
 	return u.deps.Progress.StartFile(dest, len(u.plan)-1, len(u.plan), -1)
 }
 
+// dropFromPlan removes a region that will not be downloaded from the planned
+// fetches, so progress counts only real downloads.
+func (u *updateRun) dropFromPlan(region string) {
+	for i, p := range u.plan {
+		if p.region == region {
+			u.plan = append(u.plan[:i], u.plan[i+1:]...)
+			return
+		}
+	}
+}
+
 // finishDownloads closes download progress once the run has fetched everything
 // it will.
 func (u *updateRun) finishDownloads() {
@@ -94,17 +105,31 @@ func (u *updateRun) finishDownloads() {
 
 // fetchRegions downloads each region's current extract into the shared PBF
 // directory, skipping regions already fetched this run, and notes which fetched
-// versions svc will build from. Stamps are NOT written here: they are written
-// only after svc's refresh succeeded, so a failed refresh is retried next time.
-func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []string) error {
+// versions svc will build from. A region whose PBF an interrupted earlier run
+// already fetched at the current upstream version is not downloaded again, but
+// still counts as fetched so svc is rebuilt from it. Stamps are NOT written
+// here: they are written only after svc's refresh succeeded, so a failed
+// refresh is retried next time.
+func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []RegionStatus) error {
 	if err := os.MkdirAll(u.deps.Root.PBFDir, 0o755); err != nil {
 		return err
 	}
-	for _, region := range regions {
+	for _, rs := range regions {
+		region := rs.Region
 		if _, done := u.fetched[region]; done {
 			continue
 		}
-		dest := filepath.Join(u.deps.Root.PBFDir, pbfFilename(region))
+		pbfDir := u.deps.Root.PBFDir
+		// A forced refresh downloads regardless.
+		if rs.Reason != "forced" && pbfAlreadyFetched(pbfDir, region, rs.Upstream) {
+			u.deps.logf("%s/%s: already fetched at current upstream version, skipping download", svc, region)
+			u.dropFromPlan(region)
+			u.fetched[region] = UpstreamInfo{LastModified: rs.Upstream}
+			continue
+		}
+		dest := filepath.Join(pbfDir, pbfFilename(region))
+		// The file is about to be replaced; its old marker no longer describes it.
+		removeFetchedMarker(pbfDir, region)
 		fp := u.startDownload(region, dest)
 		info, err := u.deps.Upstream.Download(ctx, region, dest, fp)
 		if err != nil {
@@ -112,6 +137,11 @@ func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []str
 		}
 		fp.FileComplete()
 		u.fetched[region] = info
+		if fi, err := os.Stat(dest); err == nil && !info.LastModified.IsZero() {
+			if err := writeFetchedMarker(pbfDir, region, info.LastModified, fi.Size()); err != nil {
+				return fmt.Errorf("%s: recording fetched version: %w", region, err)
+			}
+		}
 	}
 	// svc builds from every PBF on disk it loads, including ones an earlier
 	// service fetched this run.
@@ -193,7 +223,7 @@ func (u *updateRun) refreshValhalla(ctx context.Context, sr *ServiceReport) (str
 	deps := u.deps
 	dir := deps.Root.ValhallaDir
 
-	if err := u.fetchRegions(ctx, ServiceValhalla, sr.changedRegions()); err != nil {
+	if err := u.fetchRegions(ctx, ServiceValhalla, sr.changedStatuses()); err != nil {
 		return "", atStage(stageDownload, err)
 	}
 
