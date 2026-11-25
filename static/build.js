@@ -377,6 +377,7 @@ function commitWaypointEdit(index, query, row, input, labelEl) {
       return r.json();
     })
     .then(function(data) {
+      centerOnAddress(data.lat, data.lon);
       delete labelCache[labelKey(waypoints[index])];
       waypoints[index] = [data.lat, data.lon];
       labelCache[labelKey(waypoints[index])] = data.display_name;
@@ -426,6 +427,14 @@ function startAddWaypoint() {
   };
 }
 
+var ADDRESS_MIN_ZOOM = 14;
+
+// centerOnAddress recenters the map on a typed address, zooming in to street
+// level if needed but never zooming out.
+function centerOnAddress(lat, lon) {
+  map.setView([lat, lon], Math.max(map.getZoom(), ADDRESS_MIN_ZOOM));
+}
+
 function commitAddWaypoint(query, addRow, input) {
   input.disabled = true;
   showWpError('');
@@ -444,6 +453,7 @@ function commitAddWaypoint(query, addRow, input) {
       addRow.appendChild(document.createTextNode('+ Add waypoint'));
       addRow.onclick = startAddWaypoint;
       activeSlotIndex = -1;
+      centerOnAddress(data.lat, data.lon);
       addWaypoint(latlng);
     })
     .catch(function(err) {
@@ -503,6 +513,7 @@ function commitInsertWaypoint(insertIndex, query, placeholderRow, input) {
       return r.json();
     })
     .then(function(data) {
+      centerOnAddress(data.lat, data.lon);
       insertSlotIndex = -1;
       insertPlaceholderRow = null;
       var list = document.getElementById('waypoints-list');

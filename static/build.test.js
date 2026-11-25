@@ -1168,3 +1168,98 @@ test('waypointGapM reports the larger adjoining gap and 0 when none', function()
   assert.equal(ctx.waypointGapM(1), 530);
   assert.equal(ctx.waypointGapM(2), 0);
 });
+
+// --- center map on typed addresses ---
+
+// loadCenterCtx loads build.js with a geocode stub that resolves to a fixed
+// point (or 404s) and a map whose zoom and setView calls are observable.
+function loadCenterCtx(zoom, geocodeOk) {
+  var ctx = loadBuildJS(makeCtx({
+    fetch: function(url) {
+      if (typeof url === 'string' && url.indexOf('/api/geocode') !== -1) {
+        if (!geocodeOk) {
+          return Promise.resolve({ ok: false, status: 404, json: function() { return Promise.resolve({}); } });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: function() {
+          return Promise.resolve({ lat: 41.5, lon: -76.5, display_name: 'Somewhere' });
+        } });
+      }
+      return new Promise(function() {});
+    }
+  }));
+  ctx.setViewCalls = [];
+  ctx.map.getZoom = function() { return zoom; };
+  ctx.map.setView = function(center, z) { ctx.setViewCalls.push({ center: center, zoom: z }); return ctx.map; };
+  return ctx;
+}
+
+function flushPromises() {
+  return new Promise(function(resolve) { setImmediate(resolve); });
+}
+
+function fakeInput() {
+  return { disabled: false, classList: { add: function() {}, remove: function() {} }, focus: function() {} };
+}
+
+test('commitAddWaypoint zooms in to street level when zoomed out', async function() {
+  var ctx = loadCenterCtx(10, true);
+  ctx.commitAddWaypoint('somewhere', { textContent: '', appendChild: function() {} }, fakeInput());
+  await flushPromises();
+  assert.equal(JSON.stringify(ctx.setViewCalls), JSON.stringify([{ center: [41.5, -76.5], zoom: 14 }]));
+});
+
+test('commitAddWaypoint keeps a closer zoom', async function() {
+  var ctx = loadCenterCtx(16, true);
+  ctx.commitAddWaypoint('somewhere', { textContent: '', appendChild: function() {} }, fakeInput());
+  await flushPromises();
+  assert.equal(JSON.stringify(ctx.setViewCalls), JSON.stringify([{ center: [41.5, -76.5], zoom: 16 }]));
+});
+
+test('commitAddWaypoint does not move the map on geocode failure', async function() {
+  var ctx = loadCenterCtx(10, false);
+  ctx.commitAddWaypoint('nowhere', { textContent: '', appendChild: function() {} }, fakeInput());
+  await flushPromises();
+  assert.equal(ctx.setViewCalls.length, 0);
+});
+
+test('commitWaypointEdit zooms in to street level when zoomed out', async function() {
+  var ctx = loadCenterCtx(10, true);
+  ctx.waypoints.push([40.0, -75.0]);
+  var row = { removeChild: function() {} };
+  ctx.commitWaypointEdit(0, 'somewhere', row, fakeInput(), { style: {} });
+  await flushPromises();
+  assert.equal(JSON.stringify(ctx.setViewCalls), JSON.stringify([{ center: [41.5, -76.5], zoom: 14 }]));
+});
+
+test('commitWaypointEdit does not move the map on geocode failure', async function() {
+  var ctx = loadCenterCtx(10, false);
+  ctx.waypoints.push([40.0, -75.0]);
+  var row = { removeChild: function() {} };
+  ctx.commitWaypointEdit(0, 'nowhere', row, fakeInput(), { style: {} });
+  await flushPromises();
+  assert.equal(ctx.setViewCalls.length, 0);
+});
+
+test('commitInsertWaypoint zooms in to street level when zoomed out', async function() {
+  var ctx = loadCenterCtx(10, true);
+  ctx.waypoints.push([40.0, -75.0], [40.2, -75.2]);
+  var row = { removeChild: function() {} };
+  ctx.commitInsertWaypoint(1, 'somewhere', row, fakeInput());
+  await flushPromises();
+  assert.equal(JSON.stringify(ctx.setViewCalls), JSON.stringify([{ center: [41.5, -76.5], zoom: 14 }]));
+});
+
+test('commitInsertWaypoint does not move the map on geocode failure', async function() {
+  var ctx = loadCenterCtx(10, false);
+  ctx.waypoints.push([40.0, -75.0], [40.2, -75.2]);
+  var row = { removeChild: function() {} };
+  ctx.commitInsertWaypoint(1, 'nowhere', row, fakeInput());
+  await flushPromises();
+  assert.equal(ctx.setViewCalls.length, 0);
+});
+
+test('adding a waypoint by map click does not move the map', function() {
+  var ctx = loadCenterCtx(10, true);
+  ctx.addWaypoint({ lat: 40.1, lng: -75.1 });
+  assert.equal(ctx.setViewCalls.length, 0);
+});
