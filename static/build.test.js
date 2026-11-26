@@ -1537,3 +1537,22 @@ test('append routing failure keeps the waypoint, leaves a gap and toasts', async
   assert.equal(h.ctx.legs[0], null);
   assert.equal(h.toasts.length, 1);
 });
+
+test('a late response whose pair still matches is applied at its new index', async function() {
+  var h = routeLegFetchHarness();
+  var ctx = h.ctx;
+  ctx.waypoints.push(PA, PB);
+  ctx.reroute();                 // A->B in flight
+  ctx.waypoints.unshift(PE);     // E, A, B: A->B is now index 1
+  ctx.reroute();
+  h.calls[0].resolve(); await settle();
+  assert.equal(ctx.legs[0], null);
+  assert.ok(ctx.legs[1], 'late response drawn at index 1');
+  assert.deepEqual(Array.from(ctx.legs[1].from), PA);
+  assert.equal(h.calls.length, 2, 'A->B not requested twice; only E->A added');
+});
+
+test('the routing generation counter no longer exists', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(typeof ctx.routingGeneration, 'undefined');
+});
