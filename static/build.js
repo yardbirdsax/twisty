@@ -1463,10 +1463,21 @@ map.on('click', function(e) {
 });
 
 function exportRoute(format) {
-  // Minimal guard so a gap never reaches the export endpoint; the detailed
-  // per-leg message is a follow-up.
-  if (legs.some(function(leg) { return !leg; })) {
-    showToast('Cannot export while a leg is still routing or failed to route');
+  // Never export a truncated route: refuse while any Leg is missing and say
+  // which one and why.
+  var missing = -1;
+  for (var k = 0; k + 1 < waypoints.length; k++) {
+    if (!legs[k]) { missing = k; break; }
+  }
+  if (missing >= 0) {
+    var inFlight = routeInFlight.some(function(p) {
+      return samePair(waypoints[missing], waypoints[missing + 1], p);
+    });
+    var tried = routeAttempted.some(function(p) {
+      return samePair(waypoints[missing], waypoints[missing + 1], p);
+    });
+    var why = (tried && !inFlight) ? 'failed to route' : 'still routing';
+    showToast('Cannot export: leg ' + (missing + 1) + ' ' + (why === 'still routing' ? 'is ' : '') + why);
     return;
   }
   var exportLegs = legs.map(function(leg) {

@@ -1557,6 +1557,61 @@ test('the routing generation counter no longer exists', function() {
   assert.equal(typeof ctx.routingGeneration, 'undefined');
 });
 
+// --- export guard (#40) ---
+
+function exportCalls(h) {
+  return h.fetches.filter(function(u) { return u.indexOf('/api/export') !== -1; });
+}
+
+function exportHarness(routeLegResponse) {
+  var fetches = [];
+  var ctx = loadBuildJS(makeCtx({
+    fetch: function(url, opts) {
+      fetches.push(url);
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) return routeLegResponse(JSON.parse(opts.body));
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); }, blob: function() { return Promise.resolve({}); } });
+    }
+  }));
+  var toasts = [];
+  ctx.showToast = function(m) { toasts.push(m); };
+  return { ctx: ctx, fetches: fetches, toasts: toasts };
+}
+
+test('export with every leg routed posts to the server', function() {
+  var h = exportHarness(function() { return new Promise(function() {}); });
+  h.ctx.waypoints.push(PA, PB, PC);
+  h.ctx.legs = [routedLeg(PA, PB), routedLeg(PB, PC)];
+  h.ctx.exportRoute('gpx');
+  assert.equal(exportCalls(h).length, 1);
+  assert.deepEqual(h.toasts, []);
+});
+
+test('export while a leg is still routing sends nothing and names the leg', function() {
+  var h = exportHarness(function() { return new Promise(function() {}); });
+  h.ctx.waypoints.push(PA, PB, PC);
+  h.ctx.legs = [routedLeg(PA, PB)];
+  h.ctx.reroute();
+  h.ctx.exportRoute('gpx');
+  assert.equal(exportCalls(h).length, 0);
+  assert.equal(h.toasts.length, 1);
+  assert.match(h.toasts[0], /leg 2/);
+  assert.match(h.toasts[0], /still routing/);
+});
+
+test('export while a leg failed to route says it failed and sends nothing', async function() {
+  var h = exportHarness(function() { return Promise.resolve({ ok: false, json: function() { return Promise.resolve({}); } }); });
+  h.ctx.waypoints.push(PA, PB, PC);
+  h.ctx.legs = [routedLeg(PA, PB)];
+  h.ctx.reroute();
+  await settle();
+  h.toasts.length = 0; // drop the routing-failure toast
+  h.ctx.exportRoute('gpx');
+  assert.equal(exportCalls(h).length, 0);
+  assert.equal(h.toasts.length, 1);
+  assert.match(h.toasts[0], /leg 2/);
+  assert.match(h.toasts[0], /failed to route/);
+});
+
 // --- restore with null / legacy legs (#39) ---
 
 function restoreHarness(state) {
