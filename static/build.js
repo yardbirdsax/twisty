@@ -1073,14 +1073,11 @@ function restoreState() {
     return;
   }
   var valid = state.legs.every(function(leg) {
-    return leg && Array.isArray(leg.points);
+    return leg === null || (leg && Array.isArray(leg.points));
   });
   if (!valid) {
     localStorage.removeItem('twisty-build-state');
     return;
-  }
-  if (state.waypoints.length > state.legs.length + 1) {
-    state.waypoints = state.waypoints.slice(0, state.legs.length + 1);
   }
   applyRouteState(state);
 }
@@ -1101,6 +1098,14 @@ function applyRouteState(state) {
   }
   waypoints = state.waypoints;
   legs = state.legs.map(normalizeLeg);
+  // Legs saved before endpoints were stored were always dense and
+  // index-aligned with the waypoints, so fill from/to by index.
+  legs.forEach(function(leg, i) {
+    if (leg && !leg.from && !leg.to && waypoints[i] && waypoints[i + 1]) {
+      leg.from = waypoints[i];
+      leg.to = waypoints[i + 1];
+    }
+  });
   applyingRouteState = true;
   if (state.center != null && state.zoom != null) {
     map.setView(state.center, state.zoom);
@@ -1113,12 +1118,11 @@ function applyRouteState(state) {
   // Older saved routes (or ones saved before addresses resolved) may lack
   // labels; fetch any that are missing.
   reverseGeocodeUnlabeled();
-  updateStats();
-  if (legs.length > 0) {
-    requestScore();
-  }
   // Now that the route is fully drawn, load segments for the restored view.
   loadVisibleSegments();
+  // Updates stats and score, saves, and fetches any missing (null) legs; a
+  // fully routed route issues no requests.
+  reroute();
 }
 
 loadPrefs();
@@ -1438,17 +1442,15 @@ function onFileSelected(event) {
       !state.waypoints.every(function(wp) { return Array.isArray(wp) && wp.length >= 2; }) ||
       !Array.isArray(state.legs) ||
       !state.legs.every(function(leg) {
-        return leg &&
+        return leg === null || (leg &&
           Array.isArray(leg.points) &&
-          leg.points.every(function(p) { return Array.isArray(p) && p.length >= 2; });
-      }) ||
-      state.waypoints.length > state.legs.length + 1
+          leg.points.every(function(p) { return Array.isArray(p) && p.length >= 2; }));
+      })
     ) {
       showToast('Invalid route file');
       return;
     }
     applyRouteState(state);
-    saveState();
   };
   reader.onerror = function() {
     showToast('Could not read route file');

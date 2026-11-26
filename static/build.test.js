@@ -1556,3 +1556,90 @@ test('the routing generation counter no longer exists', function() {
   var ctx = loadBuildJS(makeCtx());
   assert.equal(typeof ctx.routingGeneration, 'undefined');
 });
+
+// --- restore with null / legacy legs (#39) ---
+
+function restoreHarness(state) {
+  var calls = [];
+  var ctx = makeCtx({
+    fetch: function(url, opts) {
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        var body = JSON.parse(opts.body);
+        calls.push(body);
+        return Promise.resolve({ ok: true, json: function() { return Promise.resolve({
+          points: [[body.from.lat, body.from.lon], [body.to.lat, body.to.lon]], duration: 1, distance: 1 }); } });
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  });
+  ctx.localStorage._data['twisty-build-state'] = JSON.stringify(state);
+  return { ctx: loadBuildJS(ctx), calls: calls };
+}
+
+test('restoreState keeps a saved route containing null legs', function() {
+  var h = restoreHarness({ waypoints: [PA, PB, PC], legs: [routedLeg(PA, PB), null] });
+  assert.equal(h.ctx.waypoints.length, 3);
+  assert.equal(h.ctx.legs.length, 2);
+  assert.ok(h.ctx.legs[0]);
+});
+
+test('restoreState does not trim waypoints to the leg count', function() {
+  var h = restoreHarness({ waypoints: [PA, PB, PC, PD], legs: [routedLeg(PA, PB)] });
+  assert.equal(h.ctx.waypoints.length, 4);
+});
+
+test('restoreState resumes routing for missing legs', async function() {
+  var h = restoreHarness({ waypoints: [PA, PB, PC], legs: [routedLeg(PA, PB), null] });
+  await settle();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].from.lat, PB[0]);
+  assert.ok(h.ctx.legs[1]);
+});
+
+test('restoreState of a fully routed route issues no routing requests', async function() {
+  var h = restoreHarness({ waypoints: [PA, PB, PC], legs: [routedLeg(PA, PB), routedLeg(PB, PC)] });
+  await settle();
+  assert.equal(h.calls.length, 0);
+});
+
+test('restoreState backfills from/to on legacy legs so they are reused', async function() {
+  var h = restoreHarness({
+    waypoints: [PA, PB, PC],
+    legs: [{ points: [PA, PB], duration: 1, distance: 1 }, { points: [PB, PC], duration: 1, distance: 1 }]
+  });
+  await settle();
+  assert.equal(h.calls.length, 0, 'legacy legs are not refetched');
+  assert.deepEqual(Array.from(h.ctx.legs[0].from), PA);
+  assert.deepEqual(Array.from(h.ctx.legs[1].to), PC);
+  h.ctx.addWaypoint({ lat: PD[0], lng: PD[1] });
+  await settle();
+  assert.equal(h.calls.length, 1, 'a following edit fetches only the new leg');
+});
+
+test('onFileSelected accepts null legs, keeps waypoints and resumes routing', async function() {
+  var calls = [];
+  var file = JSON.stringify({ version: 1, waypoints: [PA, PB, PC], legs: [routedLeg(PA, PB), null] });
+  var ctx = loadBuildJS(makeCtx({
+    FileReader: function() {
+      var r = this;
+      r.readAsText = function() { r.onload({ target: { result: file } }); };
+    },
+    fetch: function(url, opts) {
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        var body = JSON.parse(opts.body);
+        calls.push(body);
+        return Promise.resolve({ ok: true, json: function() { return Promise.resolve({
+          points: [[body.from.lat, body.from.lon], [body.to.lat, body.to.lon]], duration: 1, distance: 1 }); } });
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  }));
+  var toasts = [];
+  ctx.showToast = function(m) { toasts.push(m); };
+  ctx.onFileSelected({ target: { files: [{}] } });
+  await settle();
+  assert.deepEqual(toasts, []);
+  assert.equal(ctx.waypoints.length, 3);
+  assert.equal(calls.length, 1);
+  assert.ok(ctx.legs[1]);
+});
