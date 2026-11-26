@@ -1434,3 +1434,72 @@ test('updateStats and requestScore tolerate null legs', function() {
   ctx.updateStats();
   ctx.requestScore();
 });
+
+// --- failed legs, append, late responses (#36, #37, #38) ---
+
+// failWhen(body, callNumber) -> true makes that route-leg request fail.
+function failingFetchHarness(failWhen) {
+  var calls = [];
+  var ctx = loadBuildJS(makeCtx({
+    fetch: function(url, opts) {
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        var body = JSON.parse(opts.body);
+        calls.push(body);
+        if (failWhen(body, calls.length)) {
+          return Promise.resolve({ ok: false, json: function() { return Promise.resolve({}); } });
+        }
+        return Promise.resolve({ ok: true, json: function() { return Promise.resolve({
+          points: [[body.from.lat, body.from.lon], [body.to.lat, body.to.lon]], duration: 1, distance: 1 }); } });
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  }));
+  var toasts = [];
+  ctx.showToast = function(m) { toasts.push(m); };
+  return { ctx: ctx, calls: calls, toasts: toasts };
+}
+
+test('a failed leg shows a toast naming which leg failed', async function() {
+  var h = failingFetchHarness(function(b, n) { return n === 2; });
+  h.ctx.waypoints.push(PA, PB, PC);
+  h.ctx.reroute();
+  await settle();
+  assert.deepEqual(h.toasts, ['Could not route leg 2']);
+  assert.ok(h.ctx.legs[0]);
+  assert.equal(h.ctx.legs[1], null);
+});
+
+test('a failure does not disturb reused legs elsewhere in the route', async function() {
+  var h = failingFetchHarness(function() { return true; });
+  h.ctx.legs = [routedLeg(PA, PB)];
+  h.ctx.waypoints.push(PA, PB, PC);
+  h.ctx.reroute();
+  await settle();
+  assert.equal(h.calls.length, 1, 'only the missing leg is requested');
+  assert.ok(h.ctx.legs[0], 'reused leg stays');
+  assert.equal(h.ctx.legs[1], null);
+});
+
+test('the next edit re-requests a leg that failed', async function() {
+  var h = failingFetchHarness(function(b, n) { return n === 1; });
+  h.ctx.waypoints.push(PA, PB);
+  h.ctx.reroute();
+  await settle();
+  assert.equal(h.ctx.legs[0], null);
+  h.ctx.waypoints.push(PC);
+  h.ctx.reroute();
+  await settle();
+  assert.equal(h.calls.length, 3, 'failed A->B retried alongside new B->C');
+  assert.ok(h.ctx.legs[0] && h.ctx.legs[1]);
+});
+
+test('routing status clears after a mix of failed and succeeded fetches', async function() {
+  var h = failingFetchHarness(function(b, n) { return n === 1; });
+  var cleared = 0;
+  var origClear = h.ctx.statusManager.clear.bind(h.ctx.statusManager);
+  h.ctx.statusManager.clear = function(slot) { if (slot === 'routing') cleared++; origClear(slot); };
+  h.ctx.waypoints.push(PA, PB, PC);
+  h.ctx.reroute();
+  await settle();
+  assert.equal(cleared, 1);
+});
