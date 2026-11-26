@@ -555,6 +555,28 @@ function samePair(from, to, other) {
   return !!other && samePoint(from, other.from) && samePoint(to, other.to);
 }
 
+// indexOfPair returns the index in `list` of the first entry (a Leg or a
+// { from, to } pair) matching from/to exactly, or -1.
+function indexOfPair(list, from, to) {
+  for (var i = 0; i < list.length; i++) {
+    if (samePair(from, to, list[i])) return i;
+  }
+  return -1;
+}
+
+function hasPair(list, from, to) {
+  return indexOfPair(list, from, to) >= 0;
+}
+
+// missingLegIndex returns the index of the first absent Leg whose waypoint
+// pair is from/to, or -1.
+function missingLegIndex(from, to) {
+  for (var i = 0; i + 1 < waypoints.length; i++) {
+    if (!legs[i] && samePoint(waypoints[i], from) && samePoint(waypoints[i + 1], to)) return i;
+  }
+  return -1;
+}
+
 // planLegs decides, for each consecutive waypoint pair, what to do about its
 // Leg. A Leg depends only on its two endpoints, so a stored Leg is reused when
 // its recorded from/to equal the pair exactly (a reversed pair is different;
@@ -567,13 +589,10 @@ function planLegs(wps, storedLegs, inFlight) {
   var plan = [];
   for (var i = 0; i + 1 < wps.length; i++) {
     var from = wps[i], to = wps[i + 1];
-    var match = null;
-    for (var j = 0; j < storedLegs.length && !match; j++) {
-      if (samePair(from, to, storedLegs[j])) match = storedLegs[j];
-    }
-    if (match) {
-      plan.push({ action: 'reuse', leg: match });
-    } else if (inFlight.some(function(p) { return samePair(from, to, p); })) {
+    var j = indexOfPair(storedLegs, from, to);
+    if (j >= 0) {
+      plan.push({ action: 'reuse', leg: storedLegs[j] });
+    } else if (hasPair(inFlight, from, to)) {
       plan.push({ action: 'inflight' });
     } else {
       plan.push({ action: 'fetch' });
@@ -624,8 +643,7 @@ function routeStep() {
   var next = -1, pending = 0;
   plan.forEach(function(p, i) {
     if (p.action !== 'fetch') return;
-    var tried = routeAttempted.some(function(a) { return samePair(waypoints[i], waypoints[i + 1], a); });
-    if (tried) return;
+    if (hasPair(routeAttempted, waypoints[i], waypoints[i + 1])) return;
     pending++;
     if (next < 0) next = i;
   });
@@ -640,6 +658,7 @@ function routeStep() {
   var pair = { from: from, to: to };
   routeAttempted.push(pair);
   routeInFlight.push(pair);
+  // Approximate: the total can grow mid-run when overlapping edits add legs.
   statusManager.set('routing', 'Routing leg ' + (routeDone + 1) + ' of ' + (routeDone + pending) + '...', false);
 
   var finished = false;
@@ -680,14 +699,18 @@ function routeStep() {
   })
   .catch(function() {
     finish();
-    for (var i = 0; i + 1 < waypoints.length; i++) {
-      if (!legs[i] && samePoint(waypoints[i], from) && samePoint(waypoints[i + 1], to)) {
-        showToast('Could not route leg ' + (i + 1));
-        break;
-      }
-    }
+    var failed = missingLegIndex(from, to);
+    if (failed >= 0) showToast('Could not route leg ' + (failed + 1));
     routeStep();
   });
+}
+
+// legStatus reports why waypoint pair i has no Leg: 'failed' when it was
+// attempted and is no longer in flight, otherwise 'routing'.
+function legStatus(i) {
+  var from = waypoints[i], to = waypoints[i + 1];
+  if (hasPair(routeAttempted, from, to) && !hasPair(routeInFlight, from, to)) return 'failed';
+  return 'routing';
 }
 
 function curvatureColorLevel(scorePerKm) {
@@ -1111,8 +1134,6 @@ function applyRouteState(state) {
     map.setView(state.center, state.zoom);
   }
   applyingRouteState = false;
-  legPolylines = legs.map(function(leg) { return leg ? drawLegPolyline(leg) : null; });
-  legs.forEach(function(leg, i) { drawGapLines(i); });
   refreshMarkers();
   renderWaypointList();
   // Older saved routes (or ones saved before addresses resolved) may lack
@@ -1470,14 +1491,9 @@ function exportRoute(format) {
     if (!legs[k]) { missing = k; break; }
   }
   if (missing >= 0) {
-    var inFlight = routeInFlight.some(function(p) {
-      return samePair(waypoints[missing], waypoints[missing + 1], p);
-    });
-    var tried = routeAttempted.some(function(p) {
-      return samePair(waypoints[missing], waypoints[missing + 1], p);
-    });
-    var why = (tried && !inFlight) ? 'failed to route' : 'still routing';
-    showToast('Cannot export: leg ' + (missing + 1) + ' ' + (why === 'still routing' ? 'is ' : '') + why);
+    showToast(legStatus(missing) === 'failed'
+      ? 'Cannot export: leg ' + (missing + 1) + ' failed to route'
+      : 'Cannot export: leg ' + (missing + 1) + ' is still routing');
     return;
   }
   var exportLegs = legs.map(function(leg) {
