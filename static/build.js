@@ -62,13 +62,18 @@ function legGapWarning(leg, i) {
 }
 
 function normalizeLeg(leg) {
+  if (!leg) return leg;
   leg.snapFromM = snapOf(leg, 'snapFromM');
   leg.snapToM = snapOf(leg, 'snapToM');
   return leg;
 }
 
-function legFromResponse(data) {
+// from/to are the [lat, lon] waypoint coordinates the leg was routed between;
+// planLegs matches stored legs to waypoint pairs by them.
+function legFromResponse(data, from, to) {
   return {
+    from: from,
+    to: to,
     points: data.points,
     duration: data.duration,
     distance: data.distance,
@@ -88,14 +93,6 @@ function waypointGapM(j) {
 function clearGapLines() {
   gapLines.forEach(function(g) { map.removeLayer(g.layer); });
   gapLines = [];
-}
-
-function removeGapLinesForLeg(index) {
-  gapLines = gapLines.filter(function(g) {
-    if (g.leg !== index) return true;
-    map.removeLayer(g.layer);
-    return false;
-  });
 }
 
 function addGapLine(index, a, b) {
@@ -219,14 +216,9 @@ function initWaypointDnD() {
       var wp = waypoints.splice(fromIndex, 1)[0];
       var insertAt = toIndex > fromIndex ? toIndex - 1 : toIndex;
       waypoints.splice(insertAt, 0, wp);
-      legPolylines.forEach(function(p) { map.removeLayer(p); });
-      legPolylines = [];
-      clearGapLines();
-      legs = [];
       refreshMarkers();
       renderWaypointList();
-      rerouteAll();
-      saveState();
+      reroute();
     } else if (type === 'insert') {
       startInsertWaypoint(toIndex);
     }
@@ -308,19 +300,11 @@ function renderWaypointList() {
 function removeWaypoint(i) {
   waypoints.splice(i, 1);
   activeSlotIndex = -1;
-  legPolylines.forEach(function(p) { map.removeLayer(p); });
-  legPolylines = [];
-  clearGapLines();
-  legs = [];
   refreshMarkers();
   renderWaypointList();
+  reroute();
   if (waypoints.length === 0) {
     localStorage.removeItem('twisty-build-state');
-    updateStats();
-    requestScore();
-  } else {
-    rerouteAll();
-    saveState();
   }
 }
 
@@ -386,7 +370,7 @@ function commitWaypointEdit(index, query, row, input, labelEl) {
       saveState();
       refreshMarkers();
       renderWaypointList();
-      rerouteAll();
+      reroute();
     })
     .catch(function(err) {
       input.disabled = false;
@@ -520,14 +504,9 @@ function commitInsertWaypoint(insertIndex, query, placeholderRow, input) {
       list.removeChild(placeholderRow);
       waypoints.splice(insertIndex, 0, [data.lat, data.lon]);
       labelCache[labelKey([data.lat, data.lon])] = data.display_name;
-      legPolylines.forEach(function(p) { map.removeLayer(p); });
-      legPolylines = [];
-      clearGapLines();
-      legs = [];
       refreshMarkers();
       renderWaypointList();
-      rerouteAll();
-      saveState();
+      reroute();
     })
     .catch(function(err) {
       insertSlotIndex = -1;
@@ -568,57 +547,147 @@ function reverseGeocodeUnlabeled() {
   next(0);
 }
 
-function rerouteAll() {
-  if (waypoints.length < 2) return;
+function samePoint(a, b) {
+  return !!a && !!b && a[0] === b[0] && a[1] === b[1];
+}
 
-  legPolylines.forEach(function(p) { map.removeLayer(p); });
-  legPolylines = [];
+function samePair(from, to, other) {
+  return !!other && samePoint(from, other.from) && samePoint(to, other.to);
+}
+
+// planLegs decides, for each consecutive waypoint pair, what to do about its
+// Leg. A Leg depends only on its two endpoints, so a stored Leg is reused when
+// its recorded from/to equal the pair exactly (a reversed pair is different;
+// Legs without endpoints and null placeholders never match).
+//   legs:     stored Legs (entries may be null)
+//   inFlight: [{ from, to }] pairs whose fetch has already been dispatched
+// Returns one entry per pair: { action: 'reuse', leg } | { action: 'inflight' }
+// | { action: 'fetch' }.
+function planLegs(wps, storedLegs, inFlight) {
+  var plan = [];
+  for (var i = 0; i + 1 < wps.length; i++) {
+    var from = wps[i], to = wps[i + 1];
+    var match = null;
+    for (var j = 0; j < storedLegs.length && !match; j++) {
+      if (samePair(from, to, storedLegs[j])) match = storedLegs[j];
+    }
+    if (match) {
+      plan.push({ action: 'reuse', leg: match });
+    } else if (inFlight.some(function(p) { return samePair(from, to, p); })) {
+      plan.push({ action: 'inflight' });
+    } else {
+      plan.push({ action: 'fetch' });
+    }
+  }
+  return plan;
+}
+
+var routeInFlight = [];      // [{ from, to }] pairs currently being fetched
+var routeWorkerActive = false;
+var routeAttempted = [];     // pairs already tried since the last edit
+var routeDone = 0;           // fetches completed by the current worker run
+
+function drawLegPolyline(leg) {
+  var latLngs = leg.points.map(function(p) { return [p[0], p[1]]; });
+  return L.polyline(latLngs, { color: '#2563eb', weight: 3, opacity: 0.5, pane: 'routePane' }).addTo(map);
+}
+
+// Redraw every present Leg (polylines and gap lines) from `legs`; null Legs
+// stay as gaps.
+function redrawLegs() {
+  legPolylines.forEach(function(p) { if (p) map.removeLayer(p); });
   clearGapLines();
-  legs = [];
+  legPolylines = legs.map(function(leg) { return leg ? drawLegPolyline(leg) : null; });
+  legs.forEach(function(leg, i) { drawGapLines(i); });
+}
+
+// reroute is the one path for every waypoint edit (append, insert, replace,
+// remove, reorder, address edit). Legs between unchanged consecutive waypoints
+// are reused; the others become null placeholders and are fetched one at a
+// time by the worker.
+function reroute() {
+  routeAttempted = [];
+  var plan = planLegs(waypoints, legs, routeInFlight);
+  legs = plan.map(function(p) { return p.action === 'reuse' ? p.leg : null; });
+  redrawLegs();
   updateStats();
   requestScore();
   saveState();
+  if (!routeWorkerActive) {
+    routeDone = 0;
+    routeStep();
+  }
+}
 
-  var gen = ++routingGeneration;
-  var total = waypoints.length - 1;
+function routeStep() {
+  var plan = planLegs(waypoints, legs, routeInFlight);
+  var next = -1, pending = 0;
+  plan.forEach(function(p, i) {
+    if (p.action !== 'fetch') return;
+    var tried = routeAttempted.some(function(a) { return samePair(waypoints[i], waypoints[i + 1], a); });
+    if (tried) return;
+    pending++;
+    if (next < 0) next = i;
+  });
+  if (next < 0) {
+    routeWorkerActive = false;
+    statusManager.clear('routing');
+    return;
+  }
+  routeWorkerActive = true;
+  var from = waypoints[next];
+  var to = waypoints[next + 1];
+  var pair = { from: from, to: to };
+  routeAttempted.push(pair);
+  routeInFlight.push(pair);
+  statusManager.set('routing', 'Routing leg ' + (routeDone + 1) + ' of ' + (routeDone + pending) + '...', false);
 
-  function routeNext(i) {
-    if (i >= total) return;
-    statusManager.set('routing', 'Routing leg ' + (i + 1) + ' of ' + total + '...', false);
-    var from = waypoints[i];
-    var to = waypoints[i + 1];
-    fetch('/api/route-leg', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: { lat: from[0], lon: from[1] }, to: { lat: to[0], lon: to[1] } })
-    })
-    .then(function(r) {
-      if (!r.ok) throw new Error('Routing failed');
-      return r.json();
-    })
-    .then(function(data) {
-      if (gen !== routingGeneration) return;
-      var latLngs = data.points.map(function(p) { return [p[0], p[1]]; });
-      var polyline = L.polyline(latLngs, { color: '#2563eb', weight: 3, opacity: 0.5, pane: 'routePane' }).addTo(map);
-      legPolylines.push(polyline);
-      legs.push(legFromResponse(data));
+  var finished = false;
+  function finish() {
+    if (finished) return;
+    finished = true;
+    routeInFlight = routeInFlight.filter(function(p) { return p !== pair; });
+    routeDone++;
+  }
+
+  fetch('/api/route-leg', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: { lat: from[0], lon: from[1] }, to: { lat: to[0], lon: to[1] } })
+  })
+  .then(function(r) {
+    if (!r.ok) throw new Error('Routing failed');
+    return r.json();
+  })
+  .then(function(data) {
+    finish();
+    // Apply the response wherever its pair still matches the current
+    // waypoints; if nothing matches any more it is simply discarded.
+    var filled = false;
+    for (var i = 0; i + 1 < waypoints.length; i++) {
+      if (legs[i] || !samePoint(waypoints[i], from) || !samePoint(waypoints[i + 1], to)) continue;
+      legs[i] = legFromResponse(data, from, to);
+      legPolylines[i] = drawLegPolyline(legs[i]);
       noteLegRouted(i);
+      filled = true;
+    }
+    if (filled) {
       saveState();
       updateStats();
       requestScore();
-      if (i + 1 >= total) {
-        statusManager.clear('routing');
-      } else {
-        routeNext(i + 1);
+    }
+    routeStep();
+  })
+  .catch(function() {
+    finish();
+    for (var i = 0; i + 1 < waypoints.length; i++) {
+      if (!legs[i] && samePoint(waypoints[i], from) && samePoint(waypoints[i + 1], to)) {
+        showToast('Could not route leg ' + (i + 1));
+        break;
       }
-    })
-    .catch(function() {
-      if (gen !== routingGeneration) return;
-      statusManager.clear('routing');
-      showToast('Could not route leg ' + (i + 1));
-    });
-  }
-  routeNext(0);
+    }
+    routeStep();
+  });
 }
 
 function curvatureColorLevel(scorePerKm) {
@@ -639,7 +708,6 @@ function gradientColorCSS(level) {
   return 'rgb(255,0,' + Math.round(blue) + ')';
 }
 
-var routingGeneration = 0;
 var OVERLAY_WAYS = 'ways';
 var OVERLAY_ROADS = 'roads';
 var overlayMode = OVERLAY_WAYS;
@@ -1038,11 +1106,7 @@ function applyRouteState(state) {
     map.setView(state.center, state.zoom);
   }
   applyingRouteState = false;
-  legs.forEach(function(leg) {
-    var latLngs = leg.points.map(function(p) { return [p[0], p[1]]; });
-    var polyline = L.polyline(latLngs, { color: '#2563eb', weight: 3, opacity: 0.5, pane: 'routePane' }).addTo(map);
-    legPolylines.push(polyline);
-  });
+  legPolylines = legs.map(function(leg) { return leg ? drawLegPolyline(leg) : null; });
   legs.forEach(function(leg, i) { drawGapLines(i); });
   refreshMarkers();
   renderWaypointList();
@@ -1102,6 +1166,7 @@ function refreshMarkers() {
 function updateStats() {
   var totalDist = 0, totalTime = 0;
   legs.forEach(function(leg) {
+    if (!leg) return;
     totalDist += leg.distance;
     totalTime += leg.duration;
   });
@@ -1126,6 +1191,7 @@ function requestScore() {
 
   var allPoints = [];
   legs.forEach(function(leg) {
+    if (!leg) return;
     leg.points.forEach(function(p, i) {
       if (i === 0 && allPoints.length > 0) {
         var last = allPoints[allPoints.length - 1];
@@ -1248,35 +1314,25 @@ function addWaypoint(latlng) {
     insertPlaceholderRow = null;
     if (row && row.parentNode) row.parentNode.removeChild(row);
     waypoints.splice(idx, 0, [latlng.lat, latlng.lng]);
-    legPolylines.forEach(function(p) { map.removeLayer(p); });
-    legPolylines = [];
-    clearGapLines();
-    legs = [];
     refreshMarkers();
     renderWaypointList();
     reverseGeocodeUnlabeled();
-    rerouteAll();
-    saveState();
+    reroute();
     return;
   }
 
-  var prev = waypoints.length > 0 ? waypoints[waypoints.length - 1] : null;
-
   if (activeSlotIndex >= 0 && activeSlotIndex < waypoints.length) {
     waypoints[activeSlotIndex] = [latlng.lat, latlng.lng];
-    var replacedIndex = activeSlotIndex;
     activeSlotIndex = -1;
     refreshMarkers();
-    saveState();
     renderWaypointList();
     reverseGeocodeUnlabeled();
-    rerouteAll();
+    reroute();
     return;
   }
 
   waypoints.push([latlng.lat, latlng.lng]);
   refreshMarkers();
-  saveState();
   renderWaypointList();
   reverseGeocodeUnlabeled();
 
@@ -1284,70 +1340,15 @@ function addWaypoint(latlng) {
     toggleWaypointsPanel();
   }
 
-  if (prev) {
-    var gen = ++routingGeneration;
-    statusManager.set('routing', 'Routing leg 1 of 1...', false);
-
-    fetch('/api/route-leg', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: { lat: prev[0], lon: prev[1] },
-        to: { lat: latlng.lat, lon: latlng.lng }
-      })
-    })
-    .then(function(r) {
-      if (!r.ok) throw new Error('Routing failed');
-      return r.json();
-    })
-    .then(function(data) {
-      if (gen !== routingGeneration) return;
-      statusManager.clear('routing');
-      var latLngs = data.points.map(function(p) { return [p[0], p[1]]; });
-      var polyline = L.polyline(latLngs, { color: '#2563eb', weight: 3, opacity: 0.5, pane: 'routePane' }).addTo(map);
-      legPolylines.push(polyline);
-      legs.push(legFromResponse(data));
-      noteLegRouted(legs.length - 1);
-      saveState();
-      updateStats();
-      requestScore();
-    })
-    .catch(function(err) {
-      if (gen !== routingGeneration) return;
-      statusManager.clear('routing');
-      waypoints.pop();
-      refreshMarkers();
-      saveState();
-      renderWaypointList();
-      showToast('Could not route between these points — try a different location');
-    });
-  }
+  reroute();
 }
 
 function removeLastWaypoint() {
   if (waypoints.length === 0) return;
-  waypoints.pop();
-
-  if (legPolylines.length > 0) {
-    map.removeLayer(legPolylines.pop());
-    legs.pop();
-    removeGapLinesForLeg(legs.length);
-  }
-
-  refreshMarkers();
-  updateStats();
-  requestScore();
-
-  if (waypoints.length === 0) {
-    localStorage.removeItem('twisty-build-state');
-  } else {
-    saveState();
-  }
-  renderWaypointList();
+  removeWaypoint(waypoints.length - 1);
 }
 
 function clearRoute() {
-  routingGeneration++;
   reverseGeocodeGeneration++;
   scoreGeneration++;
   legPolylines.forEach(function(p) { map.removeLayer(p); });
@@ -1460,6 +1461,12 @@ map.on('click', function(e) {
 });
 
 function exportRoute(format) {
+  // Minimal guard so a gap never reaches the export endpoint; the detailed
+  // per-leg message is a follow-up.
+  if (legs.some(function(leg) { return !leg; })) {
+    showToast('Cannot export while a leg is still routing or failed to route');
+    return;
+  }
   var exportLegs = legs.map(function(leg) {
     return { points: leg.points };
   });

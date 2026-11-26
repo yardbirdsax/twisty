@@ -333,7 +333,7 @@ test('addWaypoint sets routing status to "Routing leg 1 of 1..." when adding sec
 
 // --- rerouteAll routing progress ---
 
-test('rerouteAll sets status to "Routing leg 1 of 2..." then "Routing leg 2 of 2..." then clears', function(t, done) {
+test('reroute sets status to "Routing leg 1 of 2..." then "Routing leg 2 of 2..." then clears', function(t, done) {
   var statusLog = [];
   var resolvers = [];
   var ctx = makeCtx({
@@ -364,7 +364,7 @@ test('rerouteAll sets status to "Routing leg 1 of 2..." then "Routing leg 2 of 2
   ctx.waypoints.push([40.0, -75.0]);
   ctx.waypoints.push([40.1, -75.1]);
   ctx.waypoints.push([40.2, -75.2]);
-  ctx.rerouteAll();
+  ctx.reroute();
 
   // After rerouteAll(), leg 1 fetch is in-flight; check first status set synchronously.
   var leg1Set = statusLog.find(function(e) { return e.op === 'set' && e.slot === 'routing'; });
@@ -395,7 +395,7 @@ test('rerouteAll sets status to "Routing leg 1 of 2..." then "Routing leg 2 of 2
     });
 });
 
-test('rerouteAll clears routing status on error', function(t, done) {
+test('reroute clears routing status on error', function(t, done) {
   var statusLog = [];
   var ctx = makeCtx({
     fetch: function(url, opts) {
@@ -416,7 +416,7 @@ test('rerouteAll clears routing status on error', function(t, done) {
 
   ctx.waypoints.push([40.0, -75.0]);
   ctx.waypoints.push([40.1, -75.1]);
-  ctx.rerouteAll();
+  ctx.reroute();
 
   Promise.resolve().then(function() {
     return Promise.resolve();
@@ -425,55 +425,6 @@ test('rerouteAll clears routing status on error', function(t, done) {
     assert.ok(cleared, 'expected routing status to be cleared on error');
     done();
   });
-});
-
-test('rerouteAll stale generation does not clear status of newer reroute', function(t, done) {
-  var resolvers = [];
-  var ctx = makeCtx({
-    fetch: function(url, opts) {
-      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
-        return new Promise(function(resolve) {
-          resolvers.push(resolve);
-        }).then(function() {
-          return { ok: true, json: function() { return Promise.resolve({ points: [[40.1, -75.1], [40.2, -75.2]], duration: 60, distance: 1000 }); } };
-        });
-      }
-      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
-    }
-  });
-  ctx = loadBuildJS(ctx);
-
-  var statusLog = [];
-  var origSet = ctx.statusManager.set.bind(ctx.statusManager);
-  var origClear = ctx.statusManager.clear.bind(ctx.statusManager);
-  ctx.statusManager.set = function(slot, text, isDone) {
-    statusLog.push({ op: 'set', slot: slot, text: text });
-    origSet(slot, text, isDone);
-  };
-  ctx.statusManager.clear = function(slot) {
-    statusLog.push({ op: 'clear', slot: slot });
-    origClear(slot);
-  };
-
-  // First reroute with 1 leg
-  ctx.waypoints.push([40.0, -75.0]);
-  ctx.waypoints.push([40.1, -75.1]);
-  ctx.rerouteAll();
-
-  // Before first reroute resolves, start a second reroute (increments routingGeneration)
-  ctx.rerouteAll();
-
-  // Resolve the stale (first) fetch, then wait 6 plain hops — enough for the stale
-  // callback to have fired (same depth as multi-leg test) — and assert no clear was added.
-  resolvers[0]();
-  Promise.resolve()
-    .then(function(){}).then(function(){}).then(function(){})
-    .then(function(){}).then(function(){}).then(function(){})
-    .then(function() {
-      var clearsAfter = statusLog.filter(function(e) { return e.op === 'clear' && e.slot === 'routing'; }).length;
-      assert.equal(clearsAfter, 0, 'stale callback should not have added a clear');
-      done();
-    });
 });
 
 // --- insertSlotIndex state ---
@@ -1262,4 +1213,224 @@ test('adding a waypoint by map click does not move the map', function() {
   var ctx = loadCenterCtx(10, true);
   ctx.addWaypoint({ lat: 40.1, lng: -75.1 });
   assert.equal(ctx.setViewCalls.length, 0);
+});
+
+// --- planLegs ---
+
+function plannedActions(ctx, waypoints, legs, inFlight) {
+  return Array.from(ctx.planLegs(waypoints, legs, inFlight || []).map(function(p) { return p.action; }));
+}
+
+function routedLeg(from, to) {
+  return { from: from, to: to, points: [from, to], duration: 1, distance: 1 };
+}
+
+var PA = [40.0, -75.0], PB = [40.1, -75.1], PC = [40.2, -75.2], PD = [40.3, -75.3], PE = [40.4, -75.4];
+
+test('planLegs returns no entries for fewer than two waypoints', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.equal(ctx.planLegs([], [], []).length, 0);
+  assert.equal(ctx.planLegs([PA], [], []).length, 0);
+});
+
+test('planLegs fetches every pair when there are no legs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.deepEqual(plannedActions(ctx, [PA, PB, PC], []), ['fetch', 'fetch']);
+});
+
+test('planLegs reuses existing legs and fetches only the appended pair', function() {
+  var ctx = loadBuildJS(makeCtx());
+  var l1 = routedLeg(PA, PB), l2 = routedLeg(PB, PC);
+  var plan = ctx.planLegs([PA, PB, PC, PD], [l1, l2], []);
+  assert.deepEqual(Array.from(plan.map(function(p) { return p.action; })), ['reuse', 'reuse', 'fetch']);
+  assert.equal(plan[0].leg, l1);
+  assert.equal(plan[1].leg, l2);
+});
+
+test('planLegs inserting in the middle fetches only the two adjoining pairs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  var legs = [routedLeg(PA, PB), routedLeg(PB, PC), routedLeg(PC, PD)];
+  // Insert PE between PB and PC.
+  assert.deepEqual(plannedActions(ctx, [PA, PB, PE, PC, PD], legs),
+    ['reuse', 'fetch', 'fetch', 'reuse']);
+});
+
+test('planLegs removing a middle waypoint fetches only the bridging pair', function() {
+  var ctx = loadBuildJS(makeCtx());
+  var legs = [routedLeg(PA, PB), routedLeg(PB, PC), routedLeg(PC, PD)];
+  assert.deepEqual(plannedActions(ctx, [PA, PC, PD], legs), ['fetch', 'reuse']);
+});
+
+test('planLegs removing the last waypoint reuses the rest', function() {
+  var ctx = loadBuildJS(makeCtx());
+  var legs = [routedLeg(PA, PB), routedLeg(PB, PC)];
+  assert.deepEqual(plannedActions(ctx, [PA, PB], legs), ['reuse']);
+});
+
+test('planLegs replacing a middle waypoint fetches only the adjoining pairs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  var legs = [routedLeg(PA, PB), routedLeg(PB, PC), routedLeg(PC, PD)];
+  assert.deepEqual(plannedActions(ctx, [PA, PE, PC, PD], legs), ['fetch', 'fetch', 'reuse']);
+});
+
+test('planLegs reordering reuses a pair that is still consecutive in the same direction', function() {
+  var ctx = loadBuildJS(makeCtx());
+  var legs = [routedLeg(PA, PB), routedLeg(PB, PC), routedLeg(PC, PD)];
+  // Move PA to the end: B,C,D,A. B->C and C->D survive; D->A is new.
+  assert.deepEqual(plannedActions(ctx, [PB, PC, PD, PA], legs), ['reuse', 'reuse', 'fetch']);
+});
+
+test('planLegs treats a reversed pair as different', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.deepEqual(plannedActions(ctx, [PB, PA], [routedLeg(PA, PB)]), ['fetch']);
+});
+
+test('planLegs does not reuse a legacy leg without endpoints', function() {
+  var ctx = loadBuildJS(makeCtx());
+  var legacy = { points: [PA, PB], duration: 1, distance: 1 };
+  assert.deepEqual(plannedActions(ctx, [PA, PB], [legacy]), ['fetch']);
+});
+
+test('planLegs skips null legs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.deepEqual(plannedActions(ctx, [PA, PB, PC], [null, routedLeg(PB, PC)]), ['fetch', 'reuse']);
+});
+
+test('planLegs does not refetch a pair that is already in flight', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.deepEqual(plannedActions(ctx, [PA, PB, PC], [], [{ from: PA, to: PB }]), ['inflight', 'fetch']);
+});
+
+test('planLegs prefers reusing a routed leg over an in-flight entry', function() {
+  var ctx = loadBuildJS(makeCtx());
+  assert.deepEqual(plannedActions(ctx, [PA, PB], [routedLeg(PA, PB)], [{ from: PA, to: PB }]), ['reuse']);
+});
+
+test('planLegs matches coordinates exactly', function() {
+  var ctx = loadBuildJS(makeCtx());
+  var near = routedLeg([40.0000001, -75.0], PB);
+  assert.deepEqual(plannedActions(ctx, [PA, PB], [near]), ['fetch']);
+});
+
+// --- reroute (incremental) ---
+
+function routeLegFetchHarness() {
+  var calls = [];
+  var ctx = makeCtx({
+    fetch: function(url, opts) {
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        var body = JSON.parse(opts.body);
+        return new Promise(function(resolve) {
+          calls.push({ body: body, resolve: resolve });
+        }).then(function() {
+          return { ok: true, json: function() { return Promise.resolve({
+            points: [[body.from.lat, body.from.lon], [body.to.lat, body.to.lon]], duration: 60, distance: 1000 }); } };
+        });
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  });
+  return { ctx: loadBuildJS(ctx), calls: calls };
+}
+
+function settle() {
+  var p = Promise.resolve();
+  for (var i = 0; i < 12; i++) p = p.then(function() {});
+  return p;
+}
+
+test('reroute stores from/to on each routed leg', async function() {
+  var h = routeLegFetchHarness();
+  h.ctx.waypoints.push(PA, PB);
+  h.ctx.reroute();
+  h.calls[0].resolve();
+  await settle();
+  assert.equal(h.ctx.legs.length, 1);
+  assert.deepEqual(Array.from(h.ctx.legs[0].from), PA);
+  assert.deepEqual(Array.from(h.ctx.legs[0].to), PB);
+});
+
+test('reroute after a middle insert fetches only the two adjoining legs', async function() {
+  var h = routeLegFetchHarness();
+  var ctx = h.ctx;
+  ctx.waypoints.push(PA, PB, PC);
+  ctx.reroute();
+  h.calls[0].resolve(); await settle();
+  h.calls[1].resolve(); await settle();
+  assert.equal(h.calls.length, 2);
+
+  ctx.waypoints.splice(1, 0, PE); // A, E, B, C: A->E and E->B are new, B->C is reused
+  ctx.reroute();
+  assert.equal(ctx.legs.length, 3);
+  assert.equal(ctx.legs[0], null);
+  assert.equal(ctx.legs[1], null);
+  assert.ok(ctx.legs[2], 'unchanged leg stays drawn');
+  h.calls[2].resolve(); await settle();
+  h.calls[3].resolve(); await settle();
+  assert.equal(h.calls.length, 4, 'exactly two new fetches');
+  assert.ok(ctx.legs[0] && ctx.legs[1] && ctx.legs[2]);
+});
+
+test('reroute status counts only legs being fetched', function() {
+  var h = routeLegFetchHarness();
+  var ctx = h.ctx;
+  ctx.legs = [routedLeg(PA, PB)];
+  ctx.waypoints.push(PA, PB, PC, PD);
+  var texts = [];
+  var origSet = ctx.statusManager.set.bind(ctx.statusManager);
+  ctx.statusManager.set = function(slot, text, d) { texts.push(text); origSet(slot, text, d); };
+  ctx.reroute();
+  assert.equal(texts[0], 'Routing leg 1 of 2...');
+});
+
+test('reroute does not request a pair that is already in flight', function() {
+  var h = routeLegFetchHarness();
+  h.ctx.waypoints.push(PA, PB);
+  h.ctx.reroute();
+  h.ctx.reroute();
+  assert.equal(h.calls.length, 1);
+});
+
+test('reroute discards a late response whose pair no longer matches', async function() {
+  var h = routeLegFetchHarness();
+  var ctx = h.ctx;
+  ctx.waypoints.push(PA, PB);
+  ctx.reroute();
+  ctx.waypoints.splice(0, 2, PC, PD);
+  ctx.reroute();
+  h.calls[0].resolve(); await settle();
+  // The A->B response is discarded; the C->D fetch follows.
+  assert.equal(ctx.legs[0], null);
+  assert.equal(h.calls.length, 2);
+  assert.deepEqual(Array.from(h.calls[1].body.from ? [h.calls[1].body.from.lat] : []), [PC[0]]);
+});
+
+test('reroute leaves a failed leg as a gap and still fetches the rest', async function() {
+  var calls = [];
+  var ctx = loadBuildJS(makeCtx({
+    fetch: function(url, opts) {
+      if (typeof url === 'string' && url.indexOf('route-leg') !== -1) {
+        var body = JSON.parse(opts.body);
+        calls.push(body);
+        if (calls.length === 1) return Promise.resolve({ ok: false, json: function() { return Promise.resolve({}); } });
+        return Promise.resolve({ ok: true, json: function() { return Promise.resolve({
+          points: [[body.from.lat, body.from.lon], [body.to.lat, body.to.lon]], duration: 1, distance: 1 }); } });
+      }
+      return Promise.resolve({ ok: true, json: function() { return Promise.resolve({}); } });
+    }
+  }));
+  ctx.waypoints.push(PA, PB, PC);
+  ctx.reroute();
+  await settle();
+  assert.equal(calls.length, 2);
+  assert.equal(ctx.legs[0], null);
+  assert.ok(ctx.legs[1]);
+});
+
+test('updateStats and requestScore tolerate null legs', function() {
+  var ctx = loadBuildJS(makeCtx());
+  ctx.waypoints.push(PA, PB, PC);
+  ctx.legs = [null, routedLeg(PB, PC)];
+  ctx.updateStats();
+  ctx.requestScore();
 });
