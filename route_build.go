@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"encoding/xml"
@@ -46,13 +47,8 @@ type buildParams struct {
 	fetchDelay  string
 	verbose     bool
 	valhallaURL string // base URL for the Valhalla routing API
-}
-
-func loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		slog.Info("http request", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
-		next.ServeHTTP(w, r)
-	})
+	pprofAddr   string // loopback address for the pprof server; "off" disables it
+	diagDir     string // where automatic high-CPU captures are written
 }
 
 func execBuild(p buildParams) error {
@@ -65,6 +61,20 @@ func execBuild(p buildParams) error {
 			Level: slog.LevelDebug,
 		})))
 	}
+
+	_, stopPprof, err := startPprof(p.pprofAddr, os.Stderr)
+	if err != nil {
+		return err
+	}
+	defer stopPprof()
+	diagDir := p.diagDir
+	if diagDir == "" {
+		home, _ := os.UserHomeDir()
+		diagDir = filepath.Join(home, ".twisty", "diag")
+	}
+	statsCtx, stopStats := context.WithCancel(context.Background())
+	defer stopStats()
+	startStatsLogger(statsCtx, statsInterval, diagDir, defaultHotTracker())
 
 	center, err := geocode.Resolve(p.address, "Center")
 	if err != nil {
@@ -480,25 +490,6 @@ func tilesForPolyline(points [][2]float64, tileSizeDeg float64) []quality.Tile {
 	return tiles
 }
 
-func isNearPolyline(point geo.Coord, polyline [][2]float64, thresholdM float64) bool {
-	if len(polyline) == 0 {
-		return false
-	}
-	// Check distance to first vertex.
-	if geo.Haversine(point, geo.Coord{Lat: polyline[0][0], Lon: polyline[0][1]}) <= thresholdM {
-		return true
-	}
-	// Check each segment.
-	for i := 1; i < len(polyline); i++ {
-		a := geo.Coord{Lat: polyline[i-1][0], Lon: polyline[i-1][1]}
-		b := geo.Coord{Lat: polyline[i][0], Lon: polyline[i][1]}
-		if distPointToSegment(point, a, b) <= thresholdM {
-			return true
-		}
-	}
-	return false
-}
-
 // distPointToSegment returns the minimum distance in meters from point p to segment ab.
 func distPointToSegment(p, a, b geo.Coord) float64 {
 	// Project p onto segment ab using a flat-earth approximation (valid for short segments).
@@ -528,6 +519,12 @@ type scoreRequest struct {
 type scoreResult struct {
 	Score      float64
 	ScorePerKm float64
+
+	// Work counters for diagnostics; they do not affect the score.
+	Checked  int           // ScoredSegments tested against the route polyline
+	Matched  int           // ScoredSegments within range of the route
+	TileLoad time.Duration // time spent loading/scoring tiles
+	Match    time.Duration // time spent in the polyline proximity loop
 }
 
 type scoreResponse struct {
@@ -559,8 +556,12 @@ func (s *buildServer) handleViewportScore(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	ensureStart := time.Now()
 	status := s.tileSet().Ensure(tiles, false)
+	ensureDur := time.Since(ensureStart)
+	scoreStart := time.Now()
 	sr := s.scoreFromCachedTiles(status.Cached, s.tileScorer(), nil)
+	scoreDur := time.Since(scoreStart)
 
 	resp := scoreResponse{
 		Score:        sr.Score,
@@ -570,6 +571,9 @@ func (s *buildServer) handleViewportScore(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+
+	logScoreStats("viewport score stats", r, len(tiles), len(status.Cached), len(status.Pending), len(status.Failed),
+		sr, ensureDur, scoreDur)
 }
 
 func (s *buildServer) handleRefreshViewport(w http.ResponseWriter, r *http.Request) {
@@ -611,10 +615,16 @@ func (s *buildServer) handleScore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	hash := pointsHash(req.Points)
+	noteInflight(r.Context(), fmt.Sprintf("points=%d points_hash=%s", len(req.Points), hash))
 	tiles := tilesForPolyline(req.Points, s.tileSize)
 
+	ensureStart := time.Now()
 	status := s.tileSet().Ensure(tiles, false)
+	ensureDur := time.Since(ensureStart)
+	scoreStart := time.Now()
 	sr := s.scoreFromCachedTiles(status.Cached, s.tileScorer(), req.Points)
+	scoreDur := time.Since(scoreStart)
 
 	resp := scoreResponse{
 		Score:        sr.Score,
@@ -624,14 +634,30 @@ func (s *buildServer) handleScore(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+
+	logScoreStats("score stats", r, len(tiles), len(status.Cached), len(status.Pending), len(status.Failed),
+		sr, ensureDur, scoreDur, "points", len(req.Points), "points_hash", hash)
 }
+
+// routeMatchThresholdM is how close a ScoredSegment must be to the route to count toward its score.
+const routeMatchThresholdM = 50
 
 func (s *buildServer) scoreFromCachedTiles(tiles []quality.Tile, scorer *quality.TileScorer, routePoints [][2]float64) scoreResult {
 	var totalScore float64
 	var totalLength float64
+	var checked, matched int
+	var tileLoad, match time.Duration
+
+	// Built once per request: the route is checked against every segment of
+	// every tile, and a linear scan per segment is what made long routes slow.
+	indexStart := time.Now()
+	nearRoute := newPolylineIndex(routePoints, routeMatchThresholdM)
+	match += time.Since(indexStart)
 
 	for _, t := range tiles {
+		loadStart := time.Now()
 		result, err := scorer.Score(t)
+		tileLoad += time.Since(loadStart)
 		if err != nil {
 			slog.Warn("failed to write score cache", "south", t.South, "west", t.West, "error", err)
 		}
@@ -639,25 +665,36 @@ func (s *buildServer) scoreFromCachedTiles(tiles []quality.Tile, scorer *quality
 			continue
 		}
 
+		matchStart := time.Now()
 		for _, sw := range result.ScoredWays {
 			for _, seg := range sw.Segments {
 				mid := geo.Coord{
 					Lat: (seg.Start.Lat + seg.End.Lat) / 2,
 					Lon: (seg.Start.Lon + seg.End.Lon) / 2,
 				}
-				if len(routePoints) == 0 || isNearPolyline(mid, routePoints, 50) {
+				checked++
+				if len(routePoints) == 0 || nearRoute.Near(mid) {
+					matched++
 					totalScore += seg.Score
 					totalLength += seg.Length
 				}
 			}
 		}
+		match += time.Since(matchStart)
 	}
 
 	var scorePerKm float64
 	if totalLength > 0 {
 		scorePerKm = totalScore / (totalLength / 1000.0)
 	}
-	return scoreResult{Score: totalScore, ScorePerKm: scorePerKm}
+	return scoreResult{
+		Score:      totalScore,
+		ScorePerKm: scorePerKm,
+		Checked:    checked,
+		Matched:    matched,
+		TileLoad:   tileLoad,
+		Match:      match,
+	}
 }
 
 type exportRequest struct {
@@ -1152,5 +1189,7 @@ func newBuildCmd() *cobra.Command {
 	f.StringVar(&p.fetchDelay, "fetch-delay", "", "Delay between tile fetches (e.g. 500ms, 2s); default 1s")
 	f.BoolVar(&p.verbose, "v", false, "Enable verbose logging to stderr")
 	f.StringVar(&p.valhallaURL, "valhalla-url", route.ValhallaBaseURL, "Valhalla routing API URL")
+	f.StringVar(&p.pprofAddr, "pprof-addr", defaultPprofAddr, `Loopback address for the pprof server; "off" disables it`)
+	f.StringVar(&p.diagDir, "diag-dir", "", "Directory for automatic high-CPU captures (default: ~/.twisty/diag/)")
 	return cmd
 }
