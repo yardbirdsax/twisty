@@ -58,6 +58,7 @@ func newUpdateCmdWith(run updateRunner) *cobra.Command {
 	f.StringVar(&opts.Only, "only", "", "Limit to one service: overpass or valhalla")
 	f.BoolVar(&opts.Force, "force", false, "Treat every region as changed, skipping the upstream comparison")
 	f.BoolVar(&opts.DryRun, "dry-run", false, "Report what would happen without modifying anything")
+	f.BoolVar(&opts.Verbose, "verbose", false, "Log each step with timings to stderr")
 	f.BoolVar(&opts.InPlace, "in-place", false, "Re-import Overpass in place (full downtime) instead of staging")
 	f.StringVar(&loc.CacheDir, "cache-dir", "", "Overpass tile cache directory to clear after an Overpass refresh (default: ~/.twisty/cache/overpass/)")
 	cmd.PersistentFlags().StringVar(&loc.DataDir, "data-dir", "", "Base directory holding the overpass/ and valhalla/ data directories (default: ~/.twisty)")
@@ -67,7 +68,14 @@ func newUpdateCmdWith(run updateRunner) *cobra.Command {
 
 // runUpdate is the production updateRunner.
 func runUpdate(ctx context.Context, opts UpdateOptions, loc UpdateLocations, out io.Writer) error {
-	return runUpdateWith(ctx, productionUpdateDepsAt(loc), opts, out)
+	deps := productionUpdateDepsAt(loc)
+	if opts.Verbose {
+		start := time.Now()
+		deps.Logf = func(format string, args ...any) {
+			fmt.Fprintf(out, "[%8.3fs] %s\n", time.Since(start).Seconds(), fmt.Sprintf(format, args...))
+		}
+	}
+	return runUpdateWith(ctx, deps, opts, out)
 }
 
 // runUpdateWith runs the update with injected dependencies, writes the report
@@ -120,7 +128,8 @@ func dataRootFor(loc UpdateLocations) DataRoot {
 
 func productionUpdateDepsAt(loc UpdateLocations) UpdateDeps {
 	return UpdateDeps{
-		Upstream:         geofabrikUpstream{client: http.DefaultClient, progress: newDownloadProgress(os.Stderr)},
+		Upstream:         geofabrikUpstream{client: http.DefaultClient},
+		Progress:         newSequentialDownloadProgress(os.Stderr),
 		Runtime:          dockerRuntime{},
 		Root:             dataRootFor(loc),
 		Clock:            time.Now,
@@ -130,11 +139,10 @@ func productionUpdateDepsAt(loc UpdateLocations) UpdateDeps {
 }
 
 // geofabrikUpstream is the production UpstreamClient. baseURL defaults to
-// Geofabrik; progress (optional) reports download progress.
+// Geofabrik.
 type geofabrikUpstream struct {
-	client   *http.Client
-	baseURL  string
-	progress DownloadProgress
+	client  *http.Client
+	baseURL string
 }
 
 func (g geofabrikUpstream) url(region string) string {
@@ -145,16 +153,11 @@ func (g geofabrikUpstream) url(region string) string {
 	return geofabrikPBFURL(base, region)
 }
 
-func (g geofabrikUpstream) Download(ctx context.Context, region, destPath string) (UpstreamInfo, error) {
-	var fp FileDownloadProgress = NoopFileDownloadProgress{}
-	if g.progress != nil {
-		fp = g.progress.StartFile(destPath, 0, 1, -1)
-	}
+func (g geofabrikUpstream) Download(ctx context.Context, region, destPath string, fp FileDownloadProgress) (UpstreamInfo, error) {
 	h, err := fetchToFile(ctx, g.client, g.url(region), destPath, fp)
 	if err != nil {
 		return UpstreamInfo{}, err
 	}
-	fp.FileComplete()
 	lm, err := http.ParseTime(h.Get("Last-Modified"))
 	if err != nil {
 		// No usable header: the zero time makes the region count as changed

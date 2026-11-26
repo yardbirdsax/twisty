@@ -102,7 +102,7 @@ func newOverpassPaths(dir string) (overpassPaths, error) {
 // costs no downtime and loses nothing. Shared by the staged and in-place
 // refreshes.
 func (u *updateRun) prepareOverpassData(ctx context.Context, sr *ServiceReport) error {
-	if err := u.fetchRegions(ctx, ServiceOverpass, sr.changedRegions()); err != nil {
+	if err := u.fetchRegions(ctx, ServiceOverpass, sr.changedStatuses()); err != nil {
 		return atStage(stageDownload, err)
 	}
 	if err := u.convertOverpass(ctx, loadedRegions(u.deps.Root, ServiceOverpass)); err != nil {

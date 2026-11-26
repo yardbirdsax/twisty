@@ -1245,6 +1245,7 @@ func (f *termFileBar) BytesDownloaded(n int64) {
 	f.parent.mu.Lock()
 	defer f.parent.mu.Unlock()
 	f.parent.totalDownloaded += n
+	f.parent.fileDownloaded += n
 	if time.Since(f.parent.lastRender) >= 100*time.Millisecond {
 		f.parent.render()
 	}
@@ -1254,6 +1255,14 @@ func (f *termFileBar) FileComplete() {
 	f.parent.mu.Lock()
 	defer f.parent.mu.Unlock()
 	f.parent.completedFiles++
+	if f.parent.sequential {
+		// Keep the finished file on screen as its own line, so the bar that
+		// follows (or a failure) cannot make it look like more got done.
+		const mb = 1024 * 1024
+		fmt.Fprintf(f.parent.w, "\rDownloaded %s: %.1f MB | %d/%d files\n",
+			f.parent.fileName, float64(f.parent.fileDownloaded)/mb, f.parent.fileIndex+1, f.parent.totalFiles)
+		return
+	}
 	f.parent.render()
 }
 
@@ -1261,20 +1270,33 @@ var _ FileDownloadProgress = &termFileBar{}
 
 // termDownloadBar is an in-place terminal progress bar for PBF file downloads.
 // It implements DownloadProgress.
+//
+// With sequential set, files are fetched one at a time (as `update` does), so
+// the bar shows the file in flight: its name, its position among the files and
+// how far through its own size it is. Otherwise files download in parallel and
+// the bar shows the combined bytes and how many files are done.
 type termDownloadBar struct {
 	mu              sync.Mutex
 	w               io.Writer
+	sequential      bool
 	totalFiles      int
 	completedFiles  int
 	totalDownloaded int64
 	startTime       time.Time
 	lastRender      time.Time
+
+	// The file in flight (sequential mode).
+	fileName       string
+	fileIndex      int
+	fileBytes      int64 // its size, -1 when unknown
+	fileDownloaded int64
 }
 
 func (b *termDownloadBar) StartFile(name string, fileIndex int, totalFiles int, totalBytes int64) FileDownloadProgress {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.totalFiles = totalFiles
+	b.fileName, b.fileIndex, b.fileBytes, b.fileDownloaded = filepath.Base(name), fileIndex, totalBytes, 0
 	if b.startTime.IsZero() {
 		b.startTime = time.Now()
 	}
@@ -1290,8 +1312,19 @@ func (b *termDownloadBar) Done() {
 }
 
 func (b *termDownloadBar) render() {
-	downloadedMB := float64(b.totalDownloaded) / (1024 * 1024)
 	elapsed := time.Since(b.startTime)
+	if b.sequential {
+		const mb = 1024 * 1024
+		size := fmt.Sprintf("%.1f MB", float64(b.fileDownloaded)/mb)
+		if b.fileBytes > 0 {
+			size = fmt.Sprintf("%.1f / %.1f MB", float64(b.fileDownloaded)/mb, float64(b.fileBytes)/mb)
+		}
+		fmt.Fprintf(b.w, "\rDownloading %s: %s | %d/%d files | %s",
+			b.fileName, size, b.fileIndex+1, b.totalFiles, formatElapsed(elapsed))
+		b.lastRender = time.Now()
+		return
+	}
+	downloadedMB := float64(b.totalDownloaded) / (1024 * 1024)
 	fmt.Fprintf(b.w, "\rDownloading: %.1f MB | %d/%d files | %s",
 		downloadedMB, b.completedFiles, b.totalFiles, formatElapsed(elapsed))
 	b.lastRender = time.Now()
@@ -1338,22 +1371,34 @@ var _ FileDownloadProgress = &logFileBar{}
 
 // logDownloadProgress is a fallback DownloadProgress for non-terminal stderr that
 // prints a line every 10 MB per file.
+//
+// With sequential set, files are fetched one at a time (as `update` does), so
+// each start line says which file of how many this is and its size.
 type logDownloadProgress struct {
 	mu              sync.Mutex
 	w               io.Writer
+	sequential      bool
 	totalDownloaded int64
 	totalFiles      int
 	startTime       time.Time
 }
 
-func (p *logDownloadProgress) StartFile(name string, _ int, totalFiles int, totalBytes int64) FileDownloadProgress {
+func (p *logDownloadProgress) StartFile(name string, fileIndex int, totalFiles int, totalBytes int64) FileDownloadProgress {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.totalFiles = totalFiles
 	if p.startTime.IsZero() {
 		p.startTime = time.Now()
 	}
-	fmt.Fprintf(p.w, "Downloading %s\n", name)
+	if p.sequential {
+		size := ""
+		if totalBytes > 0 {
+			size = fmt.Sprintf(" (%.1f MB)", float64(totalBytes)/(1024*1024))
+		}
+		fmt.Fprintf(p.w, "Downloading %s [%d/%d]%s\n", name, fileIndex+1, totalFiles, size)
+	} else {
+		fmt.Fprintf(p.w, "Downloading %s\n", name)
+	}
 	return &logFileBar{parent: p, name: name, totalBytes: totalBytes}
 }
 
@@ -1374,6 +1419,15 @@ func newDownloadProgress(w *os.File) DownloadProgress {
 		return &termDownloadBar{w: w}
 	}
 	return &logDownloadProgress{w: w}
+}
+
+// newSequentialDownloadProgress is newDownloadProgress for files fetched one
+// after another: it reports the file in flight and its position in the batch.
+func newSequentialDownloadProgress(w *os.File) DownloadProgress {
+	if isTerminal(w) {
+		return &termDownloadBar{w: w, sequential: true}
+	}
+	return &logDownloadProgress{w: w, sequential: true}
 }
 
 // formatInt formats n with comma separators (e.g. 1,234,567).

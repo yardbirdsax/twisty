@@ -117,7 +117,7 @@ func TestBackfillUpstreamStamps_SeedsFromMtime_NoOverwrite(t *testing.T) {
 
 type fixedUpstream map[string]time.Time
 
-func (f fixedUpstream) Download(context.Context, string, string) (UpstreamInfo, error) {
+func (f fixedUpstream) Download(context.Context, string, string, FileDownloadProgress) (UpstreamInfo, error) {
 	return UpstreamInfo{}, errors.New("fixedUpstream: no downloads")
 }
 

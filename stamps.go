@@ -91,6 +91,8 @@ func writeServiceStamp(pbfDir string, svc Service, region string, lastModified t
 // parsable Last-Modified writes nothing, so the region counts as changed on the
 // next update.
 func recordUpstreamStampForDownload(destPath string, h http.Header) error {
+	// The file was just replaced, so any fetched marker describes the old one.
+	os.Remove(destPath + fetchedSuffix) //nolint:errcheck // best effort
 	lm, err := http.ParseTime(h.Get("Last-Modified"))
 	if err != nil {
 		// No usable header: drop any stale stamp for the replaced file.
@@ -100,6 +102,58 @@ func recordUpstreamStampForDownload(destPath string, h http.Header) error {
 		return nil
 	}
 	return os.WriteFile(destPath+".upstream", []byte(lm.UTC().Format(time.RFC3339)), 0o644)
+}
+
+// The fetched marker, "<pbf>.fetched", is a third and separate record: it says
+// the PBF on disk is a complete copy of one upstream version that `update`
+// downloaded, whether or not any service has been built from it. It exists so a
+// run interrupted after some downloads need not repeat them. It is deliberately
+// not a stamp: no service ever reads it as the version it holds, so it cannot
+// hide staleness of a service that has not been rebuilt (see readServiceStamp).
+
+const fetchedSuffix = ".fetched"
+
+func fetchedMarkerPath(pbfDir, region string) string {
+	return filepath.Join(pbfDir, pbfFilename(region)+fetchedSuffix)
+}
+
+// writeFetchedMarker records that the PBF for region is a complete download of
+// the upstream version lastModified, size bytes long.
+func writeFetchedMarker(pbfDir, region string, lastModified time.Time, size int64) error {
+	content := fmt.Sprintf("%s %d\n", lastModified.UTC().Format(time.RFC3339), size)
+	return os.WriteFile(fetchedMarkerPath(pbfDir, region), []byte(content), 0o644)
+}
+
+func removeFetchedMarker(pbfDir, region string) {
+	os.Remove(fetchedMarkerPath(pbfDir, region)) //nolint:errcheck // best effort
+}
+
+// pbfAlreadyFetched reports whether the PBF on disk for region is the complete
+// copy of the upstream version stamped upstream that an earlier run fetched: the marker
+// names that version and the file is exactly the size recorded when it finished
+// downloading. Anything else is not trusted.
+func pbfAlreadyFetched(pbfDir, region string, upstream time.Time) bool {
+	if upstream.IsZero() {
+		return false
+	}
+	b, err := os.ReadFile(fetchedMarkerPath(pbfDir, region))
+	if err != nil {
+		return false
+	}
+	var lm string
+	var size int64
+	if _, err := fmt.Sscanf(string(b), "%s %d", &lm, &size); err != nil {
+		return false
+	}
+	ts, err := time.Parse(time.RFC3339, lm)
+	if err != nil || !ts.Equal(upstream) {
+		return false
+	}
+	fi, err := os.Stat(filepath.Join(pbfDir, pbfFilename(region)))
+	if err != nil || !fi.Mode().IsRegular() || fi.Size() != size {
+		return false
+	}
+	return true
 }
 
 // BackfillUpstreamStamps is the one-off migration for installs that predate

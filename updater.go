@@ -22,11 +22,13 @@ type UpstreamInfo struct {
 type UpstreamClient interface {
 	// Head returns the Last-Modified and Content-Length of a region's extract.
 	Head(ctx context.Context, region string) (UpstreamInfo, error)
-	// Download fetches a region's current extract to destPath, atomically
-	// (nothing is left at destPath or beside it on error), and returns the
-	// upstream Last-Modified of the version it fetched. It does not write the
-	// upstream stamp; the updater does that once the refresh has succeeded.
-	Download(ctx context.Context, region, destPath string) (UpstreamInfo, error)
+	// Download fetches a region's current extract to destPath, reporting bytes
+	// to fp, and returns the upstream Last-Modified of the version it fetched.
+	// destPath is only ever replaced by a complete file. On error it keeps any
+	// partial download beside destPath so the next attempt can resume it. It
+	// does not write the upstream stamp; the updater does that once the
+	// refresh has succeeded.
+	Download(ctx context.Context, region, destPath string, fp FileDownloadProgress) (UpstreamInfo, error)
 }
 
 // DataRoot locates twisty's on-disk state. Tests point it at a temp directory.
@@ -56,7 +58,9 @@ func (r DataRoot) derivedCaches() []namedDir {
 
 // UpdateDeps bundles everything the updater touches outside itself.
 type UpdateDeps struct {
-	Upstream  UpstreamClient
+	Upstream UpstreamClient
+	// Progress reports region downloads (nil = silent).
+	Progress  DownloadProgress
 	Runtime   ContainerRuntime
 	Root      DataRoot
 	Clock     func() time.Time
@@ -84,6 +88,16 @@ type UpdateDeps struct {
 	// ConvertOverpass rebuilds merged.osm.bz2 from the region PBFs for the given
 	// regions (nil = the real incremental conversion).
 	ConvertOverpass func(ctx context.Context, regions []string) error
+
+	// Logf receives verbose progress lines (nil = silent).
+	Logf func(format string, args ...any)
+}
+
+// logf writes a verbose progress line if logging is enabled.
+func (d UpdateDeps) logf(format string, args ...any) {
+	if d.Logf != nil {
+		d.Logf(format, args...)
+	}
 }
 
 // overpassNames returns the live and staging Overpass container names.
@@ -115,6 +129,7 @@ type UpdateOptions struct {
 	Force   bool
 	DryRun  bool
 	InPlace bool
+	Verbose bool // log each step with timings to stderr
 }
 
 type Outcome string
@@ -161,6 +176,17 @@ func (sr ServiceReport) changedRegions() []string {
 	for _, r := range sr.Regions {
 		if r.Changed {
 			out = append(out, r.Region)
+		}
+	}
+	return out
+}
+
+// changedStatuses lists the statuses of the regions that need refreshing.
+func (sr ServiceReport) changedStatuses() []RegionStatus {
+	var out []RegionStatus
+	for _, r := range sr.Regions {
+		if r.Changed {
+			out = append(out, r)
 		}
 	}
 	return out
@@ -219,12 +245,15 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 
 	var rep UpdateReport
 	for _, svc := range services {
+		deps.logf("checking service %s", svc)
 		rep.Services = append(rep.Services, checkService(ctx, deps, opts, svc))
 	}
+	deps.logf("running disk preflight")
 	runPreflight(deps, opts, &rep)
+	deps.logf("preflight done")
 
 	if !opts.DryRun {
-		run := newUpdateRun(deps)
+		run := newUpdateRun(deps, rep.Services)
 		for i := range rep.Services {
 			sr := &rep.Services[i]
 			if sr.Outcome != OutcomeChanged {
@@ -239,6 +268,7 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 				sr.finish(run.refreshOverpassStaged(ctx, sr))
 			}
 		}
+		run.finishDownloads()
 		run.stampRefreshed(rep.Services)
 	}
 	return rep, nil
@@ -247,6 +277,7 @@ func Update(ctx context.Context, deps UpdateDeps, opts UpdateOptions) (UpdateRep
 func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc Service) ServiceReport {
 	sr := ServiceReport{Service: svc, Outcome: OutcomeUnchanged}
 	regions := loadedRegions(deps.Root, svc)
+	deps.logf("%s: loaded regions %v (from %s)", svc, regions, filepath.Join(serviceDir(deps.Root, svc), ".regions"))
 	if len(regions) == 0 {
 		sr.Detail = "no regions loaded"
 		return sr
@@ -254,7 +285,9 @@ func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc 
 	var failures []string
 	for _, region := range regions {
 		rs := RegionStatus{Region: region}
+		deps.logf("%s/%s: HEAD upstream", svc, region)
 		info, err := deps.Upstream.Head(ctx, region)
+		deps.logf("%s/%s: HEAD returned (err=%v)", svc, region, err)
 		if err != nil {
 			rs.Err = err
 			failures = append(failures, fmt.Sprintf("%s: %v", region, err))
@@ -278,7 +311,11 @@ func checkService(ctx context.Context, deps UpdateDeps, opts UpdateOptions, svc 
 		if rs.Changed {
 			sr.Outcome = OutcomeChanged
 		}
-		if ts, ok, err := deps.PBFDataTimestamp(filepath.Join(deps.Root.PBFDir, pbfFilename(region))); err == nil && ok {
+		pbfPath := filepath.Join(deps.Root.PBFDir, pbfFilename(region))
+		deps.logf("%s/%s: reading PBF header %s", svc, region, pbfPath)
+		ts, ok, err := deps.PBFDataTimestamp(pbfPath)
+		deps.logf("%s/%s: PBF header read (ok=%v err=%v)", svc, region, ok, err)
+		if err == nil && ok {
 			rs.DataAge, rs.HasDataAge = deps.Clock().Sub(ts), true
 		}
 		sr.Regions = append(sr.Regions, rs)
