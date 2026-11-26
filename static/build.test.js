@@ -1503,3 +1503,37 @@ test('routing status clears after a mix of failed and succeeded fetches', async 
   await settle();
   assert.equal(cleared, 1);
 });
+
+test('appending to a routed route fetches exactly one leg', async function() {
+  var h = failingFetchHarness(function() { return false; });
+  h.ctx.waypoints.push(PA, PB);
+  h.ctx.legs = [routedLeg(PA, PB)];
+  h.ctx.addWaypoint({ lat: PC[0], lng: PC[1] });
+  await settle();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].from.lat, PB[0]);
+  assert.equal(h.calls[0].to.lat, PC[0]);
+});
+
+test('clicking a second waypoint before the first leg returns routes both legs', async function() {
+  var h = routeLegFetchHarness();
+  var ctx = h.ctx;
+  ctx.addWaypoint({ lat: PA[0], lng: PA[1] });
+  ctx.addWaypoint({ lat: PB[0], lng: PB[1] });
+  ctx.addWaypoint({ lat: PC[0], lng: PC[1] });
+  assert.equal(h.calls.length, 1);
+  h.calls[0].resolve(); await settle();
+  assert.equal(h.calls.length, 2);
+  h.calls[1].resolve(); await settle();
+  assert.ok(ctx.legs[0] && ctx.legs[1]);
+});
+
+test('append routing failure keeps the waypoint, leaves a gap and toasts', async function() {
+  var h = failingFetchHarness(function() { return true; });
+  h.ctx.waypoints.push(PA);
+  h.ctx.addWaypoint({ lat: PB[0], lng: PB[1] });
+  await settle();
+  assert.equal(h.ctx.waypoints.length, 2);
+  assert.equal(h.ctx.legs[0], null);
+  assert.equal(h.toasts.length, 1);
+});
