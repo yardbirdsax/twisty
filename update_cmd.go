@@ -129,7 +129,7 @@ func dataRootFor(loc UpdateLocations) DataRoot {
 func productionUpdateDepsAt(loc UpdateLocations) UpdateDeps {
 	return UpdateDeps{
 		Upstream:         geofabrikUpstream{client: http.DefaultClient},
-		Progress:         newSequentialDownloadProgress(os.Stderr),
+		Progress:         newDownloadProgress(os.Stderr),
 		Runtime:          dockerRuntime{},
 		Root:             dataRootFor(loc),
 		Clock:            time.Now,

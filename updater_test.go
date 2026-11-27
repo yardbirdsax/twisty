@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,6 +14,8 @@ import (
 // ─── fakes ───────────────────────────────────────────────────────────────────
 
 type fakeUpstream struct {
+	// mu guards downloads: regions download concurrently.
+	mu    sync.Mutex
 	info  map[string]UpstreamInfo
 	err   map[string]error
 	heads []string
@@ -21,10 +24,21 @@ type fakeUpstream struct {
 	// downloadErr makes a region's download fail.
 	downloads   []string
 	downloadErr map[string]error
+	// onDownload, if set, runs inside Download after the call is recorded, so a
+	// test can hold downloads in flight or cancel them. A non-nil error fails
+	// the download.
+	onDownload func(ctx context.Context, region, destPath string) error
 }
 
-func (f *fakeUpstream) Download(_ context.Context, region, destPath string, fp FileDownloadProgress) (UpstreamInfo, error) {
+func (f *fakeUpstream) Download(ctx context.Context, region, destPath string, fp FileDownloadProgress) (UpstreamInfo, error) {
+	f.mu.Lock()
 	f.downloads = append(f.downloads, region)
+	f.mu.Unlock()
+	if f.onDownload != nil {
+		if err := f.onDownload(ctx, region, destPath); err != nil {
+			return UpstreamInfo{}, err
+		}
+	}
 	if err := f.downloadErr[region]; err != nil {
 		return UpstreamInfo{}, err
 	}

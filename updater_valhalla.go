@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -104,22 +105,31 @@ func (u *updateRun) finishDownloads() {
 }
 
 // fetchRegions downloads each region's current extract into the shared PBF
-// directory, skipping regions already fetched this run, and notes which fetched
-// versions svc will build from. A region whose PBF an interrupted earlier run
-// already fetched at the current upstream version is not downloaded again, but
-// still counts as fetched so svc is rebuilt from it. Stamps are NOT written
-// here: they are written only after svc's refresh succeeded, so a failed
-// refresh is retried next time.
+// directory, all at the same time, skipping regions already fetched this run,
+// and notes which fetched versions svc will build from. A region whose PBF an
+// interrupted earlier run already fetched at the current upstream version is
+// not downloaded again, but still counts as fetched so svc is rebuilt from it.
+// The first failed download cancels the rest and is returned naming its region.
+// Stamps are NOT written here: they are written only after svc's refresh
+// succeeded, so a failed refresh is retried next time.
 func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []RegionStatus) error {
 	if err := os.MkdirAll(u.deps.Root.PBFDir, 0o755); err != nil {
 		return err
 	}
+	pbfDir := u.deps.Root.PBFDir
+
+	// Decide what to download before starting anything: skips and progress
+	// registration touch run state, which the downloads then leave alone.
+	type fetch struct {
+		region, dest string
+		fp           FileDownloadProgress
+	}
+	var todo []fetch
 	for _, rs := range regions {
 		region := rs.Region
 		if _, done := u.fetched[region]; done {
 			continue
 		}
-		pbfDir := u.deps.Root.PBFDir
 		// A forced refresh downloads regardless.
 		if rs.Reason != "forced" && pbfAlreadyFetched(pbfDir, region, rs.Upstream) {
 			u.deps.logf("%s/%s: already fetched at current upstream version, skipping download", svc, region)
@@ -130,18 +140,48 @@ func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []Reg
 		dest := filepath.Join(pbfDir, pbfFilename(region))
 		// The file is about to be replaced; its old marker no longer describes it.
 		removeFetchedMarker(pbfDir, region)
-		fp := u.startDownload(region, dest)
-		info, err := u.deps.Upstream.Download(ctx, region, dest, fp)
-		if err != nil {
-			return fmt.Errorf("%s: %w", region, err)
+		todo = append(todo, fetch{region: region, dest: dest, fp: u.startDownload(region, dest)})
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex // guards u.fetched and firstErr
+		firstErr error
+	)
+	fail := func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
 		}
-		fp.FileComplete()
-		u.fetched[region] = info
-		if fi, err := os.Stat(dest); err == nil && !info.LastModified.IsZero() {
-			if err := writeFetchedMarker(pbfDir, region, info.LastModified, fi.Size()); err != nil {
-				return fmt.Errorf("%s: recording fetched version: %w", region, err)
+	}
+	for _, f := range todo {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			info, err := u.deps.Upstream.Download(ctx, f.region, f.dest, f.fp)
+			if err != nil {
+				fail(fmt.Errorf("%s: %w", f.region, err))
+				return
 			}
-		}
+			f.fp.FileComplete()
+			if fi, err := os.Stat(f.dest); err == nil && !info.LastModified.IsZero() {
+				if err := writeFetchedMarker(pbfDir, f.region, info.LastModified, fi.Size()); err != nil {
+					fail(fmt.Errorf("%s: recording fetched version: %w", f.region, err))
+					return
+				}
+			}
+			mu.Lock()
+			u.fetched[f.region] = info
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
 	}
 	// svc builds from every PBF on disk it loads, including ones an earlier
 	// service fetched this run.

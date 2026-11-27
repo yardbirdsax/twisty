@@ -1510,15 +1510,6 @@ func newDownloadProgress(w *os.File) DownloadProgress {
 	return &logDownloadProgress{w: w}
 }
 
-// newSequentialDownloadProgress is newDownloadProgress for files fetched one
-// after another: it reports the file in flight and its position in the batch.
-func newSequentialDownloadProgress(w *os.File) DownloadProgress {
-	if isTerminal(w) {
-		return &termDownloadBar{w: w, sequential: true}
-	}
-	return &logDownloadProgress{w: w, sequential: true}
-}
-
 // formatInt formats n with comma separators (e.g. 1,234,567).
 func formatInt(n int) string {
 	s := strconv.Itoa(n)
