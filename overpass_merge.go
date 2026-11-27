@@ -6,9 +6,39 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/yardbirdsax/twisty/osmconv"
 )
+
+// convertWorkers is how many stale regions convert at the same time.
+var convertWorkers = 3
+
+// convertRegionToCache converts one region; a variable so tests can observe
+// how the pool schedules regions.
+var convertRegionToCache = convertSingleRegionToCache
+
+// regionConvertProgress is a ConvertProgress that can hand out an independent
+// handle per region, so regions converting at once do not clobber each other.
+type regionConvertProgress interface {
+	osmconv.ConvertProgress
+	StartRegion(name string, size int64) osmconv.ConvertProgress
+}
+
+// regionProgressFor returns the progress a single region's conversion reports
+// to. Plain progress reporters are not safe to share between concurrent
+// regions, so they get no per-region reporting.
+func regionProgressFor(progress osmconv.ConvertProgress, region, pbfPath string) osmconv.ConvertProgress {
+	rp, ok := progress.(regionConvertProgress)
+	if !ok {
+		return osmconv.NoopConvertProgress{}
+	}
+	var size int64
+	if info, err := os.Stat(pbfPath); err == nil {
+		size = info.Size()
+	}
+	return rp.StartRegion(region, size)
+}
 
 // convertRegionsIncremental checks per-region cache validity, converts only
 // stale regions, and merges all cached regions through the parallel BZ2 writer
@@ -23,8 +53,20 @@ func convertRegionsIncremental(allRegions []string, dataDir, pbfDir string, prog
 		return fmt.Errorf("creating cache dir: %w", err)
 	}
 
-	// Convert stale regions.
+	// Convert stale regions through a bounded pool: each region's PBF decode
+	// buffers are large, so the pool size caps memory as well as CPU.
 	total := len(allRegions)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+		sem      = make(chan struct{}, max(convertWorkers, 1))
+	)
+	failed := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return firstErr != nil
+	}
 	for i, region := range allRegions {
 		pbfPath := filepath.Join(pbfDir, pbfFilename(region))
 		cachePath := filepath.Join(cacheDir, cacheFilename(region))
@@ -32,12 +74,34 @@ func convertRegionsIncremental(allRegions []string, dataDir, pbfDir string, prog
 
 		if isCacheValid(pbfPath, cachePath, metaPath) {
 			fmt.Fprintf(stderr, "Region %d/%d: %s (cached)\n", i+1, total, region)
-		} else {
-			fmt.Fprintf(stderr, "Region %d/%d: %s (converting...)\n", i+1, total, region)
-			if err := convertSingleRegionToCache(pbfPath, cachePath, metaPath, progress); err != nil {
-				return fmt.Errorf("converting region %s: %w", region, err)
-			}
+			continue
 		}
+		sem <- struct{}{}
+		if failed() {
+			<-sem
+			break
+		}
+		fmt.Fprintf(stderr, "Region %d/%d: %s (converting...)\n", i+1, total, region)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			rp := regionProgressFor(progress, region, pbfPath)
+			// Convert reports Done only on success; a failed region must
+			// still leave the display.
+			defer rp.Done()
+			if err := convertRegionToCache(pbfPath, cachePath, metaPath, rp); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("converting region %s: %w", region, err)
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return firstErr
 	}
 
 	// Clean up orphan cache files.

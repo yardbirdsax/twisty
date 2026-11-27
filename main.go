@@ -1128,6 +1128,78 @@ type termConvertBar struct {
 	startTime   time.Time
 	lastRender  time.Time
 	currentFile int
+
+	// regions are the per-region conversions in flight, in start order. While
+	// any exist the bar shows them instead of the file-list view.
+	regions []*termRegionBar
+}
+
+// termRegionBar is the handle for one region converting alongside others.
+type termRegionBar struct {
+	parent *termConvertBar
+	name   string
+	size   int64
+	read   int64
+}
+
+func (r *termRegionBar) SetFiles([]string, []int64) {}
+
+func (r *termRegionBar) BytesRead(_ int, n int64) {
+	b := r.parent
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r.read += n
+	if time.Since(b.lastRender) >= 100*time.Millisecond {
+		b.render()
+	}
+}
+
+func (r *termRegionBar) ObjectsWritten(n int) {
+	r.parent.mu.Lock()
+	defer r.parent.mu.Unlock()
+	r.parent.objectCount += n
+}
+
+// Done drops the region from the display. The overall summary is not printed:
+// other regions are still converting.
+func (r *termRegionBar) Done() {
+	b := r.parent
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for i, x := range b.regions {
+		if x == r {
+			b.regions = append(b.regions[:i], b.regions[i+1:]...)
+			break
+		}
+	}
+}
+
+// StartRegion registers a region that converts concurrently with others.
+func (b *termConvertBar) StartRegion(name string, size int64) osmconv.ConvertProgress {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.startTime.IsZero() {
+		b.startTime = time.Now()
+	}
+	r := &termRegionBar{parent: b, name: name, size: size}
+	b.regions = append(b.regions, r)
+	return r
+}
+
+// renderRegions draws one line with each converting region and its percentage.
+func (b *termConvertBar) renderRegions() {
+	parts := make([]string, len(b.regions))
+	for i, r := range b.regions {
+		pct := 0
+		if r.size > 0 {
+			pct = int(min(r.read*100/r.size, 100))
+		}
+		parts[i] = fmt.Sprintf("%s %d%%", r.name, pct)
+	}
+	fmt.Fprintf(b.w, "\rConverting %d %s: %s | %s objects | %s",
+		len(b.regions), plural(len(b.regions), "region", "regions"), strings.Join(parts, ", "),
+		formatInt(b.objectCount), formatElapsed(time.Since(b.startTime)))
+	b.lastRender = time.Now()
 }
 
 func (b *termConvertBar) SetFiles(names []string, sizes []int64) {
@@ -1171,6 +1243,10 @@ func (b *termConvertBar) Done() {
 }
 
 func (b *termConvertBar) render() {
+	if len(b.regions) > 0 {
+		b.renderRegions()
+		return
+	}
 	const width = 30
 	var pct int
 	if b.totalSize > 0 {
@@ -1207,6 +1283,19 @@ type logConvertProgress struct {
 	objectCount int
 	lastReport  int
 }
+
+// StartRegion returns a handle whose objects count toward the shared total;
+// regions converting at once share one line of output.
+func (p *logConvertProgress) StartRegion(string, int64) osmconv.ConvertProgress {
+	return logRegionProgress{p}
+}
+
+type logRegionProgress struct{ parent *logConvertProgress }
+
+func (logRegionProgress) SetFiles([]string, []int64) {}
+func (logRegionProgress) BytesRead(int, int64)       {}
+func (r logRegionProgress) ObjectsWritten(n int)     { r.parent.ObjectsWritten(n) }
+func (logRegionProgress) Done()                      {}
 
 func (p *logConvertProgress) SetFiles([]string, []int64) {}
 func (p *logConvertProgress) BytesRead(int, int64)       {}
