@@ -88,6 +88,10 @@ type UpdateDeps struct {
 	// ConvertOverpass rebuilds merged.osm.bz2 from the region PBFs for the given
 	// regions (nil = the real incremental conversion).
 	ConvertOverpass func(ctx context.Context, regions []string) error
+	// ConvertOverpassRegion converts one region's PBF into its cache as soon as
+	// that region has downloaded, ahead of the merge (nil = the real
+	// conversion).
+	ConvertOverpassRegion func(ctx context.Context, region string) error
 
 	// Logf receives verbose progress lines (nil = silent).
 	Logf func(format string, args ...any)

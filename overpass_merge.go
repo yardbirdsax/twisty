@@ -40,6 +40,14 @@ func regionProgressFor(progress osmconv.ConvertProgress, region, pbfPath string)
 	return rp.StartRegion(region, size)
 }
 
+// regionCachePaths returns the PBF a region converts from and the cache and
+// metadata files it converts to.
+func regionCachePaths(dataDir, pbfDir, region string) (pbfPath, cachePath, metaPath string) {
+	pbfPath = filepath.Join(pbfDir, pbfFilename(region))
+	cachePath = filepath.Join(dataDir, "cache", cacheFilename(region))
+	return pbfPath, cachePath, cachePath + ".meta.json"
+}
+
 // convertRegionsIncremental checks per-region cache validity, converts only
 // stale regions, and merges all cached regions through the parallel BZ2 writer
 // into the final merged.osm.bz2.
@@ -68,9 +76,7 @@ func convertRegionsIncremental(allRegions []string, dataDir, pbfDir string, prog
 		return firstErr != nil
 	}
 	for i, region := range allRegions {
-		pbfPath := filepath.Join(pbfDir, pbfFilename(region))
-		cachePath := filepath.Join(cacheDir, cacheFilename(region))
-		metaPath := cachePath + ".meta.json"
+		pbfPath, cachePath, metaPath := regionCachePaths(dataDir, pbfDir, region)
 
 		if isCacheValid(pbfPath, cachePath, metaPath) {
 			fmt.Fprintf(stderr, "Region %d/%d: %s (cached)\n", i+1, total, region)

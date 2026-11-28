@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
+
+	"github.com/yardbirdsax/twisty/osmconv"
 )
 
 const defaultOverpassReadyTimeout = 30 * time.Minute
@@ -63,4 +66,26 @@ func (u *updateRun) convertOverpass(ctx context.Context, regions []string) error
 	}
 	root := u.deps.Root
 	return convertRegionsIncremental(regions, root.OverpassDir, root.PBFDir, newConvertProgress(os.Stderr), os.Stderr)
+}
+
+// convertRegion converts one downloaded region into its cache ahead of the
+// merge, unless the cache is already valid. When the whole conversion is
+// stubbed, that stub owns conversion and nothing happens here.
+func (u *updateRun) convertRegion(ctx context.Context, region string) error {
+	if f := u.deps.ConvertOverpassRegion; f != nil {
+		return f(ctx, region)
+	}
+	if u.deps.ConvertOverpass != nil {
+		return nil
+	}
+	root := u.deps.Root
+	pbfPath, cachePath, metaPath := regionCachePaths(root.OverpassDir, root.PBFDir, region)
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		return err
+	}
+	if isCacheValid(pbfPath, cachePath, metaPath) {
+		return nil
+	}
+	// No per-region bar: it would overwrite the download bar still on screen.
+	return convertRegionToCache(pbfPath, cachePath, metaPath, osmconv.NoopConvertProgress{})
 }

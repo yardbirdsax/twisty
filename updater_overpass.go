@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -101,10 +104,46 @@ func newOverpassPaths(dir string) (overpassPaths, error) {
 // the merged archive, both while the old database still serves, so a failure
 // costs no downtime and loses nothing. Shared by the staged and in-place
 // refreshes.
+//
+// Each region converts as soon as its own download finishes, so network and CPU
+// work overlap; the merge starts only once every region is converted. The first
+// failure of either stage stops the pipeline and is returned with its stage and
+// region.
 func (u *updateRun) prepareOverpassData(ctx context.Context, sr *ServiceReport) error {
-	if err := u.fetchRegions(ctx, ServiceOverpass, sr.changedStatuses()); err != nil {
-		return atStage(stageDownload, err)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+
+	fetched := make(chan string)
+	var fetching sync.WaitGroup
+	fetching.Go(func() {
+		if err := u.fetchRegions(ctx, ServiceOverpass, sr.changedStatuses(), fetched, cancel); err != nil {
+			cancel(err) // a no-op when fetchRegions already cancelled with it
+		}
+	})
+
+	// Converting must keep draining fetched until it closes, so no download is
+	// left blocked on a send; once the pipeline has stopped it does no work.
+	var converting errgroup.Group
+	converting.SetLimit(max(convertWorkers, 1))
+	for region := range fetched {
+		converting.Go(func() error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			err := u.convertRegion(ctx, region)
+			if err != nil {
+				err = atStage(stageConvert, fmt.Errorf("converting region %s: %w", region, err))
+				cancel(err)
+			}
+			return err
+		})
 	}
+	_ = converting.Wait()
+	fetching.Wait()
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+
 	if err := u.convertOverpass(ctx, loadedRegions(u.deps.Root, ServiceOverpass)); err != nil {
 		return atStage(stageConvert, err)
 	}

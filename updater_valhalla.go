@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const defaultReadyTimeout = 5 * time.Minute
@@ -109,12 +111,29 @@ func (u *updateRun) finishDownloads() {
 // and notes which fetched versions svc will build from. A region whose PBF an
 // interrupted earlier run already fetched at the current upstream version is
 // not downloaded again, but still counts as fetched so svc is rebuilt from it.
-// The first failed download cancels the rest and is returned naming its region.
+//
+// If out is non-nil, each region is sent on it once its PBF is complete (or was
+// already), and out is closed when every download has finished. cancel, if
+// non-nil, is called with the first failure so the caller's other stages stop
+// too. Errors are returned at stageDownload, and the first one cancels the
+// remaining downloads.
+//
 // Stamps are NOT written here: they are written only after svc's refresh
 // succeeded, so a failed refresh is retried next time.
-func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []RegionStatus) error {
-	if err := os.MkdirAll(u.deps.Root.PBFDir, 0o755); err != nil {
+func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []RegionStatus, out chan<- string, cancel context.CancelCauseFunc) error {
+	if out != nil {
+		defer close(out)
+	}
+	// fail tags err as a download failure and stops the caller's other stages.
+	fail := func(err error) error {
+		err = atStage(stageDownload, err)
+		if cancel != nil {
+			cancel(err)
+		}
 		return err
+	}
+	if err := os.MkdirAll(u.deps.Root.PBFDir, 0o755); err != nil {
+		return fail(err)
 	}
 	pbfDir := u.deps.Root.PBFDir
 
@@ -124,10 +143,14 @@ func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []Reg
 		region, dest string
 		fp           FileDownloadProgress
 	}
-	var todo []fetch
+	var (
+		todo  []fetch
+		ready []string // already on disk at the current version
+	)
 	for _, rs := range regions {
 		region := rs.Region
 		if _, done := u.fetched[region]; done {
+			ready = append(ready, region)
 			continue
 		}
 		// A forced refresh downloads regardless.
@@ -135,6 +158,7 @@ func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []Reg
 			u.deps.logf("%s/%s: already fetched at current upstream version, skipping download", svc, region)
 			u.dropFromPlan(region)
 			u.fetched[region] = UpstreamInfo{LastModified: rs.Upstream}
+			ready = append(ready, region)
 			continue
 		}
 		dest := filepath.Join(pbfDir, pbfFilename(region))
@@ -143,45 +167,34 @@ func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []Reg
 		todo = append(todo, fetch{region: region, dest: dest, fp: u.startDownload(region, dest)})
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex // guards u.fetched and firstErr
-		firstErr error
-	)
-	fail := func(err error) {
-		mu.Lock()
-		defer mu.Unlock()
-		if firstErr == nil {
-			firstErr = err
-			cancel()
+	dl, ctx := errgroup.WithContext(ctx)
+	// send hands a finished region to the next stage, giving up if the
+	// pipeline stopped, so a failure elsewhere cannot strand a sender.
+	send := func(region string) error {
+		if out == nil {
+			return nil
+		}
+		select {
+		case out <- region:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
-	for _, f := range todo {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			info, err := u.deps.Upstream.Download(ctx, f.region, f.dest, f.fp)
-			if err != nil {
-				fail(fmt.Errorf("%s: %w", f.region, err))
-				return
-			}
-			f.fp.FileComplete()
-			if fi, err := os.Stat(f.dest); err == nil && !info.LastModified.IsZero() {
-				if err := writeFetchedMarker(pbfDir, f.region, info.LastModified, fi.Size()); err != nil {
-					fail(fmt.Errorf("%s: recording fetched version: %w", f.region, err))
-					return
-				}
-			}
-			mu.Lock()
-			u.fetched[f.region] = info
-			mu.Unlock()
-		}()
+	var mu sync.Mutex // guards u.fetched
+	for _, region := range ready {
+		dl.Go(func() error { return send(region) })
 	}
-	wg.Wait()
-	if firstErr != nil {
-		return firstErr
+	for _, f := range todo {
+		dl.Go(func() error {
+			if err := u.downloadRegion(ctx, f.region, f.dest, f.fp, &mu); err != nil {
+				return fail(err)
+			}
+			return send(f.region)
+		})
+	}
+	if err := dl.Wait(); err != nil {
+		return err
 	}
 	// svc builds from every PBF on disk it loads, including ones an earlier
 	// service fetched this run.
@@ -192,6 +205,26 @@ func (u *updateRun) fetchRegions(ctx context.Context, svc Service, regions []Reg
 		}
 	}
 	u.held[svc] = held
+	return nil
+}
+
+// downloadRegion fetches one region to dest and records its fetched version.
+// mu guards u.fetched, which other downloads write at the same time.
+func (u *updateRun) downloadRegion(ctx context.Context, region, dest string, fp FileDownloadProgress, mu *sync.Mutex) error {
+	info, err := u.deps.Upstream.Download(ctx, region, dest, fp)
+	if err != nil {
+		return fmt.Errorf("%s: %w", region, err)
+	}
+	fp.FileComplete()
+	pbfDir := u.deps.Root.PBFDir
+	if fi, err := os.Stat(dest); err == nil && !info.LastModified.IsZero() {
+		if err := writeFetchedMarker(pbfDir, region, info.LastModified, fi.Size()); err != nil {
+			return fmt.Errorf("%s: recording fetched version: %w", region, err)
+		}
+	}
+	mu.Lock()
+	u.fetched[region] = info
+	mu.Unlock()
 	return nil
 }
 
@@ -223,29 +256,31 @@ func (u *updateRun) stampService(svc Service) error {
 	return nil
 }
 
-// Stages of a service update, as named in failure details.
+// stageName is a stage of a service update, as named in failure details.
+type stageName string
+
 const (
-	stageDownload = "download"
-	stageConvert  = "convert"
-	stageBuild    = "build"
-	stageImport   = "import"
-	stageSwap     = "swap"
-	stageProbe    = "probe"
-	stageCleanup  = "cleanup"
-	stageCache    = "cache"
-	stageStamp    = "stamp"
+	stageDownload stageName = "download"
+	stageConvert  stageName = "convert"
+	stageBuild    stageName = "build"
+	stageImport   stageName = "import"
+	stageSwap     stageName = "swap"
+	stageProbe    stageName = "probe"
+	stageCleanup  stageName = "cleanup"
+	stageCache    stageName = "cache"
+	stageStamp    stageName = "stamp"
 )
 
 // stageError names the stage of a service update that failed.
 type stageError struct {
-	stage string
+	stage stageName
 	err   error
 }
 
-func (e *stageError) Error() string { return "stage " + e.stage + ": " + e.err.Error() }
+func (e *stageError) Error() string { return "stage " + string(e.stage) + ": " + e.err.Error() }
 func (e *stageError) Unwrap() error { return e.err }
 
-func atStage(stage string, err error) error {
+func atStage(stage stageName, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -263,8 +298,8 @@ func (u *updateRun) refreshValhalla(ctx context.Context, sr *ServiceReport) (str
 	deps := u.deps
 	dir := deps.Root.ValhallaDir
 
-	if err := u.fetchRegions(ctx, ServiceValhalla, sr.changedStatuses()); err != nil {
-		return "", atStage(stageDownload, err)
+	if err := u.fetchRegions(ctx, ServiceValhalla, sr.changedStatuses(), nil, nil); err != nil {
+		return "", err
 	}
 
 	// Build into staging while the old container keeps serving.
