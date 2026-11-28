@@ -277,6 +277,23 @@ func TestValhallaDockerBuildArgs_UsesMergedPBFForMultipleRegions(t *testing.T) {
 	}
 }
 
+// valhalla_build_timezones writes the SQLite database to stdout; without a
+// redirect it ends up on the user's terminal.
+func TestValhallaBuildSpec_TimezoneDBRedirectedToFile(t *testing.T) {
+	spec := valhallaBuildSpec(t.TempDir(), []string{"/tmp/a.osm.pbf"}, []string{"a.osm.pbf"})
+	if len(spec.Command) != 3 || spec.Command[0] != "bash" {
+		t.Fatalf("expected bash -c <script>, got %v", spec.Command)
+	}
+	script := spec.Command[2]
+
+	if !strings.Contains(script, "valhalla_build_timezones /custom_files/valhalla.json > /custom_files/timezones.sqlite") {
+		t.Errorf("expected valhalla_build_timezones stdout redirected to /custom_files/timezones.sqlite, got: %s", script)
+	}
+	if !strings.Contains(script, "--mjolnir-timezone /custom_files/timezones.sqlite") {
+		t.Errorf("expected valhalla_build_config to point at /custom_files/timezones.sqlite, got: %s", script)
+	}
+}
+
 func TestStampRegions_WritesFile(t *testing.T) {
 	dir := t.TempDir()
 	stampFile := filepath.Join(dir, ".regions")

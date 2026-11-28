@@ -517,8 +517,8 @@ func valhallaBuildSpec(absTilesDir string, absPBFPaths, pbfFilenames []string) C
 	}
 	pbfArgs := strings.Join(pbfContainerPaths, " ")
 	bashCmd := fmt.Sprintf(
-		"valhalla_build_config --mjolnir-tile-dir /custom_files/tiles --mjolnir-timezone /usr/share/zoneinfo/UTC --mjolnir-admin /custom_files/admins.sqlite > /custom_files/valhalla.json && "+
-			"valhalla_build_timezones /custom_files/valhalla.json && "+
+		"valhalla_build_config --mjolnir-tile-dir /custom_files/tiles --mjolnir-timezone /custom_files/timezones.sqlite --mjolnir-admin /custom_files/admins.sqlite > /custom_files/valhalla.json && "+
+			"valhalla_build_timezones /custom_files/valhalla.json > /custom_files/timezones.sqlite && "+
 			"valhalla_build_admins --config /custom_files/valhalla.json %s && "+
 			"valhalla_build_tiles -c /custom_files/valhalla.json %s",
 		pbfArgs, pbfArgs,
