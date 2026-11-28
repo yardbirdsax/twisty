@@ -167,11 +167,29 @@ type RegionStatus struct {
 	Err           error
 }
 
+// StageTiming is the wall-clock time one stage of a refresh took, including a
+// stage that failed.
+type StageTiming struct {
+	Stage    stageName
+	Duration time.Duration
+}
+
 type ServiceReport struct {
 	Service Service
 	Outcome Outcome
 	Detail  string
 	Regions []RegionStatus
+	// Timings lists the stages that ran, in the order they finished. Stages
+	// that were skipped (an unchanged service, a dry run) are absent.
+	Timings []StageTiming
+}
+
+// timed runs f and records how long it took as stage, whether or not it fails.
+func (sr *ServiceReport) timed(stage stageName, f func() error) error {
+	start := time.Now()
+	err := f()
+	sr.Timings = append(sr.Timings, StageTiming{stage, time.Since(start)})
+	return err
 }
 
 // changedRegions lists the regions of this service that need refreshing.

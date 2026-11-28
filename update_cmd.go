@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -215,6 +216,9 @@ func renderUpdateReport(w io.Writer, rep UpdateReport, opts UpdateOptions) {
 			fmt.Fprintf(w, " (%s)", s.Detail)
 		}
 		fmt.Fprintln(w)
+		if len(s.Timings) > 0 {
+			fmt.Fprintf(w, "  timings: %s\n", formatTimings(s.Timings))
+		}
 		for _, r := range s.Regions {
 			verdict := "unchanged"
 			if r.Changed {
@@ -243,6 +247,22 @@ func renderUpdateReport(w io.Writer, rep UpdateReport, opts UpdateOptions) {
 	case !anyChanged && !anyUpdated && !rep.Failed():
 		fmt.Fprintln(w, "Nothing to update.")
 	}
+}
+
+// formatTimings renders stage timings as e.g. "download 1.5s, build 1m30s".
+func formatTimings(ts []StageTiming) string {
+	parts := make([]string, len(ts))
+	for i, t := range ts {
+		d := t.Duration.Round(time.Millisecond)
+		switch {
+		case d >= time.Minute:
+			d = t.Duration.Round(time.Second)
+		case d >= time.Second:
+			d = t.Duration.Round(100 * time.Millisecond)
+		}
+		parts[i] = fmt.Sprintf("%s %s", t.Stage, d)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // formatAge renders a duration as e.g. "1d12h" or "5h".

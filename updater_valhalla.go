@@ -262,6 +262,7 @@ type stageName string
 const (
 	stageDownload stageName = "download"
 	stageConvert  stageName = "convert"
+	stageMerge    stageName = "merge"
 	stageBuild    stageName = "build"
 	stageImport   stageName = "import"
 	stageSwap     stageName = "swap"
@@ -298,7 +299,10 @@ func (u *updateRun) refreshValhalla(ctx context.Context, sr *ServiceReport) (str
 	deps := u.deps
 	dir := deps.Root.ValhallaDir
 
-	if err := u.fetchRegions(ctx, ServiceValhalla, sr.changedStatuses(), nil, nil); err != nil {
+	err := sr.timed(stageDownload, func() error {
+		return u.fetchRegions(ctx, ServiceValhalla, sr.changedStatuses(), nil, nil)
+	})
+	if err != nil {
 		return "", err
 	}
 
@@ -320,7 +324,7 @@ func (u *updateRun) refreshValhalla(ctx context.Context, sr *ServiceReport) (str
 			return u.waitReady(ctx, valhallaStatusURL(port), defaultReadyTimeout)
 		},
 	}
-	if err := u.buildValhallaTiles(ctx, loadedRegions(deps.Root, ServiceValhalla), d.staging); err != nil {
+	if err := u.buildValhallaTiles(ctx, sr, loadedRegions(deps.Root, ServiceValhalla), d.staging); err != nil {
 		os.RemoveAll(d.staging)
 		return "", atStage(stageBuild, err)
 	}
@@ -346,7 +350,7 @@ func (u *updateRun) refreshValhalla(ctx context.Context, sr *ServiceReport) (str
 // buildValhallaTiles builds tiles for all regions into staging (merging their
 // PBFs first when there are several: Valhalla corrupts tiles built from
 // multiple extracts directly). staging is created fresh.
-func (u *updateRun) buildValhallaTiles(ctx context.Context, regions []string, staging string) error {
+func (u *updateRun) buildValhallaTiles(ctx context.Context, sr *ServiceReport, regions []string, staging string) error {
 	rt := u.deps.Runtime
 	if err := os.RemoveAll(staging); err != nil {
 		return err
@@ -372,7 +376,8 @@ func (u *updateRun) buildValhallaTiles(ctx context.Context, regions []string, st
 		if err != nil {
 			return err
 		}
-		if err := rt.RunToCompletion(ctx, osmiumMergeSpec(merged, paths)); err != nil {
+		err = sr.timed(stageMerge, func() error { return rt.RunToCompletion(ctx, osmiumMergeSpec(merged, paths)) })
+		if err != nil {
 			return fmt.Errorf("merging PBFs: %w", err)
 		}
 		if fi, err := os.Stat(merged); err != nil || fi.Size() == 0 {
@@ -380,11 +385,13 @@ func (u *updateRun) buildValhallaTiles(ctx context.Context, regions []string, st
 		}
 		paths, names = []string{merged}, []string{"merged.osm.pbf"}
 	}
-	if err := rt.RunToCompletion(ctx, valhallaBuildSpec(absStaging, paths, names)); err != nil {
-		return fmt.Errorf("building tiles: %w", err)
-	}
-	if ok, problem := tilesComplete(staging); !ok {
-		return fmt.Errorf("build produced incomplete tiles (%s)", problem)
-	}
-	return nil
+	return sr.timed(stageBuild, func() error {
+		if err := rt.RunToCompletion(ctx, valhallaBuildSpec(absStaging, paths, names)); err != nil {
+			return fmt.Errorf("building tiles: %w", err)
+		}
+		if ok, problem := tilesComplete(staging); !ok {
+			return fmt.Errorf("build produced incomplete tiles (%s)", problem)
+		}
+		return nil
+	})
 }

@@ -20,7 +20,6 @@ const defaultOverpassReadyTimeout = 30 * time.Minute
 // carries warnings about cleanup that failed after the new data went live.
 func (u *updateRun) refreshOverpassInPlace(ctx context.Context, sr *ServiceReport) (string, error) {
 	deps := u.deps
-	rt := deps.Runtime
 	liveName, _ := deps.overpassNames()
 
 	// Download and convert first, while the old database still serves, so a
@@ -35,28 +34,39 @@ func (u *updateRun) refreshOverpassInPlace(ctx context.Context, sr *ServiceRepor
 	port := deps.overpassPort()
 
 	// Point of no return. Stop, wipe, and let the fresh container import.
-	if err := rt.Stop(ctx, liveName); err != nil {
-		return "", atStage(stageImport, err)
-	}
-	if err := rt.Remove(ctx, liveName); err != nil {
-		return "", atStage(stageImport, err)
-	}
-	if err := os.RemoveAll(p.absLive); err != nil {
-		return "", atStage(stageImport, fmt.Errorf("wiping database: %w", err))
-	}
-	if err := os.MkdirAll(p.absLive, 0o755); err != nil {
-		return "", atStage(stageImport, err)
-	}
-	if err := rt.Run(ctx, overpassContainerSpec(liveName, port, p.absLive, p.absMerged)); err != nil {
-		return "", atStage(stageImport, err)
-	}
-	if err := u.waitReady(ctx, overpassReadyURL(port), defaultOverpassReadyTimeout); err != nil {
-		return "", atStage(stageImport, fmt.Errorf("%w (the database was wiped; re-run `twisty update --in-place` or `twisty overpass start`)", err))
+	err = sr.timed(stageImport, func() error { return u.reimportInPlace(ctx, p, liveName, port) })
+	if err != nil {
+		return "", err
 	}
 
 	// The per-service stamp is written by Update (see stampRefreshed).
 	cleared, warnings := clearDerivedCaches(deps.Root)
 	return joinDetail(cleared, warnings), nil
+}
+
+// reimportInPlace stops the live container, wipes its database and lets a fresh
+// container import the merged archive.
+func (u *updateRun) reimportInPlace(ctx context.Context, p overpassPaths, liveName string, port int) error {
+	rt := u.deps.Runtime
+	if err := rt.Stop(ctx, liveName); err != nil {
+		return atStage(stageImport, err)
+	}
+	if err := rt.Remove(ctx, liveName); err != nil {
+		return atStage(stageImport, err)
+	}
+	if err := os.RemoveAll(p.absLive); err != nil {
+		return atStage(stageImport, fmt.Errorf("wiping database: %w", err))
+	}
+	if err := os.MkdirAll(p.absLive, 0o755); err != nil {
+		return atStage(stageImport, err)
+	}
+	if err := rt.Run(ctx, overpassContainerSpec(liveName, port, p.absLive, p.absMerged)); err != nil {
+		return atStage(stageImport, err)
+	}
+	if err := u.waitReady(ctx, overpassReadyURL(port), defaultOverpassReadyTimeout); err != nil {
+		return atStage(stageImport, fmt.Errorf("%w (the database was wiped; re-run `twisty update --in-place` or `twisty overpass start`)", err))
+	}
+	return nil
 }
 
 // convertOverpass rebuilds merged.osm.bz2 from the region PBFs.

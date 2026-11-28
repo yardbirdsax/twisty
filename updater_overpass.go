@@ -115,8 +115,12 @@ func (u *updateRun) prepareOverpassData(ctx context.Context, sr *ServiceReport) 
 
 	fetched := make(chan string)
 	var fetching sync.WaitGroup
+	var downloadTook time.Duration // written by the fetching goroutine, read after fetching.Wait
 	fetching.Go(func() {
-		if err := u.fetchRegions(ctx, ServiceOverpass, sr.changedStatuses(), fetched, cancel); err != nil {
+		start := time.Now()
+		err := u.fetchRegions(ctx, ServiceOverpass, sr.changedStatuses(), fetched, cancel)
+		downloadTook = time.Since(start)
+		if err != nil {
 			cancel(err) // a no-op when fetchRegions already cancelled with it
 		}
 	})
@@ -125,12 +129,28 @@ func (u *updateRun) prepareOverpassData(ctx context.Context, sr *ServiceReport) 
 	// left blocked on a send; once the pipeline has stopped it does no work.
 	var converting errgroup.Group
 	converting.SetLimit(max(convertWorkers, 1))
+	// The convert stage is the span from the first region starting to convert
+	// to the last finishing; it overlaps the download stage.
+	var (
+		spanMu                 sync.Mutex
+		convertFrom, convertTo time.Time
+	)
 	for region := range fetched {
 		converting.Go(func() error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			began := time.Now()
 			err := u.convertRegion(ctx, region)
+			ended := time.Now()
+			spanMu.Lock()
+			if convertFrom.IsZero() || began.Before(convertFrom) {
+				convertFrom = began
+			}
+			if ended.After(convertTo) {
+				convertTo = ended
+			}
+			spanMu.Unlock()
 			if err != nil {
 				err = atStage(stageConvert, fmt.Errorf("converting region %s: %w", region, err))
 				cancel(err)
@@ -140,14 +160,18 @@ func (u *updateRun) prepareOverpassData(ctx context.Context, sr *ServiceReport) 
 	}
 	_ = converting.Wait()
 	fetching.Wait()
+	sr.Timings = append(sr.Timings, StageTiming{stageDownload, downloadTook})
+	if !convertFrom.IsZero() {
+		sr.Timings = append(sr.Timings, StageTiming{stageConvert, convertTo.Sub(convertFrom)})
+	}
 	if cause := context.Cause(ctx); cause != nil {
 		return cause
 	}
 
-	if err := u.convertOverpass(ctx, loadedRegions(u.deps.Root, ServiceOverpass)); err != nil {
-		return atStage(stageConvert, err)
-	}
-	return nil
+	err := sr.timed(stageMerge, func() error {
+		return u.convertOverpass(ctx, loadedRegions(u.deps.Root, ServiceOverpass))
+	})
+	return atStage(stageConvert, err)
 }
 
 // refreshOverpassStaged refreshes the Overpass database for the changed
@@ -182,7 +206,7 @@ func (u *updateRun) refreshOverpassStaged(ctx context.Context, sr *ServiceReport
 	if err := restoreInterruptedSwap(d); err != nil {
 		return "", atStage(stageSwap, err)
 	}
-	if err := u.importIntoStaging(ctx, p); err != nil {
+	if err := sr.timed(stageImport, func() error { return u.importIntoStaging(ctx, p) }); err != nil {
 		return "", err
 	}
 	if err := u.swap(ctx, d); err != nil {
